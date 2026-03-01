@@ -29,6 +29,10 @@ type Config struct {
 	KernelPort  string // ROBOSLOP_KERNEL_PORT
 	PluginID    string // ROBOSLOP_PLUGIN_ID
 	PluginToken string // ROBOSLOP_PLUGIN_TOKEN (service token for auth)
+	TLSCert     string // ROBOSLOP_TLS_CERT
+	TLSKey      string // ROBOSLOP_TLS_KEY
+	TLSCA       string // ROBOSLOP_TLS_CA
+	TLSEnabled  bool   // ROBOSLOP_TLS_ENABLED
 }
 
 // LoadConfig reads plugin SDK config from environment variables.
@@ -38,6 +42,10 @@ func LoadConfig() Config {
 		KernelPort:  os.Getenv("ROBOSLOP_KERNEL_PORT"),
 		PluginID:    os.Getenv("ROBOSLOP_PLUGIN_ID"),
 		PluginToken: os.Getenv("ROBOSLOP_PLUGIN_TOKEN"),
+		TLSCert:     os.Getenv("ROBOSLOP_TLS_CERT"),
+		TLSKey:      os.Getenv("ROBOSLOP_TLS_KEY"),
+		TLSCA:       os.Getenv("ROBOSLOP_TLS_CA"),
+		TLSEnabled:  os.Getenv("ROBOSLOP_TLS_ENABLED") == "true",
 	}
 }
 
@@ -50,18 +58,35 @@ type Client struct {
 }
 
 // NewClient creates a new SDK client.
+// If TLS is enabled and cert/key/CA paths are set, configures mTLS on the HTTP client.
 func NewClient(cfg Config, reg Registration) *Client {
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+
+	if cfg.TLSEnabled && cfg.TLSCert != "" && cfg.TLSKey != "" && cfg.TLSCA != "" {
+		tlsCfg, err := buildClientTLSConfig(cfg.TLSCert, cfg.TLSKey, cfg.TLSCA)
+		if err != nil {
+			log.Printf("pluginsdk: WARNING: failed to configure mTLS client: %v — falling back to plain HTTP", err)
+		} else {
+			httpClient.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+			log.Println("pluginsdk: mTLS client configured")
+		}
+	}
+
 	return &Client{
 		config:       cfg,
 		registration: reg,
-		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		httpClient:   httpClient,
 		stopCh:       make(chan struct{}),
 	}
 }
 
 // kernelURL returns the base URL for the kernel API.
 func (c *Client) kernelURL() string {
-	return fmt.Sprintf("http://%s:%s", c.config.KernelHost, c.config.KernelPort)
+	scheme := "http"
+	if c.config.TLSEnabled {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%s", scheme, c.config.KernelHost, c.config.KernelPort)
 }
 
 // Start registers with the kernel and begins the heartbeat loop.
@@ -205,4 +230,59 @@ func (c *Client) deregister() error {
 		return fmt.Errorf("kernel returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// buildClientTLSConfig creates a tls.Config for outbound mTLS connections.
+func buildClientTLSConfig(certPath, keyPath, caPath string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+
+	caCert, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA cert: %w", err)
+	}
+
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to add CA cert to pool")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+// GetServerTLSConfig returns a tls.Config for a plugin's HTTPS server.
+// Requires client certs from the CA for mutual authentication.
+// Returns nil if TLS is not enabled.
+func GetServerTLSConfig(cfg Config) (*tls.Config, error) {
+	if !cfg.TLSEnabled || cfg.TLSCert == "" || cfg.TLSKey == "" || cfg.TLSCA == "" {
+		return nil, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+	if err != nil {
+		return nil, fmt.Errorf("load server cert: %w", err)
+	}
+
+	caCert, err := os.ReadFile(cfg.TLSCA)
+	if err != nil {
+		return nil, fmt.Errorf("read CA cert: %w", err)
+	}
+
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to add CA cert to pool")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    caPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }

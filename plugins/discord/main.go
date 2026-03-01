@@ -47,7 +47,7 @@ func main() {
 	// Create and start the Discord bot.
 	kernelClient := kernel.NewClient(cfg.KernelBaseURL(), cfg.ServiceToken)
 
-	discordBot, err := bot.New(cfg.DiscordToken, kernelClient, cfg.AgentConfigID)
+	discordBot, err := bot.New(cfg.DiscordToken, kernelClient)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}

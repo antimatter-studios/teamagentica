@@ -5,10 +5,14 @@ import (
 	"crypto/tls"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"roboslop/kernel/internal/audit"
 	"roboslop/kernel/internal/auth"
 	"roboslop/kernel/internal/certs"
 	"roboslop/kernel/internal/config"
@@ -16,6 +20,7 @@ import (
 	"roboslop/kernel/internal/handlers"
 	"roboslop/kernel/internal/health"
 	"roboslop/kernel/internal/middleware"
+	"roboslop/kernel/internal/orchestrator"
 	"roboslop/kernel/internal/runtime"
 )
 
@@ -58,8 +63,12 @@ func main() {
 		log.Println("mTLS disabled — running in plain HTTP mode")
 	}
 
+	// Audit logger.
+	auditLogger := audit.NewLogger(database.DB)
+
 	r := gin.Default()
 	r.Use(middleware.CORS())
+	r.Use(middleware.AuditInjector(auditLogger))
 
 	// Health check.
 	r.GET("/api/health", func(c *gin.Context) {
@@ -74,6 +83,22 @@ func main() {
 	{
 		authGroup.POST("/register", handlers.Register)
 		authGroup.POST("/login", handlers.Login)
+	}
+
+	// Service token routes (authenticated, admin only).
+	serviceTokenGroup := r.Group("/api/auth")
+	serviceTokenGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		serviceTokenGroup.POST("/service-token", handlers.CreateServiceToken)
+		serviceTokenGroup.GET("/service-tokens", handlers.ListServiceTokens)
+		serviceTokenGroup.DELETE("/service-token/:id", handlers.RevokeServiceToken)
+	}
+
+	// Audit log routes (admin only).
+	auditGroup := r.Group("/api/audit")
+	auditGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		auditGroup.GET("", handlers.ListAuditLogs)
 	}
 
 	// User routes (authenticated).
@@ -130,9 +155,21 @@ func main() {
 		routeGroup.Any("/:plugin_id/*path", pluginHandler.RouteToPlugin)
 	}
 
+	// Boot orchestrator: start all enabled plugins in background.
+	orch := orchestrator.NewOrchestrator(database.DB, dockerRT, cfg)
+	go func() {
+		orchCtx, orchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer orchCancel()
+		if err := orch.StartEnabledPlugins(orchCtx); err != nil {
+			log.Printf("orchestrator: boot error: %v", err)
+		}
+	}()
+
 	addr := cfg.Host + ":" + cfg.Port
+
+	var server *http.Server
 	if cfg.MTLSEnabled && serverTLS != nil {
-		server := &http.Server{
+		server = &http.Server{
 			Addr:      addr,
 			Handler:   r,
 			TLSConfig: serverTLS,
@@ -140,13 +177,46 @@ func main() {
 		certPath := cfg.DataDir + "/certs/kernel.crt"
 		keyPath := cfg.DataDir + "/certs/kernel.key"
 		log.Printf("kernel starting on https://%s (v%s)\n", addr, version)
-		if err := server.ListenAndServeTLS(certPath, keyPath); err != nil {
-			log.Fatalf("server failed: %v", err)
-		}
+		go func() {
+			if err := server.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("server failed: %v", err)
+			}
+		}()
 	} else {
-		log.Printf("kernel starting on http://%s (v%s)\n", addr, version)
-		if err := r.Run(addr); err != nil {
-			log.Fatalf("server failed: %v", err)
+		server = &http.Server{
+			Addr:    addr,
+			Handler: r,
 		}
+		log.Printf("kernel starting on http://%s (v%s)\n", addr, version)
+		go func() {
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("server failed: %v", err)
+			}
+		}()
 	}
+
+	// Graceful shutdown.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("shutting down...")
+
+	// Stop health monitor.
+	monitorCancel()
+
+	// Stop all plugins.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := orch.StopAllPlugins(shutdownCtx); err != nil {
+		log.Printf("orchestrator: shutdown error: %v", err)
+	}
+
+	// Shutdown HTTP server.
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown error: %v", err)
+	}
+
+	log.Println("kernel stopped")
 }

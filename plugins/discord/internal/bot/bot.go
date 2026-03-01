@@ -14,14 +14,13 @@ const maxMessageLength = 2000
 
 // Bot manages the Discord bot session.
 type Bot struct {
-	session       *discordgo.Session
-	kernelClient  *kernel.Client
-	agentConfigID *uint
-	botUserID     string
+	session      *discordgo.Session
+	kernelClient *kernel.Client
+	botUserID    string
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
-func New(token string, kernelClient *kernel.Client, agentConfigID *uint) (*Bot, error) {
+func New(token string, kernelClient *kernel.Client) (*Bot, error) {
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, fmt.Errorf("creating discord session: %w", err)
@@ -32,9 +31,8 @@ func New(token string, kernelClient *kernel.Client, agentConfigID *uint) (*Bot, 
 		discordgo.IntentsMessageContent
 
 	return &Bot{
-		session:       session,
-		kernelClient:  kernelClient,
-		agentConfigID: agentConfigID,
+		session:      session,
+		kernelClient: kernelClient,
 	}, nil
 }
 
@@ -91,8 +89,8 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	// Show typing indicator
 	s.ChannelTyping(m.ChannelID)
 
-	// Call kernel agent
-	response, err := b.kernelClient.ChatWithAgent(content, b.agentConfigID)
+	// Route to AI agent via kernel discovery.
+	response, err := b.kernelClient.ChatWithAgent(content)
 	if err != nil {
 		log.Printf("Error calling kernel: %v", err)
 		s.ChannelMessageSend(m.ChannelID, "Sorry, I encountered an error processing your message.")

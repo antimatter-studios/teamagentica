@@ -13,12 +13,32 @@ import (
 // RunWithGracefulShutdown starts an HTTP server and handles SIGINT/SIGTERM.
 // On signal: calls sdkClient.Stop() to deregister, then shuts down the HTTP
 // server with a 10-second timeout.
+//
+// If the SDK client has TLS enabled and cert paths are configured, the server
+// will use ListenAndServeTLS with the plugin's cert/key and configure mTLS
+// verification using the CA certificate. Otherwise falls back to plain HTTP.
 func RunWithGracefulShutdown(server *http.Server, sdkClient *Client) {
+	cfg := sdkClient.config
+
+	// Configure server-side TLS if enabled.
+	tlsConfig, err := GetServerTLSConfig(cfg)
+	if err != nil {
+		log.Fatalf("pluginsdk: failed to configure server TLS: %v", err)
+	}
+
 	// Start server in a goroutine.
 	go func() {
-		log.Printf("pluginsdk: server listening on %s", server.Addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("pluginsdk: server error: %v", err)
+		if tlsConfig != nil {
+			server.TLSConfig = tlsConfig
+			log.Printf("pluginsdk: server listening on %s (mTLS enabled)", server.Addr)
+			if err := server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("pluginsdk: server error: %v", err)
+			}
+		} else {
+			log.Printf("pluginsdk: server listening on %s", server.Addr)
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("pluginsdk: server error: %v", err)
+			}
 		}
 	}()
 

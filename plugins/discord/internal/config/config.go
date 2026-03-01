@@ -3,17 +3,15 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 )
 
 // Config holds all configuration for the Discord plugin.
 type Config struct {
-	DiscordToken  string
-	KernelHost    string
-	KernelPort    string
-	ServiceToken  string
-	PluginID      string
-	AgentConfigID *uint
+	DiscordToken string
+	KernelHost   string
+	KernelPort   string
+	ServiceToken string
+	PluginID     string
 }
 
 // Load reads configuration from environment variables.
@@ -43,24 +41,13 @@ func Load() (*Config, error) {
 		pluginID = "discord-bot"
 	}
 
-	cfg := &Config{
+	return &Config{
 		DiscordToken: token,
 		KernelHost:   host,
 		KernelPort:   port,
 		ServiceToken: serviceToken,
 		PluginID:     pluginID,
-	}
-
-	if idStr := os.Getenv("ROBOSLOP_AGENT_CONFIG_ID"); idStr != "" {
-		id, err := strconv.ParseUint(idStr, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid ROBOSLOP_AGENT_CONFIG_ID: %w", err)
-		}
-		uid := uint(id)
-		cfg.AgentConfigID = &uid
-	}
-
-	return cfg, nil
+	}, nil
 }
 
 // KernelBaseURL returns the full base URL of the kernel API.

@@ -23,8 +23,10 @@ func Load() *Config {
 		log.Fatal("ROBOSLOP_JWT_SECRET environment variable is required")
 	}
 
+	host := getEnv("ROBOSLOP_KERNEL_HOST", "0.0.0.0")
+
 	return &Config{
-		Host:          getEnv("ROBOSLOP_KERNEL_HOST", "0.0.0.0"),
+		Host:          host,
 		Port:          getEnv("ROBOSLOP_KERNEL_PORT", "8080"),
 		JWTSecret:     jwtSecret,
 		DBPath:        getEnv("ROBOSLOP_DB_PATH", "./roboslop.db"),
@@ -32,6 +34,7 @@ func Load() *Config {
 		Runtime:       getEnv("ROBOSLOP_RUNTIME", "docker"),
 		DataDir:       getEnv("ROBOSLOP_DATA_DIR", "./data"),
 		MTLSEnabled:   getEnv("ROBOSLOP_MTLS_ENABLED", "true") == "true",
+		AdvertiseHost: getEnv("ROBOSLOP_KERNEL_ADVERTISE_HOST", host),
 	}
 }
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -87,6 +88,15 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 		return
 	}
 
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.install",
+			"plugin:"+req.ID,
+			fmt.Sprintf(`{"name":%q,"version":%q}`, req.Name, req.Version),
+			c.ClientIP(), true)
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"plugin": plugin})
 }
 
@@ -138,6 +148,12 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 		return
 	}
 
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.uninstall", "plugin:"+id, "", c.ClientIP(), true)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "plugin uninstalled"})
 }
 
@@ -181,6 +197,12 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 		"enabled":      true,
 	})
 
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.enable", "plugin:"+id, "", c.ClientIP(), true)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "plugin enabled", "container_id": containerID})
 }
 
@@ -206,6 +228,12 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 		"status":       "stopped",
 		"enabled":      false,
 	})
+
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.disable", "plugin:"+id, "", c.ClientIP(), true)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "plugin disabled"})
 }
@@ -378,6 +406,19 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 			"container_id": containerID,
 			"status":       "running",
 		})
+	}
+
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		// List updated keys (don't log values since they could be secrets).
+		var keys []string
+		for k := range req.Config {
+			keys = append(keys, k)
+		}
+		keysJSON, _ := json.Marshal(keys)
+		al.LogUserAction(uid, "plugin.config_update", "plugin:"+id,
+			fmt.Sprintf(`{"keys":%s}`, keysJSON), c.ClientIP(), true)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "config updated"})

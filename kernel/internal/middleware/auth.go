@@ -6,8 +6,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"roboslop/kernel/internal/audit"
 	"roboslop/kernel/internal/auth"
 )
+
+// AuditInjector adds the audit logger to the Gin context so handlers can use it.
+func AuditInjector(logger *audit.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("audit", logger)
+		c.Next()
+	}
+}
 
 // AuthRequired validates the Bearer token and injects claims into context.
 func AuthRequired() gin.HandlerFunc {

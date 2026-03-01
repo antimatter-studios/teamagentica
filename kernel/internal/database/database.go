@@ -21,7 +21,7 @@ func Init(dbPath string) {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 
-	if err := DB.AutoMigrate(&models.User{}, &models.Plugin{}, &models.PluginConfig{}); err != nil {
+	if err := DB.AutoMigrate(&models.User{}, &models.Plugin{}, &models.PluginConfig{}, &models.ServiceToken{}, &models.AuditLog{}); err != nil {
 		log.Fatalf("failed to auto-migrate: %v", err)
 	}
 
