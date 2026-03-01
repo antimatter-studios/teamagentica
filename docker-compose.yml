@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  kernel:
+    build:
+      context: ./kernel
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ROBOSLOP_KERNEL_HOST=0.0.0.0
+      - ROBOSLOP_KERNEL_PORT=8080
+      - ROBOSLOP_JWT_SECRET=${ROBOSLOP_JWT_SECRET:?JWT secret required}
+      - ROBOSLOP_DB_PATH=/data/roboslop.db
+      - ROBOSLOP_DOCKER_NETWORK=roboslop_default
+    volumes:
+      - kernel-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  user-interface:
+    build:
+      context: ./user-interface
+      dockerfile: Dockerfile
+      args:
+        - VITE_ROBOSLOP_KERNEL_HOST=${ROBOSLOP_KERNEL_HOST:-localhost}
+        - VITE_ROBOSLOP_KERNEL_PORT=${ROBOSLOP_KERNEL_PORT:-8080}
+    ports:
+      - "3000:3000"
+    depends_on:
+      kernel:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  kernel-data:

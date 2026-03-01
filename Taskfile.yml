@@ -1,0 +1,42 @@
+version: '3'
+
+includes:
+  kernel:
+    taskfile: ./kernel/Taskfile.yml
+    dir: ./kernel
+  discord:
+    taskfile: ./plugins/discord/Taskfile.yml
+    dir: ./plugins/discord
+  agent-openai:
+    taskfile: ./plugins/agent-openai/Taskfile.yml
+    dir: ./plugins/agent-openai
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  dev:
+    desc: Run all services in dev mode
+    deps:
+      - kernel:dev
+
+  build:
+    desc: Build all services
+    deps:
+      - kernel:build
+      - discord:build
+      - agent-openai:build
+
+  clean:
+    desc: Clean all build artifacts
+    deps:
+      - kernel:clean
+      - discord:clean
+      - agent-openai:clean
+
+  docker:
+    desc: Build and run all Docker containers
+    cmds:
+      - docker compose up --build

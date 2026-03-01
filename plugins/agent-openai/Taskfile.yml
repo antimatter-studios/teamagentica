@@ -1,0 +1,37 @@
+version: '3'
+
+vars:
+  BINARY_NAME: agent-openai
+  BUILD_DIR: ./build
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  dev:
+    desc: Run in dev mode with hot reload
+    env:
+      ROBOSLOP_KERNEL_HOST: localhost
+      ROBOSLOP_KERNEL_PORT: "8080"
+      ROBOSLOP_PLUGIN_TOKEN: '{{.ROBOSLOP_PLUGIN_TOKEN}}'
+      AGENT_OPENAI_PORT: "8081"
+    cmds:
+      - air
+
+  build:
+    desc: Build production binary
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - CGO_ENABLED=0 go build -ldflags="-s -w" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}} tmp
