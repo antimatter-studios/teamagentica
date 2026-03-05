@@ -15,9 +15,12 @@ type Plugin struct {
 	Host         string    `json:"host"`
 	GRPCPort     int       `json:"grpc_port"`
 	HTTPPort     int       `json:"http_port"`
-	Capabilities string    `json:"capabilities"`
+	EventPort    int       `json:"event_port"` // ephemeral port for SDK event callbacks (0 = use HTTPPort)
+	Capabilities JSONStringList `json:"capabilities" gorm:"type:json"`
 	Marketplace  string    `json:"marketplace" gorm:"default:'local'"`
 	Enabled      bool      `json:"enabled" gorm:"default:false"`
+	System       bool      `json:"system" gorm:"default:false"` // system plugins are auto-installed and cannot be uninstalled
+	ServiceToken string    `json:"-"` // internal token for plugin-to-kernel auth
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -30,23 +33,32 @@ type Plugin struct {
 	//   }
 	// The kernel uses this schema to (a) present config UI and (b) inject default values
 	// as env vars when starting the plugin container.
-	ConfigSchema string `json:"config_schema"`
+	ConfigSchema JSONRawString `json:"config_schema" gorm:"type:json"`
+}
+
+// VisibleWhen describes a condition under which a field should be visible.
+type VisibleWhen struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
 }
 
 // ConfigSchemaField describes a single configuration field for a plugin.
 type ConfigSchemaField struct {
-	Type     string   `json:"type"`               // "string", "select", "number", "boolean", "text"
-	Label    string   `json:"label"`              // Human-readable label
-	Required bool     `json:"required,omitempty"` // Whether the field must be set
-	Secret   bool     `json:"secret,omitempty"`   // Whether to mask the value in UI
-	Default  string   `json:"default,omitempty"`  // Default value
-	Options  []string `json:"options,omitempty"`  // For "select" type
-	HelpText string   `json:"help_text,omitempty"` // Tooltip/description
+	Type        string       `json:"type"`                    // "string", "select", "number", "boolean", "text"
+	Label       string       `json:"label"`                   // Human-readable label
+	Required    bool         `json:"required,omitempty"`      // Whether the field must be set
+	Secret      bool         `json:"secret,omitempty"`        // Whether to mask the value in UI
+	ReadOnly    bool         `json:"readonly,omitempty"`      // Display-only; cannot be changed by the user
+	Default     string       `json:"default,omitempty"`       // Default value
+	Options     []string     `json:"options,omitempty"`       // For "select" type
+	Dynamic     bool         `json:"dynamic,omitempty"`       // Fetch options at runtime from plugin
+	HelpText    string       `json:"help_text,omitempty"`     // Tooltip/description
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`  // Show only when another field matches a value
 }
 
-// GetConfigSchema parses the ConfigSchema JSON string into a map of field name to ConfigSchemaField.
+// GetConfigSchema parses the ConfigSchema into a map of field name to ConfigSchemaField.
 func (p *Plugin) GetConfigSchema() (map[string]ConfigSchemaField, error) {
-	if p.ConfigSchema == "" {
+	if len(p.ConfigSchema) == 0 {
 		return nil, nil
 	}
 	var schema map[string]ConfigSchemaField
@@ -62,28 +74,19 @@ func (p *Plugin) SetConfigSchema(schema map[string]ConfigSchemaField) error {
 	if err != nil {
 		return err
 	}
-	p.ConfigSchema = string(data)
+	p.ConfigSchema = JSONRawString(data)
 	return nil
 }
 
-// GetCapabilities parses the JSON capabilities string into a slice.
+// GetCapabilities returns the capabilities as a string slice.
 func (p *Plugin) GetCapabilities() []string {
-	if p.Capabilities == "" {
+	if p.Capabilities == nil {
 		return []string{}
 	}
-	var caps []string
-	if err := json.Unmarshal([]byte(p.Capabilities), &caps); err != nil {
-		return []string{}
-	}
-	return caps
+	return []string(p.Capabilities)
 }
 
-// SetCapabilities serializes a string slice to JSON and stores it.
+// SetCapabilities stores a string slice as capabilities.
 func (p *Plugin) SetCapabilities(caps []string) {
-	data, err := json.Marshal(caps)
-	if err != nil {
-		p.Capabilities = "[]"
-		return
-	}
-	p.Capabilities = string(data)
+	p.Capabilities = JSONStringList(caps)
 }
