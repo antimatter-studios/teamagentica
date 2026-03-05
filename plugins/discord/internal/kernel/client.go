@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ type pluginInfo struct {
 // chatRequest is the request body for the routed chat endpoint.
 type chatRequest struct {
 	Message      string            `json:"message"`
+	Model        string            `json:"model,omitempty"`
 	Conversation []conversationMsg `json:"conversation"`
 }
 
@@ -51,13 +53,20 @@ type chatResponse struct {
 }
 
 // NewClient creates a new kernel API client.
-func NewClient(baseURL, serviceToken string) *Client {
+// If tlsConfig is non-nil, the client uses it for mTLS connections.
+func NewClient(baseURL, serviceToken string, tlsConfig *tls.Config) *Client {
+	httpClient := &http.Client{
+		Timeout: 120 * time.Second,
+	}
+	if tlsConfig != nil {
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: tlsConfig,
+		}
+	}
 	return &Client{
 		baseURL:      baseURL,
 		serviceToken: serviceToken,
-		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
-		},
+		httpClient:   httpClient,
 	}
 }
 
@@ -119,11 +128,27 @@ func (c *Client) ChatWithAgent(message string) (string, error) {
 		return "", fmt.Errorf("finding AI agent: %w", err)
 	}
 
+	return c.chatWithPlugin(pluginID, "", message, "")
+}
+
+// ChatWithAgentDirect routes a message to a specific plugin, bypassing discovery.
+// Accepts an optional systemPrompt prepended to the conversation.
+func (c *Client) ChatWithAgentDirect(pluginID, model, message, systemPrompt string) (string, error) {
+	return c.chatWithPlugin(pluginID, model, message, systemPrompt)
+}
+
+// chatWithPlugin is the shared HTTP logic for routing a chat message to a plugin.
+func (c *Client) chatWithPlugin(pluginID, model, message, systemPrompt string) (string, error) {
+	var conv []conversationMsg
+	if systemPrompt != "" {
+		conv = append(conv, conversationMsg{Role: "system", Content: systemPrompt})
+	}
+	conv = append(conv, conversationMsg{Role: "user", Content: message})
+
 	reqBody := chatRequest{
-		Message: message,
-		Conversation: []conversationMsg{
-			{Role: "user", Content: message},
-		},
+		Message:      message,
+		Model:        model,
+		Conversation: conv,
 	}
 
 	body, err := json.Marshal(reqBody)

@@ -1,10 +1,10 @@
-module roboslop/plugins/discord
+module github.com/antimatter-studios/teamagentica/plugins/discord
 
 go 1.25.0
 
 require (
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v0.0.0
 	github.com/bwmarrin/discordgo v0.29.0
-	roboslop/pkg/pluginsdk v0.0.0
 )
 
 require (
@@ -13,4 +13,4 @@ require (
 	golang.org/x/sys v0.0.0-20201119102817-f84b799fce68 // indirect
 )
 
-replace roboslop/pkg/pluginsdk => ../../pkg/pluginsdk
+replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk

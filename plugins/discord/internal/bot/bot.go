@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 
 	"github.com/bwmarrin/discordgo"
 
-	"roboslop/plugins/discord/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/plugins/discord/internal/kernel"
 )
 
 const maxMessageLength = 2000
@@ -17,10 +19,12 @@ type Bot struct {
 	session      *discordgo.Session
 	kernelClient *kernel.Client
 	botUserID    string
+	aliases      *alias.AliasMap
+	defaultAgent atomic.Pointer[string]
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
-func New(token string, kernelClient *kernel.Client) (*Bot, error) {
+func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap, defaultAgent string) (*Bot, error) {
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, fmt.Errorf("creating discord session: %w", err)
@@ -30,10 +34,36 @@ func New(token string, kernelClient *kernel.Client) (*Bot, error) {
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsMessageContent
 
-	return &Bot{
+	if !aliases.IsEmpty() {
+		log.Printf("Configured %d aliases", len(aliases.List()))
+	}
+	if defaultAgent != "" {
+		log.Printf("Coordinator agent: %s", defaultAgent)
+	}
+
+	b := &Bot{
 		session:      session,
 		kernelClient: kernelClient,
-	}, nil
+		aliases:      aliases,
+	}
+	if defaultAgent != "" {
+		b.defaultAgent.Store(&defaultAgent)
+	}
+	return b, nil
+}
+
+// SetDefaultAgent atomically updates the coordinator agent plugin ID.
+func (b *Bot) SetDefaultAgent(agent string) {
+	b.defaultAgent.Store(&agent)
+	log.Printf("Coordinator agent updated: %s", agent)
+}
+
+// getDefaultAgent atomically reads the coordinator agent plugin ID.
+func (b *Bot) getDefaultAgent() string {
+	if p := b.defaultAgent.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // Start opens the Discord connection and begins listening for messages.
@@ -89,12 +119,55 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	// Show typing indicator
 	s.ChannelTyping(m.ChannelID)
 
-	// Route to AI agent via kernel discovery.
-	response, err := b.kernelClient.ChatWithAgent(content)
+	// Check for direct @mention routing (fast path).
+	if !b.aliases.IsEmpty() {
+		result := b.aliases.Parse(content)
+		if result.Target != nil && result.Target.Type == alias.TargetAgent {
+			if result.Remainder == "" {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
+				return
+			}
+			response, err := b.kernelClient.ChatWithAgentDirect(
+				result.Target.PluginID, result.Target.Model, result.Remainder, "")
+			if err != nil {
+				log.Printf("Alias route error (@%s): %v", result.Alias, err)
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
+				return
+			}
+			b.sendResponse(s, m.ChannelID, response)
+			return
+		}
+	}
+
+	// Route to coordinator agent (or default AI agent).
+	coordinatorID := b.resolveDefaultAgent()
+	systemPrompt := b.aliases.SystemPromptBlock()
+
+	var response string
+	var err error
+	if coordinatorID != "" {
+		response, err = b.kernelClient.ChatWithAgentDirect(coordinatorID, "", content, systemPrompt)
+	} else {
+		response, err = b.kernelClient.ChatWithAgent(content)
+	}
+
 	if err != nil {
 		log.Printf("Error calling kernel: %v", err)
 		s.ChannelMessageSend(m.ChannelID, "Sorry, I encountered an error processing your message.")
 		return
+	}
+
+	// Check if coordinator delegated to another alias.
+	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
+		if target := b.aliases.Resolve(delegatedAlias); target != nil && target.Type == alias.TargetAgent {
+			delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
+				target.PluginID, target.Model, delegatedMsg, "")
+			if delegErr != nil {
+				response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
+			} else {
+				response = delegatedResp
+			}
+		}
 	}
 
 	// Send the response, splitting if necessary
@@ -122,6 +195,19 @@ func (b *Bot) stripBotMention(content string) string {
 	content = strings.ReplaceAll(content, "<@"+b.botUserID+">", "")
 	content = strings.ReplaceAll(content, "<@!"+b.botUserID+">", "")
 	return content
+}
+
+// resolveDefaultAgent returns the configured coordinator agent plugin ID,
+// falling back to auto-discovery if not set.
+func (b *Bot) resolveDefaultAgent() string {
+	if da := b.getDefaultAgent(); da != "" {
+		return da
+	}
+	agentID, err := b.kernelClient.FindAIAgent()
+	if err != nil {
+		return ""
+	}
+	return agentID
 }
 
 // sendResponse sends a message to the channel, splitting into chunks if over 2000 chars.

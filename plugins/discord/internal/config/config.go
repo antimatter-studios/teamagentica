@@ -3,54 +3,48 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config holds all configuration for the Discord plugin.
 type Config struct {
 	DiscordToken string
-	KernelHost   string
-	KernelPort   string
-	ServiceToken string
 	PluginID     string
+	Aliases      string // comma-separated nickname=target pairs
+	DefaultAgent string // plugin ID of the coordinator brain agent
 }
 
 // Load reads configuration from environment variables.
 func Load() (*Config, error) {
-	token := os.Getenv("ROBOSLOP_DISCORD_TOKEN")
+	token := os.Getenv("TEAMAGENTICA_DISCORD_TOKEN")
 	if token == "" {
-		return nil, fmt.Errorf("ROBOSLOP_DISCORD_TOKEN is required")
+		return nil, fmt.Errorf("TEAMAGENTICA_DISCORD_TOKEN is required")
 	}
 
-	serviceToken := os.Getenv("ROBOSLOP_SERVICE_TOKEN")
-	if serviceToken == "" {
-		return nil, fmt.Errorf("ROBOSLOP_SERVICE_TOKEN is required")
-	}
-
-	host := os.Getenv("ROBOSLOP_KERNEL_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-
-	port := os.Getenv("ROBOSLOP_KERNEL_PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	pluginID := os.Getenv("ROBOSLOP_PLUGIN_ID")
+	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
 	if pluginID == "" {
 		pluginID = "discord-bot"
 	}
 
 	return &Config{
 		DiscordToken: token,
-		KernelHost:   host,
-		KernelPort:   port,
-		ServiceToken: serviceToken,
 		PluginID:     pluginID,
+		Aliases:      os.Getenv("ALIASES"),
+		DefaultAgent: os.Getenv("DEFAULT_AGENT"),
 	}, nil
 }
 
-// KernelBaseURL returns the full base URL of the kernel API.
-func (c *Config) KernelBaseURL() string {
-	return fmt.Sprintf("http://%s:%s", c.KernelHost, c.KernelPort)
+// ParseAliases splits the comma-separated ALIASES config into individual entries.
+func (c *Config) ParseAliases() []string {
+	if c.Aliases == "" {
+		return nil
+	}
+	var entries []string
+	for _, s := range strings.Split(c.Aliases, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			entries = append(entries, s)
+		}
+	}
+	return entries
 }
