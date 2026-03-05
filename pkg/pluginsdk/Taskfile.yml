@@ -1,0 +1,11 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./... -v
