@@ -2,13 +2,16 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"time"
 
 	"gorm.io/gorm"
 
-	"roboslop/kernel/internal/config"
-	"roboslop/kernel/internal/models"
-	"roboslop/kernel/internal/runtime"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/config"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
 )
 
 // Orchestrator manages plugin lifecycle at kernel startup and shutdown.
@@ -16,14 +19,27 @@ type Orchestrator struct {
 	db      *gorm.DB
 	runtime *runtime.DockerRuntime
 	config  *config.Config
+	events  *events.Hub
 }
 
 // NewOrchestrator creates a new Orchestrator.
-func NewOrchestrator(db *gorm.DB, rt *runtime.DockerRuntime, cfg *config.Config) *Orchestrator {
+func NewOrchestrator(db *gorm.DB, rt *runtime.DockerRuntime, cfg *config.Config, hub *events.Hub) *Orchestrator {
 	return &Orchestrator{
 		db:      db,
 		runtime: rt,
 		config:  cfg,
+		events:  hub,
+	}
+}
+
+// emit sends a debug event if the events hub is available.
+func (o *Orchestrator) emit(eventType, pluginID, detail string) {
+	if o.events != nil {
+		o.events.Emit(events.DebugEvent{
+			Type:     eventType,
+			PluginID: pluginID,
+			Detail:   detail,
+		})
 	}
 }
 
@@ -31,7 +47,7 @@ func NewOrchestrator(db *gorm.DB, rt *runtime.DockerRuntime, cfg *config.Config)
 // For each plugin:
 // 1. Read plugin config from PluginConfig table
 // 2. Build env vars map from config
-// 3. Inject kernel connection info (ROBOSLOP_KERNEL_HOST, ROBOSLOP_KERNEL_PORT, ROBOSLOP_PLUGIN_ID, ROBOSLOP_PLUGIN_TOKEN)
+// 3. Inject kernel connection info (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_KERNEL_PORT, TEAMAGENTICA_PLUGIN_ID, TEAMAGENTICA_PLUGIN_TOKEN)
 // 4. Call runtime.PullImage (skip if already present -- don't fail if pull fails, image might be local)
 // 5. Call runtime.StartPlugin with env vars
 // 6. Update plugin status in DB
@@ -55,6 +71,7 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 	}
 
 	log.Printf("orchestrator: starting %d enabled plugin(s)", len(plugins))
+	o.emit("orchestrator", "kernel", fmt.Sprintf("boot: starting %d enabled plugin(s)", len(plugins)))
 
 	for i := range plugins {
 		plugin := &plugins[i]
@@ -63,6 +80,7 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 		var serviceToken models.ServiceToken
 		if err := o.db.Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
 			log.Printf("orchestrator: WARNING: no service token found for plugin %s, skipping (plugin cannot auth without a token)", plugin.ID)
+			o.emit("warning", plugin.ID, "no service token found, skipping")
 			continue
 		}
 
@@ -70,36 +88,40 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 		env := o.buildEnv(plugin.ID)
 
 		// Inject kernel connection info.
-		env["ROBOSLOP_KERNEL_HOST"] = o.config.AdvertiseHost
-		env["ROBOSLOP_KERNEL_PORT"] = o.config.Port
-		env["ROBOSLOP_PLUGIN_ID"] = plugin.ID
+		env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
+		env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
+		env["TEAMAGENTICA_PLUGIN_ID"] = plugin.ID
 
-		// Look up the actual JWT token: we stored the hash, but we need
-		// to generate a fresh token for the plugin. Service tokens are
-		// long-lived JWTs so we regenerate one matching the stored record's
-		// capabilities and expiry.
-		// NOTE: We can't recover the original token from the hash. The
-		// orchestrator generates a fresh short-lived token for the boot session.
-		// For persistent tokens, the admin should set ROBOSLOP_PLUGIN_TOKEN
-		// in the plugin's config. Here we skip injection if no token is in config.
-		if _, hasToken := env["ROBOSLOP_PLUGIN_TOKEN"]; !hasToken {
-			log.Printf("orchestrator: WARNING: plugin %s has no ROBOSLOP_PLUGIN_TOKEN in config, service token record exists but original token is not recoverable -- plugin may need manual token configuration", plugin.ID)
+		// Inject the service token stored on the plugin record.
+		if plugin.ServiceToken != "" {
+			env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
+		} else {
+			log.Printf("orchestrator: WARNING: plugin %s has no service token — plugin cannot authenticate with kernel", plugin.ID)
+			o.emit("warning", plugin.ID, "no service token on plugin record")
 		}
 
 		// Stop existing container if still running.
 		if plugin.ContainerID != "" {
+			o.emit("stop", plugin.ID, fmt.Sprintf("stopping old container=%s", plugin.ContainerID[:12]))
 			_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
 		}
 
+		// Resolve image tag for dev mode.
+		plugin.Image = o.config.ResolveImage(plugin.Image)
+
 		// Pull image (don't fail if pull fails, image might be local).
+		o.emit("start", plugin.ID, fmt.Sprintf("pulling image=%s", plugin.Image))
 		if err := o.runtime.PullImage(ctx, plugin.Image); err != nil {
 			log.Printf("orchestrator: pull image %s for plugin %s failed (continuing, image may be local): %v", plugin.Image, plugin.ID, err)
+			o.emit("warning", plugin.ID, fmt.Sprintf("image pull failed (may be local): %v", err))
 		}
 
 		// Start the container.
+		o.emit("start", plugin.ID, fmt.Sprintf("starting container image=%s", plugin.Image))
 		containerID, err := o.runtime.StartPlugin(ctx, plugin, env)
 		if err != nil {
 			log.Printf("orchestrator: ERROR: failed to start plugin %s: %v", plugin.ID, err)
+			o.emit("error", plugin.ID, fmt.Sprintf("start failed: %v", err))
 			o.db.Model(plugin).Updates(map[string]interface{}{
 				"container_id": "",
 				"status":       "error",
@@ -107,15 +129,79 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 			continue
 		}
 
-		// Update plugin status.
+		// Update plugin status and clear stale registration data so the health
+		// monitor uses Docker-level checks (not heartbeat staleness) while the
+		// plugin is still building/booting.
 		o.db.Model(plugin).Updates(map[string]interface{}{
 			"container_id": containerID,
 			"status":       "running",
+			"host":         "",
+			"last_seen":    time.Time{},
 		})
 
 		log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
+		o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
 	}
 
+	return nil
+}
+
+// RestartPlugin restarts a single enabled plugin by ID.
+// Used by the health monitor to auto-recover disappeared containers.
+func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error {
+	if o.runtime == nil {
+		return fmt.Errorf("docker runtime unavailable")
+	}
+
+	var plugin models.Plugin
+	if err := o.db.First(&plugin, "id = ?", pluginID).Error; err != nil {
+		return fmt.Errorf("plugin not found: %w", err)
+	}
+
+	if !plugin.Enabled {
+		return fmt.Errorf("plugin %s is not enabled", pluginID)
+	}
+
+	o.emit("restart", pluginID, "auto-restart triggered")
+
+	// Stop existing container if still around.
+	if plugin.ContainerID != "" {
+		o.emit("stop", pluginID, fmt.Sprintf("stopping container=%s", plugin.ContainerID[:12]))
+		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
+	}
+
+	// Build env.
+	env := o.buildEnv(pluginID)
+	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
+	env["TEAMAGENTICA_PLUGIN_ID"] = plugin.ID
+
+	if plugin.ServiceToken != "" {
+		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
+	}
+
+	plugin.Image = o.config.ResolveImage(plugin.Image)
+
+	o.emit("start", pluginID, fmt.Sprintf("starting container image=%s", plugin.Image))
+	containerID, err := o.runtime.StartPlugin(ctx, &plugin, env)
+	if err != nil {
+		o.emit("error", pluginID, fmt.Sprintf("restart failed: %v", err))
+		o.db.Model(&plugin).Updates(map[string]interface{}{
+			"container_id": "",
+			"status":       "error",
+		})
+		return fmt.Errorf("failed to start plugin %s: %w", pluginID, err)
+	}
+
+	o.db.Model(&plugin).Updates(map[string]interface{}{
+		"container_id": containerID,
+		"status":       "running",
+		"host":         "",
+		"last_seen":    time.Time{},
+	})
+
+	log.Printf("orchestrator: auto-restarted plugin %s (container=%s)", pluginID, containerID[:12])
+	o.emit("restart", pluginID, fmt.Sprintf("running container=%s", containerID[:12]))
 	return nil
 }
 
@@ -136,6 +222,7 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 	}
 
 	log.Printf("orchestrator: stopping %d plugin(s)", len(plugins))
+	o.emit("orchestrator", "kernel", fmt.Sprintf("shutdown: stopping %d plugin(s)", len(plugins)))
 
 	for i := range plugins {
 		plugin := &plugins[i]
@@ -143,8 +230,10 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 			continue
 		}
 
+		o.emit("stop", plugin.ID, fmt.Sprintf("stopping container=%s", plugin.ContainerID[:12]))
 		if err := o.runtime.StopPlugin(ctx, plugin.ContainerID); err != nil {
 			log.Printf("orchestrator: failed to stop plugin %s: %v", plugin.ID, err)
+			o.emit("error", plugin.ID, fmt.Sprintf("stop failed: %v", err))
 			continue
 		}
 
@@ -154,6 +243,7 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 		})
 
 		log.Printf("orchestrator: stopped plugin %s", plugin.ID)
+		o.emit("stop", plugin.ID, "stopped")
 	}
 
 	return nil

@@ -12,16 +12,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"roboslop/kernel/internal/audit"
-	"roboslop/kernel/internal/auth"
-	"roboslop/kernel/internal/certs"
-	"roboslop/kernel/internal/config"
-	"roboslop/kernel/internal/database"
-	"roboslop/kernel/internal/handlers"
-	"roboslop/kernel/internal/health"
-	"roboslop/kernel/internal/middleware"
-	"roboslop/kernel/internal/orchestrator"
-	"roboslop/kernel/internal/runtime"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/audit"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/certs"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/config"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/health"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/middleware"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/orchestrator"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
 )
 
 const version = "0.1.0"
@@ -31,6 +31,11 @@ func main() {
 
 	auth.InitJWT(cfg.JWTSecret)
 	database.Init(cfg.DBPath)
+
+	// SQLite online backups.
+	backupCtx, backupCancel := context.WithCancel(context.Background())
+	defer backupCancel()
+	database.StartBackups(backupCtx, cfg.DataDir, cfg.BackupInterval)
 
 	// mTLS setup (optional).
 	var certManager *certs.CertManager
@@ -75,13 +80,14 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "ok",
 			"version": version,
+			"app":     cfg.AppName,
 		})
 	})
 
 	// Auth routes (public).
 	authGroup := r.Group("/api/auth")
 	{
-		authGroup.POST("/register", handlers.Register)
+		authGroup.POST("/register", middleware.AuthOptional(), handlers.Register)
 		authGroup.POST("/login", handlers.Login)
 	}
 
@@ -109,20 +115,42 @@ func main() {
 		usersGroup.GET("", middleware.RequireCapability("users:read"), handlers.ListUsers)
 	}
 
+	// Pricing routes (admin only).
+	pricingHandler := handlers.NewPricingHandler(database.DB)
+	pricingGroup := r.Group("/api/pricing")
+	pricingGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		pricingGroup.GET("", pricingHandler.ListPrices)
+		pricingGroup.GET("/current", pricingHandler.ListCurrentPrices)
+		pricingGroup.POST("", pricingHandler.SavePrice)
+		pricingGroup.DELETE("/:id", pricingHandler.DeletePrice)
+	}
+
+	// External user mapping routes (admin only).
+	extUserHandler := handlers.NewExternalUserHandler(database.DB)
+	extUserGroup := r.Group("/api/external-users")
+	extUserGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		extUserGroup.GET("", extUserHandler.List)
+		extUserGroup.POST("", extUserHandler.Create)
+		extUserGroup.PUT("/:id", extUserHandler.Update)
+		extUserGroup.DELETE("/:id", extUserHandler.Delete)
+	}
+
 	// Docker runtime (gracefully degrades if Docker unavailable).
-	dockerRT, err := runtime.NewDockerRuntime(cfg.DockerNetwork, certManager)
+	dockerRT, err := runtime.NewDockerRuntime(cfg.DockerNetwork, certManager, cfg.DevMode)
 	if err != nil {
 		log.Fatalf("failed to init docker runtime: %v", err)
 	}
 
-	// Health monitor.
-	monitorCtx, monitorCancel := context.WithCancel(context.Background())
-	defer monitorCancel()
-	monitor := health.NewMonitor(database.DB, dockerRT, 30*time.Second)
-	go monitor.Start(monitorCtx)
-
 	// Plugin routes (authenticated).
 	pluginHandler := handlers.NewPluginHandler(database.DB, dockerRT, cfg, clientTLS)
+
+	// Health monitor (started after pluginHandler so it can emit to the event hub).
+	monitorCtx, monitorCancel := context.WithCancel(context.Background())
+	defer monitorCancel()
+	monitor := health.NewMonitor(database.DB, dockerRT, pluginHandler.Events, 30*time.Second)
+	go monitor.Start(monitorCtx)
 	pluginsGroup := r.Group("/api/plugins")
 	pluginsGroup.Use(middleware.AuthRequired())
 	{
@@ -139,6 +167,32 @@ func main() {
 		pluginsGroup.PUT("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.UpdatePluginConfig)
 	}
 
+	// Marketplace routes (authenticated, plugins:manage).
+	marketplaceHandler := handlers.NewMarketplaceHandler(database.DB, pluginHandler.Events)
+	marketplaceGroup := r.Group("/api/marketplace")
+	marketplaceGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("plugins:manage"))
+	{
+		marketplaceGroup.GET("/providers", marketplaceHandler.ListProviders)
+		marketplaceGroup.POST("/providers", marketplaceHandler.AddProvider)
+		marketplaceGroup.DELETE("/providers/:id", marketplaceHandler.DeleteProvider)
+		marketplaceGroup.GET("/plugins", marketplaceHandler.BrowsePlugins)
+		marketplaceGroup.POST("/install", marketplaceHandler.InstallPlugin)
+	}
+
+	// Alias routes — read available to plugin tokens, mutations require admin.
+	aliasReadGroup := r.Group("/api/aliases")
+	aliasReadGroup.Use(middleware.PluginTokenAuth())
+	{
+		aliasReadGroup.GET("", pluginHandler.ListAliases)
+	}
+	aliasAdminGroup := r.Group("/api/aliases")
+	aliasAdminGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		aliasAdminGroup.POST("", pluginHandler.UpsertAlias)
+		aliasAdminGroup.PUT("", pluginHandler.BulkReplaceAliases)
+		aliasAdminGroup.DELETE("/:name", pluginHandler.DeleteAlias)
+	}
+
 	// Plugin self-registration routes (plugin token auth, not user auth).
 	pluginRegGroup := r.Group("/api/plugins")
 	pluginRegGroup.Use(middleware.PluginTokenAuth())
@@ -146,6 +200,10 @@ func main() {
 		pluginRegGroup.POST("/register", pluginHandler.SelfRegister)
 		pluginRegGroup.POST("/heartbeat", pluginHandler.Heartbeat)
 		pluginRegGroup.POST("/deregister", pluginHandler.Deregister)
+		pluginRegGroup.POST("/event", pluginHandler.ReportEvent)
+		pluginRegGroup.POST("/subscribe", pluginHandler.SubscribeEvent)
+		pluginRegGroup.POST("/unsubscribe", pluginHandler.UnsubscribeEvent)
+		pluginRegGroup.POST("/pricing", pluginHandler.UpdatePricing)
 	}
 
 	// Plugin routing/proxy (user authenticated, kernel proxies to plugin).
@@ -155,8 +213,26 @@ func main() {
 		routeGroup.Any("/:plugin_id/*path", pluginHandler.RouteToPlugin)
 	}
 
+	// Public webhook ingress — no auth required.
+	// External services (Telegram, Discord, etc.) POST here via ngrok tunnel.
+	webhookGroup := r.Group("/api/webhook")
+	{
+		webhookGroup.Any("/:plugin_id/*path", pluginHandler.WebhookIngress)
+	}
+
+	// Debug console SSE (admin only).
+	debugGroup := r.Group("/api/debug")
+	debugGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		debugGroup.GET("/events", handlers.DebugEventsSSE(pluginHandler.Events))
+		debugGroup.GET("/history", handlers.DebugEventsHistory(pluginHandler.Events))
+		debugGroup.GET("/event-log", handlers.DebugEventLog(database.DB))
+		debugGroup.GET("/test", handlers.DebugEventsTest(pluginHandler.Events))
+	}
+
 	// Boot orchestrator: start all enabled plugins in background.
-	orch := orchestrator.NewOrchestrator(database.DB, dockerRT, cfg)
+	orch := orchestrator.NewOrchestrator(database.DB, dockerRT, cfg, pluginHandler.Events)
+	monitor.SetRestarter(orch)
 	go func() {
 		orchCtx, orchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer orchCancel()
@@ -176,7 +252,7 @@ func main() {
 		}
 		certPath := cfg.DataDir + "/certs/kernel.crt"
 		keyPath := cfg.DataDir + "/certs/kernel.key"
-		log.Printf("kernel starting on https://%s (v%s)\n", addr, version)
+		log.Printf("%s kernel starting on https://%s (v%s)\n", cfg.AppName, addr, version)
 		go func() {
 			if err := server.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("server failed: %v", err)
@@ -187,7 +263,7 @@ func main() {
 			Addr:    addr,
 			Handler: r,
 		}
-		log.Printf("kernel starting on http://%s (v%s)\n", addr, version)
+		log.Printf("%s kernel starting on http://%s (v%s)\n", cfg.AppName, addr, version)
 		go func() {
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("server failed: %v", err)
@@ -202,7 +278,8 @@ func main() {
 
 	log.Println("shutting down...")
 
-	// Stop health monitor.
+	// Stop backups and health monitor.
+	backupCancel()
 	monitorCancel()
 
 	// Stop all plugins.

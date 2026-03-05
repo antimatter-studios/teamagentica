@@ -7,28 +7,46 @@ import (
 
 	"gorm.io/gorm"
 
-	"roboslop/kernel/internal/models"
-	"roboslop/kernel/internal/runtime"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
 )
+
+// Restarter can restart a plugin by ID. Implemented by the orchestrator.
+type Restarter interface {
+	RestartPlugin(ctx context.Context, pluginID string) error
+}
 
 // Monitor periodically checks the health of running plugin containers.
 type Monitor struct {
-	db       *gorm.DB
-	runtime  *runtime.DockerRuntime
-	interval time.Duration
+	db        *gorm.DB
+	runtime   *runtime.DockerRuntime
+	events    *events.Hub
+	interval  time.Duration
+	restarter Restarter
 
 	// unhealthyCounts tracks consecutive unhealthy checks per plugin ID.
 	unhealthyCounts map[string]int
 }
 
+// restartThreshold is the number of consecutive unhealthy checks before
+// the monitor attempts an auto-restart (~2 minutes at 30s interval).
+const restartThreshold = 4
+
 // NewMonitor creates a health monitor with the given check interval.
-func NewMonitor(db *gorm.DB, rt *runtime.DockerRuntime, interval time.Duration) *Monitor {
+func NewMonitor(db *gorm.DB, rt *runtime.DockerRuntime, evts *events.Hub, interval time.Duration) *Monitor {
 	return &Monitor{
 		db:              db,
 		runtime:         rt,
+		events:          evts,
 		interval:        interval,
 		unhealthyCounts: make(map[string]int),
 	}
+}
+
+// SetRestarter attaches a restarter (typically the orchestrator) for auto-recovery.
+func (m *Monitor) SetRestarter(r Restarter) {
+	m.restarter = r
 }
 
 // Start runs the health-check loop until the context is cancelled.
@@ -65,21 +83,64 @@ func (m *Monitor) checkAll(ctx context.Context) {
 	for i := range plugins {
 		p := &plugins[i]
 
-		// Check heartbeat-based health: if a plugin has registered (has a Host)
-		// but hasn't sent a heartbeat within the timeout, mark it unhealthy.
+		// Case 1: Plugin has no container at all (never started, or previous start failed).
+		// Attempt to start it if we have a restarter.
+		if p.ContainerID == "" && p.Status != "running" {
+			m.unhealthyCounts[p.ID]++
+			if m.unhealthyCounts[p.ID] >= restartThreshold && m.restarter != nil {
+				log.Printf("health monitor: plugin %s has no container — attempting start", p.ID)
+				m.emitEvent(p.ID, "warning", "no container found — attempting auto-start")
+				if err := m.restarter.RestartPlugin(ctx, p.ID); err != nil {
+					log.Printf("health monitor: auto-start failed for %s: %v", p.ID, err)
+					m.emitEvent(p.ID, "error", "auto-start failed: "+err.Error())
+				} else {
+					m.emitEvent(p.ID, "info", "auto-start succeeded")
+					m.unhealthyCounts[p.ID] = 0
+				}
+			}
+			continue
+		}
+
+		// Case 2: Plugin registered and has heartbeats — check for staleness.
 		if p.Host != "" && !p.LastSeen.IsZero() {
 			if time.Since(p.LastSeen) > heartbeatTimeout {
-				log.Printf("health monitor: plugin %s heartbeat stale (last seen %s ago)", p.ID, time.Since(p.LastSeen).Round(time.Second))
-				m.setStatus(p, "unhealthy")
 				m.unhealthyCounts[p.ID]++
-				if m.unhealthyCounts[p.ID] >= 3 {
-					log.Printf("WARNING: plugin %s has been unhealthy %d consecutive checks", p.ID, m.unhealthyCounts[p.ID])
+				log.Printf("health monitor: plugin %s heartbeat stale (last seen %s ago, count=%d)",
+					p.ID, time.Since(p.LastSeen).Round(time.Second), m.unhealthyCounts[p.ID])
+
+				// Check if container is still running.
+				if p.ContainerID != "" {
+					running, err := m.runtime.HealthCheck(ctx, p.ContainerID)
+					if err != nil || !running {
+						log.Printf("health monitor: plugin %s container gone", p.ID)
+						m.db.Model(p).Updates(map[string]interface{}{
+							"status": "stopped",
+							"host":   "",
+						})
+						m.tryRestart(ctx, p)
+						continue
+					}
+				}
+
+				m.setStatus(p, "unhealthy")
+
+				// After enough unhealthy checks, force restart even if container appears running
+				// (it may be stuck/unresponsive).
+				if m.unhealthyCounts[p.ID] >= restartThreshold && m.restarter != nil {
+					log.Printf("health monitor: plugin %s stuck (heartbeat stale, container present) — force restart", p.ID)
+					m.emitEvent(p.ID, "warning", "plugin unresponsive — force restart")
+					m.db.Model(p).Updates(map[string]interface{}{
+						"status": "stopped",
+						"host":   "",
+					})
+					m.tryRestart(ctx, p)
 				}
 				continue
 			}
 		}
 
-		// Docker container health check (existing behaviour).
+		// Case 3: Docker container health check for plugins that haven't registered yet
+		// (e.g. still booting) or that have a healthy heartbeat.
 		if p.ContainerID == "" {
 			continue
 		}
@@ -92,13 +153,48 @@ func (m *Monitor) checkAll(ctx context.Context) {
 			m.setStatus(p, "running")
 			m.unhealthyCounts[p.ID] = 0
 		} else {
-			m.setStatus(p, "unhealthy")
 			m.unhealthyCounts[p.ID]++
-		}
+			m.setStatus(p, "unhealthy")
 
-		if m.unhealthyCounts[p.ID] >= 3 {
-			log.Printf("WARNING: plugin %s has been unhealthy %d consecutive checks", p.ID, m.unhealthyCounts[p.ID])
+			// Container exited/crashed — auto-restart.
+			if m.unhealthyCounts[p.ID] >= restartThreshold {
+				log.Printf("health monitor: plugin %s container not running after %d checks — auto-restart",
+					p.ID, m.unhealthyCounts[p.ID])
+				m.db.Model(p).Updates(map[string]interface{}{
+					"status": "stopped",
+					"host":   "",
+				})
+				m.tryRestart(ctx, p)
+			}
 		}
+	}
+}
+
+// tryRestart attempts to restart a plugin and resets the unhealthy counter on success.
+func (m *Monitor) tryRestart(ctx context.Context, p *models.Plugin) {
+	if m.restarter == nil {
+		m.emitEvent(p.ID, "warning", "container gone — no restarter available")
+		return
+	}
+
+	m.emitEvent(p.ID, "warning", "attempting auto-restart")
+	if err := m.restarter.RestartPlugin(ctx, p.ID); err != nil {
+		log.Printf("health monitor: auto-restart failed for %s: %v", p.ID, err)
+		m.emitEvent(p.ID, "error", "auto-restart failed: "+err.Error())
+	} else {
+		log.Printf("health monitor: auto-restarted %s", p.ID)
+		m.emitEvent(p.ID, "info", "auto-restart succeeded")
+		m.unhealthyCounts[p.ID] = 0
+	}
+}
+
+func (m *Monitor) emitEvent(pluginID, eventType, detail string) {
+	if m.events != nil {
+		m.events.Emit(events.DebugEvent{
+			Type:     eventType,
+			PluginID: pluginID,
+			Detail:   detail,
+		})
 	}
 }
 
