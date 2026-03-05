@@ -1,0 +1,42 @@
+version: '3'
+
+vars:
+  BINARY_NAME: tool-veo
+  BUILD_DIR: ./build
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  dev:
+    desc: Run in dev mode with hot reload
+    env:
+      TEAMAGENTICA_KERNEL_HOST: localhost
+      TEAMAGENTICA_KERNEL_PORT: "8080"
+      TEAMAGENTICA_PLUGIN_TOKEN: '{{.TEAMAGENTICA_PLUGIN_TOKEN}}'
+      TOOL_VEO_PORT: "8081"
+    cmds:
+      - air
+
+  build:
+    desc: Build production binary
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - CGO_ENABLED=0 go build -ldflags="-s -w" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./... -v
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}} tmp
