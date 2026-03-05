@@ -1,11 +1,11 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "build"
 
 [build]
-  bin = "./tmp/openrouter-plugin"
-  cmd = "go build -o ./tmp/openrouter-plugin ."
+  bin = "./build/air-openrouter-plugin"
+  cmd = "go build -o ./build/air-openrouter-plugin ."
   delay = 1000
-  exclude_dir = ["tmp", "vendor", "node_modules"]
+  exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false

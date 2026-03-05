@@ -1,11 +1,11 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "build"
 
 [build]
-  bin = "./tmp/cost-explorer"
-  cmd = "CGO_ENABLED=1 go build -o ./tmp/cost-explorer ."
+  bin = "./build/air-cost-explorer"
+  cmd = "CGO_ENABLED=1 go build -o ./build/air-cost-explorer ."
   delay = 1000
-  exclude_dir = ["tmp", "vendor", "node_modules"]
+  exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false

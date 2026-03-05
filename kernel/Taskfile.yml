@@ -49,7 +49,7 @@ tasks:
   clean:
     desc: Clean build artifacts
     cmds:
-      - rm -rf {{.BUILD_DIR}} tmp dev.db
+      - rm -rf {{.BUILD_DIR}} dev.db
 
   migrate:
     desc: Run database migrations (auto-migrate on startup)

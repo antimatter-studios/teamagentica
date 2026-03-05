@@ -1,11 +1,11 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "build"
 
 [build]
-  bin = "./tmp/webhook-ingress-plugin"
-  cmd = "go build -o ./tmp/webhook-ingress-plugin ."
+  bin = "./build/air-webhook-ingress-plugin"
+  cmd = "go build -o ./build/air-webhook-ingress-plugin ."
   delay = 1000
-  exclude_dir = ["tmp", "vendor", "node_modules"]
+  exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false

@@ -39,4 +39,4 @@ tasks:
   clean:
     desc: Clean build artifacts
     cmds:
-      - rm -rf {{.BUILD_DIR}} tmp
+      - rm -rf {{.BUILD_DIR}}

@@ -1,6 +1,7 @@
 # IDE
 .idea/
 .vscode/
+.history/
 *.swp
 *.swo
 
@@ -13,31 +14,8 @@ Thumbs.db
 .env.local
 brand.env
 
-# Compiled binaries
-kernel/kernel
-plugins/agent-openai/agent-openai
-plugins/agent-gemini/agent-gemini
-plugins/agent-kimi/agent-kimi
-plugins/agent-openrouter/agent-openrouter
-plugins/agent-requesty/agent-requesty
-plugins/discord/discord
-plugins/chat/chat
-plugins/cost-explorer/cost-explorer
-plugins/builtin-provider/builtin-provider
-plugins/mcp-server/mcp-server
-plugins/ngrok/ngrok
-plugins/scheduler/scheduler
-plugins/telegram/telegram
-plugins/tool-nanobanana/tool-nanobanana
-plugins/tool-seedance/tool-seedance
-plugins/tool-stability/tool-stability
-plugins/tool-veo/tool-veo
-plugins/webhook-ingress/webhook-ingress
-plugins/whatsapp/whatsapp
-plugins/sss3-storage/sss3-storage
-
-# Build temp
-**/tmp/
+# Build artifacts (air dev + production binaries)
+**/build/
 
 # Do not commit the persistent data directory
 data/

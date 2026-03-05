@@ -1,11 +1,11 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "build"
 
 [build]
-  bin = "./tmp/ngrok-plugin"
-  cmd = "go build -o ./tmp/ngrok-plugin ."
+  bin = "./build/air-ngrok-plugin"
+  cmd = "go build -o ./build/air-ngrok-plugin ."
   delay = 1000
-  exclude_dir = ["tmp", "vendor", "node_modules"]
+  exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false

@@ -1,11 +1,11 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "build"
 
 [build]
-  bin = "./tmp/requesty-plugin"
-  cmd = "go build -o ./tmp/requesty-plugin ."
+  bin = "./build/air-requesty-plugin"
+  cmd = "go build -o ./build/air-requesty-plugin ."
   delay = 1000
-  exclude_dir = ["tmp", "vendor", "node_modules"]
+  exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false
