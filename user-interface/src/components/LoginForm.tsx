@@ -1,14 +1,13 @@
 import { useState, type FormEvent } from "react";
-import { login, register } from "../api/auth";
+import { useAuthStore } from "../stores/authStore";
 
-interface Props {
-  onLogin: () => void;
-}
-
-export default function LoginForm({ onLogin }: Props) {
+export default function LoginForm() {
+  const login = useAuthStore((s) => s.login);
+  const register = useAuthStore((s) => s.register);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -19,12 +18,16 @@ export default function LoginForm({ onLogin }: Props) {
     setLoading(true);
 
     try {
+      if (mode === "register" && password !== confirmPassword) {
+        setError("Passwords do not match");
+        setLoading(false);
+        return;
+      }
       if (mode === "login") {
         await login(email, password);
       } else {
         await register(email, password, displayName);
       }
-      onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -37,7 +40,7 @@ export default function LoginForm({ onLogin }: Props) {
       <div className="login-container">
         <div className="login-card">
           <div className="login-header">
-            <h1 className="login-title">ROBOSLOP</h1>
+            <h1 className="login-title">{(import.meta.env.VITE_APP_NAME || "TeamAgentica").toUpperCase()}</h1>
             <p className="login-subtitle">AUTOMATION CONTROL PLATFORM</p>
           </div>
 
@@ -47,6 +50,7 @@ export default function LoginForm({ onLogin }: Props) {
               onClick={() => {
                 setMode("login");
                 setError("");
+                setConfirmPassword("");
               }}
               type="button"
             >
@@ -72,7 +76,7 @@ export default function LoginForm({ onLogin }: Props) {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="operator@roboslop.io"
+                placeholder="operator@teamagentica.io"
                 required
                 autoComplete="email"
               />
@@ -106,6 +110,21 @@ export default function LoginForm({ onLogin }: Props) {
                 }
               />
             </div>
+
+            {mode === "register" && (
+              <div className="form-field">
+                <label htmlFor="confirmPassword">CONFIRM PASSWORD</label>
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••••"
+                  required
+                  autoComplete="new-password"
+                />
+              </div>
+            )}
 
             {error && <div className="form-error">{error}</div>}
 
