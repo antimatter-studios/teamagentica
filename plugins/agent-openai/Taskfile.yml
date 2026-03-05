@@ -12,9 +12,9 @@ tasks:
   dev:
     desc: Run in dev mode with hot reload
     env:
-      ROBOSLOP_KERNEL_HOST: localhost
-      ROBOSLOP_KERNEL_PORT: "8080"
-      ROBOSLOP_PLUGIN_TOKEN: '{{.ROBOSLOP_PLUGIN_TOKEN}}'
+      TEAMAGENTICA_KERNEL_HOST: localhost
+      TEAMAGENTICA_KERNEL_PORT: "8080"
+      TEAMAGENTICA_PLUGIN_TOKEN: '{{.TEAMAGENTICA_PLUGIN_TOKEN}}'
       AGENT_OPENAI_PORT: "8081"
     cmds:
       - air
@@ -30,6 +30,11 @@ tasks:
       - go.sum
     generates:
       - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./... -v
 
   clean:
     desc: Clean build artifacts

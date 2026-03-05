@@ -4,12 +4,60 @@ includes:
   kernel:
     taskfile: ./kernel/Taskfile.yml
     dir: ./kernel
-  discord:
-    taskfile: ./plugins/discord/Taskfile.yml
-    dir: ./plugins/discord
+  pluginsdk:
+    taskfile: ./pkg/pluginsdk/Taskfile.yml
+    dir: ./pkg/pluginsdk
+  agent-gemini:
+    taskfile: ./plugins/agent-gemini/Taskfile.yml
+    dir: ./plugins/agent-gemini
+  agent-kimi:
+    taskfile: ./plugins/agent-kimi/Taskfile.yml
+    dir: ./plugins/agent-kimi
   agent-openai:
     taskfile: ./plugins/agent-openai/Taskfile.yml
     dir: ./plugins/agent-openai
+  agent-openrouter:
+    taskfile: ./plugins/agent-openrouter/Taskfile.yml
+    dir: ./plugins/agent-openrouter
+  agent-requesty:
+    taskfile: ./plugins/agent-requesty/Taskfile.yml
+    dir: ./plugins/agent-requesty
+  builtin-provider:
+    taskfile: ./plugins/builtin-provider/Taskfile.yml
+    dir: ./plugins/builtin-provider
+  cost-explorer:
+    taskfile: ./plugins/cost-explorer/Taskfile.yml
+    dir: ./plugins/cost-explorer
+  discord:
+    taskfile: ./plugins/discord/Taskfile.yml
+    dir: ./plugins/discord
+  ngrok:
+    taskfile: ./plugins/ngrok/Taskfile.yml
+    dir: ./plugins/ngrok
+  telegram:
+    taskfile: ./plugins/telegram/Taskfile.yml
+    dir: ./plugins/telegram
+  tool-nanobanana:
+    taskfile: ./plugins/tool-nanobanana/Taskfile.yml
+    dir: ./plugins/tool-nanobanana
+  tool-seedance:
+    taskfile: ./plugins/tool-seedance/Taskfile.yml
+    dir: ./plugins/tool-seedance
+  tool-stability:
+    taskfile: ./plugins/tool-stability/Taskfile.yml
+    dir: ./plugins/tool-stability
+  tool-veo:
+    taskfile: ./plugins/tool-veo/Taskfile.yml
+    dir: ./plugins/tool-veo
+  webhook-ingress:
+    taskfile: ./plugins/webhook-ingress/Taskfile.yml
+    dir: ./plugins/webhook-ingress
+  sss3-storage:
+    taskfile: ./plugins/sss3-storage/Taskfile.yml
+    dir: ./plugins/sss3-storage
+  whatsapp:
+    taskfile: ./plugins/whatsapp/Taskfile.yml
+    dir: ./plugins/whatsapp
 
 tasks:
   default:
@@ -17,26 +65,173 @@ tasks:
     cmds:
       - task --list
 
-  dev:
-    desc: Run all services in dev mode
-    deps:
-      - kernel:dev
+  test:all:
+    desc: Run tests for all modules
+    cmds:
+      - task: kernel:test
+      - task: pluginsdk:test
+      - task: agent-gemini:test
+      - task: agent-kimi:test
+      - task: agent-openai:test
+      - task: agent-openrouter:test
+      - task: agent-requesty:test
+      - task: builtin-provider:test
+      - task: cost-explorer:test
+      - task: sss3-storage:test
+      - task: discord:test
+      - task: ngrok:test
+      - task: telegram:test
+      - task: tool-nanobanana:test
+      - task: tool-seedance:test
+      - task: tool-stability:test
+      - task: tool-veo:test
+      - task: webhook-ingress:test
+      - task: whatsapp:test
+
+  dev:start:
+    desc: Run all services in dev mode (Docker, hot reload)
+    cmds:
+      - docker compose -f docker-compose.dev.yml up --build -d --remove-orphans --renew-anon-volumes
+      - |
+        echo "Waiting for services to start..."
+        for i in $(seq 1 30); do
+          if docker compose -f docker-compose.dev.yml ps --format json | grep -q '"healthy"'; then
+            echo ""
+            echo "============================================"
+            echo "  TeamAgentica is running!"
+            echo "  UI:     http://localhost:3000"
+            echo "  Kernel: http://localhost:9741"
+            echo "============================================"
+            echo ""
+            break
+          fi
+          printf "."
+          sleep 2
+        done
+      - docker compose -f docker-compose.dev.yml logs -f
+
+  dev:log:f:
+    desc: Follow dev service logs
+    cmds:
+      - docker compose -f docker-compose.dev.yml logs -f
+
+  dev:stop:
+    desc: Stop dev services
+    cmds:
+      - docker compose -f docker-compose.dev.yml down
+
+  dev:restart:
+    desc: Restart all dev services
+    cmds:
+      - task: dev:stop
+      - task: dev:start
+
+  prod:start:
+    desc: Run all services in prod mode (Docker)
+    cmds:
+      - docker compose up --build
+
+  prod:stop:
+    desc: Stop prod services
+    cmds:
+      - docker compose down
+
+  prod:restart:
+    desc: Restart all prod services
+    cmds:
+      - task: prod:stop
+      - task: prod:start
 
   build:
     desc: Build all services
     deps:
       - kernel:build
-      - discord:build
+      - agent-gemini:build
+      - agent-kimi:build
       - agent-openai:build
+      - agent-openrouter:build
+      - agent-requesty:build
+      - builtin-provider:build
+      - cost-explorer:build
+      - sss3-storage:build
+      - discord:build
+      - ngrok:build
+      - telegram:build
+      - tool-nanobanana:build
+      - tool-seedance:build
+      - tool-stability:build
+      - tool-veo:build
+      - webhook-ingress:build
+      - whatsapp:build
+
+  build:images:
+    desc: Build all plugin Docker images for the kernel orchestrator
+    cmds:
+      - |
+        for df in plugins/*/Dockerfile; do
+          dir=$(dirname "$df")
+          name=$(basename "$dir")
+          tag="teamagentica-${name}:latest"
+          echo "Building $tag ..."
+          docker build -t "$tag" -f "$df" --target prod . || exit 1
+        done
+        echo "All plugin images built successfully"
+      - task: restart:running
+
+  build:images:dev:
+    desc: Build all plugin Docker images (dev stage with hot reload)
+    cmds:
+      - |
+        for df in plugins/*/Dockerfile; do
+          dir=$(dirname "$df")
+          name=$(basename "$dir")
+          tag="teamagentica-${name}:dev"
+          echo "Building $tag ..."
+          docker build -t "$tag" -f "$df" --target dev . || exit 1
+        done
+        echo "All dev plugin images built successfully"
+      - task: restart:running
+
+  restart:running:
+    desc: Restart any running plugin containers so they pick up new images
+    cmds:
+      - |
+        containers=$(docker ps --filter "name=teamagentica-plugin-" | awk 'NR>1 {print $NF}')
+        if [ -z "$containers" ]; then
+          echo "No running plugin containers to restart"
+          exit 0
+        fi
+        echo "$containers" | while IFS= read -r c; do
+          plugin_id=$(echo "$c" | sed 's/teamagentica-plugin-//')
+          echo "Restarting $plugin_id..."
+          docker stop "$c" 2>/dev/null || true
+          docker rm -f "$c" 2>/dev/null || true
+        done
+        echo ""
+        echo "Removed old containers. Restarting kernel to re-launch plugins..."
+        kernel_id=$(docker ps -q --filter "name=kernel" | head -1)
+        docker restart "$kernel_id" 2>/dev/null || true
+        echo "Done. Kernel will re-launch all enabled plugins on startup."
+    silent: true
 
   clean:
     desc: Clean all build artifacts
     deps:
       - kernel:clean
-      - discord:clean
+      - agent-gemini:clean
+      - agent-kimi:clean
       - agent-openai:clean
-
-  docker:
-    desc: Build and run all Docker containers
-    cmds:
-      - docker compose up --build
+      - agent-openrouter:clean
+      - agent-requesty:clean
+      - builtin-provider:clean
+      - cost-explorer:clean
+      - sss3-storage:clean
+      - discord:clean
+      - ngrok:clean
+      - telegram:clean
+      - tool-nanobanana:clean
+      - tool-seedance:clean
+      - tool-stability:clean
+      - tool-veo:clean
+      - webhook-ingress:clean
+      - whatsapp:clean

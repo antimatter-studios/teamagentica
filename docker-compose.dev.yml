@@ -1,0 +1,62 @@
+name: teamagentica
+
+services:
+  kernel:
+    hostname: teamagentica-kernel
+    build:
+      context: ./kernel
+      dockerfile: Dockerfile
+      target: dev
+    labels:
+      docker-proxy.teamagentica-api.host: api.teamagentica.localhost
+      docker-proxy.teamagentica-api.port: 8080
+    ports:
+      - "127.0.0.1:9741:8080"
+    volumes:
+      - ./kernel:/app
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - APP_NAME=TeamAgentica
+      - TEAMAGENTICA_KERNEL_HOST=0.0.0.0
+      - TEAMAGENTICA_KERNEL_PORT=8080
+      - TEAMAGENTICA_KERNEL_ADVERTISE_HOST=teamagentica-kernel
+      - TEAMAGENTICA_JWT_SECRET=${TEAMAGENTICA_JWT_SECRET:?JWT secret required}
+      - TEAMAGENTICA_DB_PATH=/data/database.db
+      - TEAMAGENTICA_DATA_DIR=/data
+      - TEAMAGENTICA_DOCKER_NETWORK=teamagentica_default
+      - TEAMAGENTICA_DEV_MODE=true
+      - TEAMAGENTICA_PROJECT_ROOT=${PWD}
+      - TEAMAGENTICA_MTLS_ENABLED=false
+      - TEAMAGENTICA_PROVIDER_URL=http://teamagentica-plugin-builtin-provider:8083
+      - CGO_ENABLED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+
+  # builtin-provider is managed by the kernel orchestrator as a system plugin.
+  # Container name: teamagentica-plugin-builtin-provider
+
+  user-interface:
+    build:
+      context: ./user-interface
+      dockerfile: Dockerfile
+      target: dev
+    labels:
+      docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
+      docker-proxy.teamagentica-ui.port: 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./user-interface:/app
+      - /app/node_modules
+    environment:
+      - VITE_APP_NAME=TeamAgentica
+      - VITE_TEAMAGENTICA_KERNEL_HOST=api.teamagentica.localhost
+    depends_on:
+      kernel:
+        condition: service_healthy

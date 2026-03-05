@@ -13,8 +13,8 @@ tasks:
   dev:
     desc: Run in dev mode with hot reload (Air)
     env:
-      ROBOSLOP_JWT_SECRET: dev-secret-change-me
-      ROBOSLOP_DB_PATH: ./dev.db
+      TEAMAGENTICA_JWT_SECRET: dev-secret-change-me
+      TEAMAGENTICA_DB_PATH: ./dev.db
     cmds:
       - air
 
@@ -54,18 +54,18 @@ tasks:
   migrate:
     desc: Run database migrations (auto-migrate on startup)
     env:
-      ROBOSLOP_JWT_SECRET: dev-secret-change-me
-      ROBOSLOP_DB_PATH: ./dev.db
+      TEAMAGENTICA_JWT_SECRET: dev-secret-change-me
+      TEAMAGENTICA_DB_PATH: ./dev.db
     cmds:
       - echo "Migrations run automatically on startup via GORM AutoMigrate"
 
   docker:build:
     desc: Build Docker image
     cmds:
-      - docker build -t roboslop-kernel:latest .
+      - docker build -t teamagentica-kernel:latest .
 
   docker:run:
     desc: Run Docker container
     deps: [docker:build]
     cmds:
-      - docker run -p 8080:8080 -e ROBOSLOP_JWT_SECRET=change-me roboslop-kernel:latest
+      - docker run -p 8080:8080 -e TEAMAGENTICA_JWT_SECRET=change-me teamagentica-kernel:latest

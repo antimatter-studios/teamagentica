@@ -1,0 +1,26 @@
+go 1.26.0
+
+use (
+	./kernel
+	./pkg/pluginsdk
+	./plugins/agent-gemini
+	./plugins/agent-kimi
+	./plugins/agent-openai
+	./plugins/agent-openrouter
+	./plugins/agent-requesty
+	./plugins/builtin-provider
+	./plugins/chat
+	./plugins/mcp-server
+	./plugins/cost-explorer
+	./plugins/discord
+	./plugins/ngrok
+	./plugins/scheduler
+	./plugins/sss3-storage
+	./plugins/telegram
+	./plugins/tool-nanobanana
+	./plugins/tool-seedance
+	./plugins/tool-stability
+	./plugins/tool-veo
+	./plugins/webhook-ingress
+	./plugins/whatsapp
+)
