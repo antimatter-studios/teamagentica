@@ -1,20 +1,29 @@
-const host = import.meta.env.VITE_ROBOSLOP_KERNEL_HOST || "localhost";
-const port = import.meta.env.VITE_ROBOSLOP_KERNEL_PORT || "8080";
+export const API_BASE =
+  import.meta.env.VITE_TEAMAGENTICA_KERNEL_URL ||
+  `//${import.meta.env.VITE_TEAMAGENTICA_KERNEL_HOST || "api.teamagentica.localhost"}`;
 
-export const API_BASE = `http://${host}:${port}`;
+const TOKEN_KEY = "teamagentica_token";
 
 function getToken(): string | null {
-  return localStorage.getItem("roboslop_token");
+  return localStorage.getItem(TOKEN_KEY);
 }
 
-function clearTokenAndRedirect(): void {
-  localStorage.removeItem("roboslop_token");
-  window.location.href = "/";
+// Global 401 handler — set by the auth store so any API call that gets a 401
+// triggers a clean React-state logout instead of a hard page reload.
+let onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(cb: () => void): void {
+  onUnauthorized = cb;
+}
+
+function handle401(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  onUnauthorized?.();
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (res.status === 401) {
-    clearTokenAndRedirect();
+    handle401();
     throw new Error("Unauthorized");
   }
   if (!res.ok) {
@@ -103,7 +112,7 @@ export async function apiGetText(path: string): Promise<string> {
   });
 
   if (res.status === 401) {
-    clearTokenAndRedirect();
+    handle401();
     throw new Error("Unauthorized");
   }
   if (!res.ok) {

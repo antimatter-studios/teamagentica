@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_ROBOSLOP_KERNEL_HOST: string;
-  readonly VITE_ROBOSLOP_KERNEL_PORT: string;
+  readonly VITE_APP_NAME: string;
+  readonly VITE_TEAMAGENTICA_KERNEL_URL: string;
+  readonly VITE_TEAMAGENTICA_KERNEL_HOST: string;
 }
 
 interface ImportMeta {

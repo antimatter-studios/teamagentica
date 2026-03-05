@@ -13,7 +13,7 @@ interface AuthResponse {
   user: User;
 }
 
-const TOKEN_KEY = "roboslop_token";
+const TOKEN_KEY = "teamagentica_token";
 
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -54,7 +54,8 @@ export async function register(
 }
 
 export async function getMe(): Promise<User> {
-  return apiGet<User>("/api/users/me");
+  const res = await apiGet<{ user: User }>("/api/users/me");
+  return res.user;
 }
 
 export async function getUsers(): Promise<User[]> {

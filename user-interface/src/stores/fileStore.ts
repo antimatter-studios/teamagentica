@@ -1,0 +1,107 @@
+import { create } from "zustand";
+import {
+  fetchStorageProviders,
+  browseStorage,
+  uploadFile,
+  deleteFile as apiDeleteFile,
+  type StorageFile,
+} from "../api/files";
+import type { Plugin } from "../api/plugins";
+
+interface FileStore {
+  providers: Plugin[];
+  selectedProvider: Plugin | null;
+  prefix: string;
+  folders: string[];
+  files: StorageFile[];
+  loading: boolean;
+  error: string | null;
+  loadProviders: () => Promise<void>;
+  selectProvider: (p: Plugin) => void;
+  browse: (prefix: string) => Promise<void>;
+  navigateUp: () => void;
+  upload: (files: FileList) => Promise<void>;
+  deleteFile: (key: string) => Promise<void>;
+  refresh: () => Promise<void>;
+}
+
+export const useFileStore = create<FileStore>((set, get) => ({
+  providers: [],
+  selectedProvider: null,
+  prefix: "",
+  folders: [],
+  files: [],
+  loading: false,
+  error: null,
+
+  loadProviders: async () => {
+    try {
+      const providers = await fetchStorageProviders();
+      set({ providers });
+      if (providers.length > 0 && !get().selectedProvider) {
+        get().selectProvider(providers[0]);
+      }
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Failed to load storage providers" });
+    }
+  },
+
+  selectProvider: (p: Plugin) => {
+    set({ selectedProvider: p, prefix: "", folders: [], files: [] });
+    get().browse("");
+  },
+
+  browse: async (prefix: string) => {
+    const provider = get().selectedProvider;
+    if (!provider) return;
+    set({ loading: true, error: null, prefix });
+    try {
+      const result = await browseStorage(provider.id, prefix);
+      set({ folders: result.folders || [], files: result.files || [], loading: false });
+    } catch (err) {
+      set({ loading: false, error: err instanceof Error ? err.message : "Browse failed" });
+    }
+  },
+
+  navigateUp: () => {
+    const { prefix } = get();
+    if (!prefix) return;
+    const parts = prefix.replace(/\/$/, "").split("/");
+    parts.pop();
+    const parent = parts.length > 0 ? parts.join("/") + "/" : "";
+    get().browse(parent);
+  },
+
+  upload: async (fileList: FileList) => {
+    const provider = get().selectedProvider;
+    if (!provider) return;
+    const { prefix } = get();
+    set({ error: null });
+    try {
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const key = prefix + file.name;
+        await uploadFile(provider.id, key, file);
+      }
+      await get().browse(prefix);
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Upload failed" });
+    }
+  },
+
+  deleteFile: async (key: string) => {
+    const provider = get().selectedProvider;
+    if (!provider) return;
+    set({ error: null });
+    try {
+      await apiDeleteFile(provider.id, key);
+      await get().browse(get().prefix);
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Delete failed" });
+    }
+  },
+
+  refresh: async () => {
+    await get().browse(get().prefix);
+  },
+}));
