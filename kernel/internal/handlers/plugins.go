@@ -4,30 +4,43 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"roboslop/kernel/internal/config"
-	"roboslop/kernel/internal/models"
-	"roboslop/kernel/internal/runtime"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/config"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
 )
 
 // PluginHandler holds dependencies for plugin management endpoints.
 type PluginHandler struct {
-	db        *gorm.DB
-	runtime   *runtime.DockerRuntime
-	cfg       *config.Config
-	clientTLS *tls.Config
+	db           *gorm.DB
+	runtime      *runtime.DockerRuntime
+	cfg          *config.Config
+	clientTLS    *tls.Config
+	Events       *events.Hub
+	Subs         *events.SubscriptionManager
+	broadcastSeq atomic.Uint64 // monotonic sequence number for broadcast events
+
+	// Kernel-side debounce for alias broadcasts.
+	aliasDebounceMu    sync.Mutex
+	aliasDebounceTimer *time.Timer
 }
 
 // NewPluginHandler creates a new PluginHandler.
 // clientTLS is optional; pass nil to disable mTLS for proxied requests.
 func NewPluginHandler(db *gorm.DB, rt *runtime.DockerRuntime, cfg *config.Config, clientTLS *tls.Config) *PluginHandler {
-	return &PluginHandler{db: db, runtime: rt, cfg: cfg, clientTLS: clientTLS}
+	return &PluginHandler{db: db, runtime: rt, cfg: cfg, clientTLS: clientTLS, Events: events.NewHub(), Subs: events.NewPersistentSubscriptionManager(db)}
 }
 
 // --- request/response types ---
@@ -80,13 +93,19 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 	plugin.SetCapabilities(req.Capabilities)
 
 	if req.ConfigSchema != nil {
-		plugin.ConfigSchema = string(req.ConfigSchema)
+		plugin.ConfigSchema = models.JSONRawString(req.ConfigSchema)
 	}
 
 	if result := h.db.Create(&plugin); result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register plugin"})
 		return
 	}
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "install",
+		PluginID: req.ID,
+		Detail:   fmt.Sprintf("image=%s version=%s", req.Image, req.Version),
+	})
 
 	if al := getAudit(c); al != nil {
 		userID, _ := c.Get("user_id")
@@ -104,6 +123,7 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 func (h *PluginHandler) ListPlugins(c *gin.Context) {
 	var plugins []models.Plugin
 	if result := h.db.Find(&plugins); result.Error != nil {
+		database.CheckError(result.Error)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch plugins"})
 		return
 	}
@@ -134,19 +154,40 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 		return
 	}
 
-	// Stop container if running.
+	if plugin.System {
+		c.JSON(http.StatusForbidden, gin.H{"error": "system plugins cannot be uninstalled"})
+		return
+	}
+
+	// Stop container if running (StopPlugin handles vanished containers gracefully).
 	if plugin.ContainerID != "" && h.runtime != nil {
-		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID)
+		if err := h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID); err != nil {
+			h.Events.Emit(events.DebugEvent{
+				Type:     "error",
+				PluginID: id,
+				Detail:   "failed to stop container during uninstall: " + err.Error(),
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop plugin: " + err.Error()})
+			return
+		}
 	}
 
 	// Remove config entries.
 	h.db.Where("plugin_id = ?", id).Delete(&models.PluginConfig{})
+
+	// Remove aliases owned by this plugin.
+	h.db.Where("plugin_id = ?", id).Delete(&models.Alias{})
 
 	// Remove plugin record (data volume is kept).
 	if result := h.db.Delete(&plugin); result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete plugin"})
 		return
 	}
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "uninstall",
+		PluginID: id,
+	})
 
 	if al := getAudit(c); al != nil {
 		userID, _ := c.Get("user_id")
@@ -176,17 +217,28 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 	env := h.buildEnv(id)
 
 	// Inject kernel host/port.
-	env["ROBOSLOP_KERNEL_HOST"] = h.cfg.Host
-	env["ROBOSLOP_KERNEL_PORT"] = h.cfg.Port
+	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
 
-	// Pull image first.
+	// Resolve image tag for dev mode.
+	plugin.Image = h.cfg.ResolveImage(plugin.Image)
+
+	// Pull image (non-fatal — image may be local-only).
 	if err := h.runtime.PullImage(c.Request.Context(), plugin.Image); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pull image: " + err.Error()})
-		return
+		h.Events.Emit(events.DebugEvent{
+			Type:     "warning",
+			PluginID: id,
+			Detail:   "image pull skipped (may be local): " + err.Error(),
+		})
 	}
 
 	containerID, err := h.runtime.StartPlugin(c.Request.Context(), &plugin, env)
 	if err != nil {
+		h.Events.Emit(events.DebugEvent{
+			Type:     "error",
+			PluginID: id,
+			Detail:   "start failed: " + err.Error(),
+		})
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start plugin: " + err.Error()})
 		return
 	}
@@ -195,6 +247,12 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 		"container_id": containerID,
 		"status":       "running",
 		"enabled":      true,
+	})
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "enable",
+		PluginID: id,
+		Detail:   "container=" + containerID,
 	})
 
 	if al := getAudit(c); al != nil {
@@ -216,8 +274,20 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 		return
 	}
 
+	if plugin.System {
+		c.JSON(http.StatusForbidden, gin.H{"error": "system plugins cannot be disabled"})
+		return
+	}
+
 	if plugin.ContainerID != "" && h.runtime != nil {
 		if err := h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID); err != nil {
+			// StopPlugin already handles not-found (container vanished) gracefully.
+			// Any error reaching here is a real Docker problem.
+			h.Events.Emit(events.DebugEvent{
+				Type:     "error",
+				PluginID: id,
+				Detail:   "failed to stop container: " + err.Error(),
+			})
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop plugin: " + err.Error()})
 			return
 		}
@@ -227,6 +297,11 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 		"container_id": "",
 		"status":       "stopped",
 		"enabled":      false,
+	})
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "disable",
+		PluginID: id,
 	})
 
 	if al := getAudit(c); al != nil {
@@ -253,18 +328,42 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 		return
 	}
 
+	h.Events.Emit(events.DebugEvent{
+		Type:     "restart",
+		PluginID: id,
+		Detail:   "user-initiated restart",
+	})
+
 	// Stop existing container if running.
 	if plugin.ContainerID != "" {
+		h.Events.Emit(events.DebugEvent{
+			Type:     "stop",
+			PluginID: id,
+			Detail:   "stopping container=" + plugin.ContainerID[:12],
+		})
 		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID)
 	}
 
 	// Re-start with current config.
 	env := h.buildEnv(id)
-	env["ROBOSLOP_KERNEL_HOST"] = h.cfg.Host
-	env["ROBOSLOP_KERNEL_PORT"] = h.cfg.Port
+	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
 
+	// Resolve image tag for dev mode.
+	plugin.Image = h.cfg.ResolveImage(plugin.Image)
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "start",
+		PluginID: id,
+		Detail:   "starting container image=" + plugin.Image,
+	})
 	containerID, err := h.runtime.StartPlugin(c.Request.Context(), &plugin, env)
 	if err != nil {
+		h.Events.Emit(events.DebugEvent{
+			Type:     "error",
+			PluginID: id,
+			Detail:   "restart failed: " + err.Error(),
+		})
 		h.db.Model(&plugin).Updates(map[string]interface{}{
 			"container_id": "",
 			"status":       "error",
@@ -277,6 +376,18 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 		"container_id": containerID,
 		"status":       "running",
 	})
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "restart",
+		PluginID: id,
+		Detail:   "running container=" + containerID[:12],
+	})
+
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.restart", "plugin:"+id, "", c.ClientIP(), true)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "plugin restarted", "container_id": containerID})
 }
@@ -314,7 +425,7 @@ func (h *PluginHandler) GetPluginLogs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"logs": logs})
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(logs))
 }
 
 // GetPluginConfig handles GET /api/plugins/:id/config.
@@ -336,13 +447,13 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 		Value    string `json:"value"`
 		IsSecret bool   `json:"is_secret"`
 	}
-	items := make([]configItem, len(configs))
-	for i, cfg := range configs {
+	var items []configItem
+	for _, cfg := range configs {
 		val := cfg.Value
 		if cfg.IsSecret {
 			val = "********"
 		}
-		items[i] = configItem{Key: cfg.Key, Value: val, IsSecret: cfg.IsSecret}
+		items = append(items, configItem{Key: cfg.Key, Value: val, IsSecret: cfg.IsSecret})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"config": items})
@@ -364,7 +475,17 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		return
 	}
 
+	// Parse schema to check for readonly fields.
+	schema, _ := plugin.GetConfigSchema()
+
 	for key, entry := range req.Config {
+		// Skip readonly fields — they are set by the plugin, not the user.
+		if schema != nil {
+			if field, ok := schema[key]; ok && field.ReadOnly {
+				continue
+			}
+		}
+
 		pc := models.PluginConfig{
 			PluginID: id,
 			Key:      key,
@@ -383,29 +504,70 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		}
 	}
 
-	// Restart plugin if it is currently running.
-	if plugin.Enabled && plugin.ContainerID != "" && h.runtime != nil {
-		ctx := c.Request.Context()
-		_ = h.runtime.StopPlugin(ctx, plugin.ContainerID)
+	// Sync PLUGIN_ALIASES config → aliases table.
+	if entry, ok := req.Config["PLUGIN_ALIASES"]; ok {
+		h.syncPluginAliases(id, entry.Value)
+	}
 
-		env := h.buildEnv(id)
-		env["ROBOSLOP_KERNEL_HOST"] = h.cfg.Host
-		env["ROBOSLOP_KERNEL_PORT"] = h.cfg.Port
+	// Soft update: emit config:update event instead of restarting the container.
+	if c.Query("soft") == "true" {
+		if plugin.Status == "running" && plugin.Host != "" {
+			var keys []string
+			for k := range req.Config {
+				keys = append(keys, k)
+			}
+			keysJSON, _ := json.Marshal(keys)
 
-		containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
-		if err != nil {
-			h.db.Model(&plugin).Updates(map[string]interface{}{
-				"container_id": "",
-				"status":       "error",
+			// Build the new config values for the event detail.
+			configValues := make(map[string]string, len(req.Config))
+			for k, v := range req.Config {
+				if v.IsSecret {
+					configValues[k] = "********"
+				} else {
+					configValues[k] = v.Value
+				}
+			}
+
+			detail, _ := json.Marshal(map[string]interface{}{
+				"keys":   keys,
+				"config": configValues,
 			})
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "config updated but restart failed: " + err.Error()})
-			return
-		}
 
-		h.db.Model(&plugin).Updates(map[string]interface{}{
-			"container_id": containerID,
-			"status":       "running",
-		})
+			h.Events.Emit(events.DebugEvent{
+				Type:     "config:update",
+				PluginID: id,
+				Detail:   fmt.Sprintf("soft update keys=%s", keysJSON),
+			})
+
+			// Emit addressed event to the plugin.
+			h.handleAddressedEvent("kernel", "config:update", string(detail), id, time.Now())
+		}
+	} else {
+		// Hard restart: stop and re-start the container with updated config.
+		if plugin.Enabled && plugin.ContainerID != "" && h.runtime != nil {
+			ctx := c.Request.Context()
+			_ = h.runtime.StopPlugin(ctx, plugin.ContainerID)
+
+			env := h.buildEnv(id)
+			env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
+			env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
+
+			plugin.Image = h.cfg.ResolveImage(plugin.Image)
+			containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
+			if err != nil {
+				h.db.Model(&plugin).Updates(map[string]interface{}{
+					"container_id": "",
+					"status":       "error",
+				})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "config updated but restart failed: " + err.Error()})
+				return
+			}
+
+			h.db.Model(&plugin).Updates(map[string]interface{}{
+				"container_id": containerID,
+				"status":       "running",
+			})
+		}
 	}
 
 	if al := getAudit(c); al != nil {
@@ -437,6 +599,7 @@ func (h *PluginHandler) SearchPlugins(c *gin.Context) {
 	query := h.db.Where("capabilities LIKE ? AND status = ? AND host != ?",
 		"%"+strings.ReplaceAll(capability, "%", "\\%")+"%", "running", "")
 	if result := query.Find(&plugins); result.Error != nil {
+		database.CheckError(result.Error)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search plugins"})
 		return
 	}
@@ -469,5 +632,61 @@ func (h *PluginHandler) buildEnv(pluginID string) map[string]string {
 		}
 	}
 
+	// PLUGIN_ALIASES is kernel-managed (synced to aliases table), not an env var.
+	delete(env, "PLUGIN_ALIASES")
+
+	// Inject internal plugin service token (not user config).
+	if plugin.ServiceToken != "" {
+		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
+	}
+
 	return env
+}
+
+// syncPluginAliases parses a JSON array of {name, target} pairs and replaces
+// all aliases owned by this plugin in a single transaction.
+func (h *PluginHandler) syncPluginAliases(pluginID, aliasJSON string) {
+	type aliasEntry struct {
+		Name   string `json:"name"`
+		Target string `json:"target"`
+	}
+
+	var entries []aliasEntry
+	if aliasJSON != "" {
+		if err := json.Unmarshal([]byte(aliasJSON), &entries); err != nil {
+			log.Printf("syncPluginAliases: bad JSON for plugin %s: %v", pluginID, err)
+			return
+		}
+	}
+
+	tx := h.db.Begin()
+
+	// Delete all aliases owned by this plugin.
+	if err := tx.Where("plugin_id = ?", pluginID).Delete(&models.Alias{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("syncPluginAliases: failed to delete old aliases for %s: %v", pluginID, err)
+		return
+	}
+
+	// Insert new aliases.
+	for _, e := range entries {
+		if e.Name == "" || e.Target == "" {
+			continue
+		}
+		a := models.Alias{
+			Name:     e.Name,
+			Target:   e.Target,
+			PluginID: pluginID,
+		}
+		if err := tx.Create(&a).Error; err != nil {
+			tx.Rollback()
+			log.Printf("syncPluginAliases: failed to insert alias %s for %s: %v", e.Name, pluginID, err)
+			return
+		}
+	}
+
+	tx.Commit()
+	log.Printf("syncPluginAliases: plugin %s → %d aliases", pluginID, len(entries))
+
+	h.broadcastAliasUpdate()
 }

@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"roboslop/kernel/internal/database"
-	"roboslop/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // ListAuditLogs handles GET /api/audit.

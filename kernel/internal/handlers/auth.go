@@ -10,10 +10,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"roboslop/kernel/internal/audit"
-	"roboslop/kernel/internal/auth"
-	"roboslop/kernel/internal/database"
-	"roboslop/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/audit"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // getAudit extracts the audit logger from the gin context.
@@ -48,6 +48,19 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	// Count existing users to determine mode.
+	var count int64
+	database.DB.Model(&models.User{}).Count(&count)
+
+	// If users exist, only authenticated admins can register new users.
+	if count > 0 {
+		role, exists := c.Get("role")
+		if !exists || role.(string) != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "registration closed. contact an admin to create your account"})
+			return
+		}
+	}
+
 	// Check if email already exists.
 	var existing models.User
 	if result := database.DB.Where("email = ?", req.Email).First(&existing); result.Error == nil {
@@ -63,8 +76,6 @@ func Register(c *gin.Context) {
 
 	// First user becomes admin.
 	role := "user"
-	var count int64
-	database.DB.Model(&models.User{}).Count(&count)
 	if count == 0 {
 		role = "admin"
 	}

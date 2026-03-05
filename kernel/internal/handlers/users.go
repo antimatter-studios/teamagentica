@@ -5,9 +5,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"roboslop/kernel/internal/auth"
-	"roboslop/kernel/internal/database"
-	"roboslop/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // Me handles GET /api/users/me.
