@@ -1,8 +1,8 @@
-# Roboslop Architecture
+# TeamAgentica Architecture
 
 ## Overview
 
-Roboslop is a modular automation control platform composed of independently deployable components that communicate over well-defined protocols.
+TeamAgentica is a modular automation control platform composed of independently deployable components that communicate over well-defined protocols.
 
 ## Components
 
@@ -34,7 +34,7 @@ The kernel is the central authority. It is intentionally minimal.
 
 A standalone web application. It is just another API client.
 
-- Connects to kernel REST API via `ROBOSLOP_KERNEL_HOST` and `ROBOSLOP_KERNEL_PORT`
+- Connects to kernel REST API via `TEAMAGENTICA_KERNEL_HOST` and `TEAMAGENTICA_KERNEL_PORT`
 - Authenticates with JWT
 - Renders UI, manages local state
 - Completely decoupled from kernel deployment
@@ -100,7 +100,7 @@ Kernel  ←→ Database:   SQLite via GORM
 
 When a v2 plugin is deployed alongside v1:
 - Routing rules can target specific users (by JWT claims)
-- e.g., `chris.test@roboslop.com` → v2, everyone else → v1
+- e.g., `chris.test@teamagentica.io` → v2, everyone else → v1
 - Allows production testing without affecting all users
 - Kernel manages routing table per-plugin
 

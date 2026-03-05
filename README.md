@@ -1,10 +1,10 @@
-# Roboslop
+# TeamAgentica
 
 A self-hosted, modular AI-orchestrated automation control platform.
 
 ## What Is This?
 
-Roboslop is a governance-first control plane designed to coordinate AI agents and plugins while maintaining strict security boundaries. The AI agent is not the kernel — it's a constrained external operator.
+TeamAgentica is a governance-first control plane designed to coordinate AI agents and plugins while maintaining strict security boundaries. The AI agent is not the kernel — it's a constrained external operator.
 
 The platform enforces authentication, RBAC, audit logging, and policy enforcement. All operational capabilities are implemented as versioned plugins that communicate over gRPC.
 
@@ -49,7 +49,7 @@ The platform enforces authentication, RBAC, audit logging, and policy enforcemen
 ## Project Structure
 
 ```
-roboslop/
+teamagentica/
 ├── kernel/           # Go — core API, auth, RBAC, plugin management
 ├── user-interface/   # React/TS — web frontend
 ├── docs/             # Architecture docs and planning
@@ -86,10 +86,10 @@ npm run dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ROBOSLOP_KERNEL_HOST` | Kernel API host | `localhost` |
-| `ROBOSLOP_KERNEL_PORT` | Kernel API port | `8080` |
-| `ROBOSLOP_JWT_SECRET` | JWT signing secret | (required) |
-| `ROBOSLOP_DB_PATH` | SQLite database path | `./roboslop.db` |
+| `TEAMAGENTICA_KERNEL_HOST` | Kernel API host | `localhost` |
+| `TEAMAGENTICA_KERNEL_PORT` | Kernel API port | `8080` |
+| `TEAMAGENTICA_JWT_SECRET` | JWT signing secret | (required) |
+| `TEAMAGENTICA_DB_PATH` | SQLite database path | `./database.db` |
 
 ## License
 
