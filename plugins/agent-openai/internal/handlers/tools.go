@@ -1,0 +1,203 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/openai"
+)
+
+// discoveredTool holds a tool schema from a plugin with its routing info.
+type discoveredTool struct {
+	PluginID    string          `json:"plugin_id"`
+	Name        string          `json:"name"`        // original name from plugin
+	PrefixedName string         `json:"prefixed_name"` // pluginID__name
+	Description string          `json:"description"`
+	Endpoint    string          `json:"endpoint"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// toolCache holds discovered tools with a TTL.
+type toolCache struct {
+	mu        sync.RWMutex
+	tools     []discoveredTool
+	fetchedAt time.Time
+	ttl       time.Duration
+}
+
+var globalToolCache = &toolCache{ttl: 60 * time.Second}
+
+// discoverTools queries the kernel for tool:* plugins and fetches their tool schemas.
+func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
+	if sdk == nil {
+		return nil
+	}
+
+	globalToolCache.mu.RLock()
+	if time.Since(globalToolCache.fetchedAt) < globalToolCache.ttl && globalToolCache.tools != nil {
+		tools := globalToolCache.tools
+		globalToolCache.mu.RUnlock()
+		return tools
+	}
+	globalToolCache.mu.RUnlock()
+
+	globalToolCache.mu.Lock()
+	defer globalToolCache.mu.Unlock()
+
+	// Double-check after acquiring write lock.
+	if time.Since(globalToolCache.fetchedAt) < globalToolCache.ttl && globalToolCache.tools != nil {
+		return globalToolCache.tools
+	}
+
+	plugins, err := sdk.SearchPlugins("tool:")
+	if err != nil {
+		log.Printf("agent-openai: tool discovery failed: %v", err)
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var allTools []discoveredTool
+	for _, p := range plugins {
+		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/tools", nil)
+		if err != nil {
+			log.Printf("agent-openai: failed to get tools from %s: %v", p.ID, err)
+			continue
+		}
+
+		var resp struct {
+			Tools []struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Endpoint    string          `json:"endpoint"`
+				Parameters  json.RawMessage `json:"parameters"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			log.Printf("agent-openai: failed to parse tools from %s: %v", p.ID, err)
+			continue
+		}
+
+		for _, t := range resp.Tools {
+			allTools = append(allTools, discoveredTool{
+				PluginID:     p.ID,
+				Name:         t.Name,
+				PrefixedName: p.ID + "__" + t.Name,
+				Description:  t.Description,
+				Endpoint:     t.Endpoint,
+				Parameters:   t.Parameters,
+			})
+		}
+	}
+
+	globalToolCache.tools = allTools
+	globalToolCache.fetchedAt = time.Now()
+
+	if len(allTools) > 0 {
+		names := make([]string, len(allTools))
+		for i, t := range allTools {
+			names[i] = t.PrefixedName
+		}
+		log.Printf("agent-openai: discovered %d tools: %s", len(allTools), strings.Join(names, ", "))
+	}
+
+	return allTools
+}
+
+// buildToolDefs converts discovered tools into OpenAI ToolDef format.
+func buildToolDefs(tools []discoveredTool) []openai.ToolDef {
+	defs := make([]openai.ToolDef, len(tools))
+	for i, t := range tools {
+		defs[i] = openai.ToolDef{
+			Type: "function",
+			Function: openai.FunctionDef{
+				Name:        t.PrefixedName,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			},
+		}
+	}
+	return defs
+}
+
+// executeToolCall runs a single tool call by routing through the kernel proxy.
+func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, call openai.ToolCall) (string, error) {
+	// Parse prefixed name to find plugin ID and tool.
+	parts := strings.SplitN(call.Function.Name, "__", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid tool name format: %s", call.Function.Name)
+	}
+	pluginID, toolName := parts[0], parts[1]
+
+	// Find the tool's endpoint from the cached tools.
+	var endpoint string
+	for _, t := range tools {
+		if t.PluginID == pluginID && t.Name == toolName {
+			endpoint = t.Endpoint
+			break
+		}
+	}
+	if endpoint == "" {
+		return "", fmt.Errorf("tool %s not found on plugin %s", toolName, pluginID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var body *bytes.Reader
+	if call.Function.Arguments != "" {
+		body = bytes.NewReader([]byte(call.Function.Arguments))
+	} else {
+		body = bytes.NewReader([]byte("{}"))
+	}
+
+	resp, err := sdk.RouteToPlugin(ctx, pluginID, "POST", endpoint, body)
+	if err != nil {
+		return "", fmt.Errorf("execute tool %s: %w", call.Function.Name, err)
+	}
+
+	return string(resp), nil
+}
+
+// mediaAttachment represents an extracted image from a tool result.
+type mediaAttachment struct {
+	MimeType  string `json:"mime_type"`
+	ImageData string `json:"image_data"`
+}
+
+// processToolResultMedia inspects a tool result for embedded image data.
+// If the JSON contains "image_data" + "mime_type" fields, it extracts them
+// and replaces the base64 blob with a short placeholder so OpenAI gets a clean summary.
+// Returns (cleanedResult, attachment or nil).
+func processToolResultMedia(result string) (string, *mediaAttachment) {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		return result, nil
+	}
+
+	imageData, hasImage := parsed["image_data"].(string)
+	mimeType, hasMime := parsed["mime_type"].(string)
+	if !hasImage || !hasMime || imageData == "" || mimeType == "" {
+		return result, nil
+	}
+
+	// Replace the base64 blob so OpenAI sees a short summary instead.
+	parsed["image_data"] = "[image generated]"
+	cleaned, err := json.Marshal(parsed)
+	if err != nil {
+		return result, nil
+	}
+
+	return string(cleaned), &mediaAttachment{
+		MimeType:  mimeType,
+		ImageData: imageData,
+	}
+}
