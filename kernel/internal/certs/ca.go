@@ -66,8 +66,8 @@ func (cm *CertManager) InitCA() error {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "Roboslop CA",
-			Organization: []string{"Roboslop"},
+			CommonName:   "TeamAgentica CA",
+			Organization: []string{"TeamAgentica"},
 		},
 		NotBefore:             time.Now().Add(-1 * time.Minute),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
@@ -120,13 +120,13 @@ func (cm *CertManager) GeneratePluginCert(pluginID string) (certPath, keyPath, c
 		return "", "", "", err
 	}
 
-	containerName := "roboslop-plugin-" + pluginID
+	containerName := "teamagentica-plugin-" + pluginID
 
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   pluginID,
-			Organization: []string{"Roboslop Plugin"},
+			Organization: []string{"TeamAgentica Plugin"},
 		},
 		DNSNames: []string{
 			pluginID,
@@ -184,13 +184,14 @@ func (cm *CertManager) GenerateKernelCert() (certPath, keyPath string, err error
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "roboslop-kernel",
-			Organization: []string{"Roboslop"},
+			CommonName:   "teamagentica-kernel",
+			Organization: []string{"TeamAgentica"},
 		},
 		DNSNames: []string{
 			"kernel",
 			"localhost",
-			"roboslop-kernel",
+			"teamagentica-kernel",
+			"teamagentica-kernel",
 		},
 		IPAddresses: []net.IP{
 			net.ParseIP("127.0.0.1"),

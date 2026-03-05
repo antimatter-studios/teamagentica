@@ -6,14 +6,45 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"roboslop/kernel/internal/audit"
-	"roboslop/kernel/internal/auth"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/audit"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
 )
 
 // AuditInjector adds the audit logger to the Gin context so handlers can use it.
 func AuditInjector(logger *audit.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set("audit", logger)
+		c.Next()
+	}
+}
+
+// AuthOptional extracts and validates the Bearer token if present, injecting claims into context.
+// Does not block the request if no token is provided — allows the handler to decide.
+func AuthOptional() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		header := c.GetHeader("Authorization")
+		if header == "" {
+			c.Next()
+			return
+		}
+
+		parts := strings.SplitN(header, " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			c.Next()
+			return
+		}
+
+		claims, err := auth.ValidateToken(parts[1])
+		if err != nil {
+			c.Next()
+			return
+		}
+
+		c.Set("claims", claims)
+		c.Set("user_id", claims.UserID)
+		c.Set("email", claims.Email)
+		c.Set("role", claims.Role)
+		c.Set("capabilities", claims.Capabilities)
 		c.Next()
 	}
 }

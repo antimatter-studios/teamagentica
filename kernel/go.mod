@@ -1,4 +1,4 @@
-module roboslop/kernel
+module github.com/antimatter-studios/teamagentica/kernel
 
 go 1.25.0
 
@@ -68,3 +68,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )
+
+replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../pkg/pluginsdk

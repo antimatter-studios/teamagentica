@@ -6,7 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"roboslop/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // Logger records audit events to the database.

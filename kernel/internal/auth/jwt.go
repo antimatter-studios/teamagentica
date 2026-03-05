@@ -6,7 +6,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"roboslop/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 var jwtSecret []byte
