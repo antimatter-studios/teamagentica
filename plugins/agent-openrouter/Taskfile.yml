@@ -30,3 +30,13 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - rm -rf {{.BUILD_DIR}}
+
+  docker:dev:
+    desc: Build dev Docker image
+    cmds:
+      - docker build -t teamagentica-{{.BINARY_NAME}}:dev -f Dockerfile --target dev {{.ROOT_DIR}}
+
+  docker:prod:
+    desc: Build prod Docker image
+    cmds:
+      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod {{.ROOT_DIR}}

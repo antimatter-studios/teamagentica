@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: tool-veo
+  BINARY_NAME: messaging-discord
   BUILD_DIR: ./build
 
 tasks:
@@ -12,10 +12,10 @@ tasks:
   dev:
     desc: Run in dev mode with hot reload
     env:
+      TEAMAGENTICA_DISCORD_TOKEN: '{{.TEAMAGENTICA_DISCORD_TOKEN}}'
       TEAMAGENTICA_KERNEL_HOST: localhost
       TEAMAGENTICA_KERNEL_PORT: "8080"
       TEAMAGENTICA_PLUGIN_TOKEN: '{{.TEAMAGENTICA_PLUGIN_TOKEN}}'
-      TOOL_VEO_PORT: "8081"
     cmds:
       - air
 

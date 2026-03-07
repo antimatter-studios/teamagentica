@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: tool-veo
+  BINARY_NAME: teamagentica-network-ngrok
   BUILD_DIR: ./build
 
 tasks:
@@ -12,10 +12,12 @@ tasks:
   dev:
     desc: Run in dev mode with hot reload
     env:
+      NGROK_AUTHTOKEN: '{{.NGROK_AUTHTOKEN}}'
+      NGROK_DOMAIN: '{{.NGROK_DOMAIN}}'
+      NGROK_TUNNEL_TARGET: '{{.NGROK_TUNNEL_TARGET}}'
       TEAMAGENTICA_KERNEL_HOST: localhost
       TEAMAGENTICA_KERNEL_PORT: "8080"
       TEAMAGENTICA_PLUGIN_TOKEN: '{{.TEAMAGENTICA_PLUGIN_TOKEN}}'
-      TOOL_VEO_PORT: "8081"
     cmds:
       - air
 
