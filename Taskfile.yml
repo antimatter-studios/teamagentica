@@ -25,18 +25,18 @@ includes:
   builtin-provider:
     taskfile: ./plugins/builtin-provider/Taskfile.yml
     dir: ./plugins/builtin-provider
-  cost-explorer:
-    taskfile: ./plugins/cost-explorer/Taskfile.yml
-    dir: ./plugins/cost-explorer
-  discord:
-    taskfile: ./plugins/discord/Taskfile.yml
-    dir: ./plugins/discord
-  ngrok:
-    taskfile: ./plugins/ngrok/Taskfile.yml
-    dir: ./plugins/ngrok
-  telegram:
-    taskfile: ./plugins/telegram/Taskfile.yml
-    dir: ./plugins/telegram
+  infra-cost-explorer:
+    taskfile: ./plugins/infra-cost-explorer/Taskfile.yml
+    dir: ./plugins/infra-cost-explorer
+  messaging-discord:
+    taskfile: ./plugins/messaging-discord/Taskfile.yml
+    dir: ./plugins/messaging-discord
+  network-ngrok:
+    taskfile: ./plugins/network-ngrok/Taskfile.yml
+    dir: ./plugins/network-ngrok
+  messaging-telegram:
+    taskfile: ./plugins/messaging-telegram/Taskfile.yml
+    dir: ./plugins/messaging-telegram
   tool-nanobanana:
     taskfile: ./plugins/tool-nanobanana/Taskfile.yml
     dir: ./plugins/tool-nanobanana
@@ -49,15 +49,39 @@ includes:
   tool-veo:
     taskfile: ./plugins/tool-veo/Taskfile.yml
     dir: ./plugins/tool-veo
-  webhook-ingress:
-    taskfile: ./plugins/webhook-ingress/Taskfile.yml
-    dir: ./plugins/webhook-ingress
-  sss3-storage:
-    taskfile: ./plugins/sss3-storage/Taskfile.yml
-    dir: ./plugins/sss3-storage
-  whatsapp:
-    taskfile: ./plugins/whatsapp/Taskfile.yml
-    dir: ./plugins/whatsapp
+  network-webhook-ingress:
+    taskfile: ./plugins/network-webhook-ingress/Taskfile.yml
+    dir: ./plugins/network-webhook-ingress
+  storage-sss3:
+    taskfile: ./plugins/storage-sss3/Taskfile.yml
+    dir: ./plugins/storage-sss3
+  messaging-whatsapp:
+    taskfile: ./plugins/messaging-whatsapp/Taskfile.yml
+    dir: ./plugins/messaging-whatsapp
+  user-vscode-server:
+    taskfile: ./plugins/user-vscode-server/Taskfile.yml
+    dir: ./plugins/user-vscode-server
+  agent-claude:
+    taskfile: ./plugins/agent-claude/Taskfile.yml
+    dir: ./plugins/agent-claude
+  agent-inception:
+    taskfile: ./plugins/agent-inception/Taskfile.yml
+    dir: ./plugins/agent-inception
+  messaging-chat:
+    taskfile: ./plugins/messaging-chat/Taskfile.yml
+    dir: ./plugins/messaging-chat
+  storage-volume:
+    taskfile: ./plugins/storage-volume/Taskfile.yml
+    dir: ./plugins/storage-volume
+  infra-workspace-manager:
+    taskfile: ./plugins/infra-workspace-manager/Taskfile.yml
+    dir: ./plugins/infra-workspace-manager
+  infra-cron-scheduler:
+    taskfile: ./plugins/infra-cron-scheduler/Taskfile.yml
+    dir: ./plugins/infra-cron-scheduler
+  infra-mcp-server:
+    taskfile: ./plugins/infra-mcp-server/Taskfile.yml
+    dir: ./plugins/infra-mcp-server
 
 tasks:
   default:
@@ -76,21 +100,28 @@ tasks:
       - task: agent-openrouter:test
       - task: agent-requesty:test
       - task: builtin-provider:test
-      - task: cost-explorer:test
-      - task: sss3-storage:test
-      - task: discord:test
-      - task: ngrok:test
-      - task: telegram:test
+      - task: infra-cost-explorer:test
+      - task: storage-sss3:test
+      - task: messaging-discord:test
+      - task: network-ngrok:test
+      - task: messaging-telegram:test
       - task: tool-nanobanana:test
       - task: tool-seedance:test
       - task: tool-stability:test
       - task: tool-veo:test
-      - task: webhook-ingress:test
-      - task: whatsapp:test
+      - task: network-webhook-ingress:test
+      - task: messaging-whatsapp:test
+      - task: user-vscode-server:test
+
+  build:catalog:
+    desc: Rebuild the plugin catalog from plugin.yaml manifests
+    cmds:
+      - go run ./plugins/builtin-provider/cmd/build-catalog ./plugins ./plugins/builtin-provider/catalog.yaml
 
   dev:start:
     desc: Run all services in dev mode (Docker, hot reload)
     cmds:
+      - task: build:catalog
       - docker compose -f docker-compose.dev.yml up --build -d --remove-orphans --renew-anon-volumes
       - |
         echo "Waiting for services to start..."
@@ -152,44 +183,81 @@ tasks:
       - agent-openrouter:build
       - agent-requesty:build
       - builtin-provider:build
-      - cost-explorer:build
-      - sss3-storage:build
-      - discord:build
-      - ngrok:build
-      - telegram:build
+      - infra-cost-explorer:build
+      - storage-sss3:build
+      - messaging-discord:build
+      - network-ngrok:build
+      - messaging-telegram:build
       - tool-nanobanana:build
       - tool-seedance:build
       - tool-stability:build
       - tool-veo:build
-      - webhook-ingress:build
-      - whatsapp:build
+      - network-webhook-ingress:build
+      - messaging-whatsapp:build
+      - user-vscode-server:build
 
   build:images:
-    desc: Build all plugin Docker images for the kernel orchestrator
+    desc: Build all plugin Docker images (parallel)
+    deps:
+      - agent-claude:docker:prod
+      - agent-gemini:docker:prod
+      - agent-inception:docker:prod
+      - agent-kimi:docker:prod
+      - agent-openai:docker:prod
+      - agent-openrouter:docker:prod
+      - agent-requesty:docker:prod
+      - builtin-provider:docker:prod
+      - infra-cost-explorer:docker:prod
+      - infra-cron-scheduler:docker:prod
+      - infra-mcp-server:docker:prod
+      - infra-workspace-manager:docker:prod
+      - messaging-chat:docker:prod
+      - messaging-discord:docker:prod
+      - messaging-telegram:docker:prod
+      - messaging-whatsapp:docker:prod
+      - network-ngrok:docker:prod
+      - network-webhook-ingress:docker:prod
+      - storage-sss3:docker:prod
+      - storage-volume:docker:prod
+      - tool-nanobanana:docker:prod
+      - tool-seedance:docker:prod
+      - tool-stability:docker:prod
+      - tool-veo:docker:prod
+      - user-vscode-server:docker:prod
     cmds:
-      - |
-        for df in plugins/*/Dockerfile; do
-          dir=$(dirname "$df")
-          name=$(basename "$dir")
-          tag="teamagentica-${name}:latest"
-          echo "Building $tag ..."
-          docker build -t "$tag" -f "$df" --target prod . || exit 1
-        done
-        echo "All plugin images built successfully"
+      - echo "All plugin images built successfully"
       - task: restart:running
 
   build:images:dev:
-    desc: Build all plugin Docker images (dev stage with hot reload)
+    desc: Build all plugin Docker images for dev (parallel)
+    deps:
+      - agent-claude:docker:dev
+      - agent-gemini:docker:dev
+      - agent-inception:docker:dev
+      - agent-kimi:docker:dev
+      - agent-openai:docker:dev
+      - agent-openrouter:docker:dev
+      - agent-requesty:docker:dev
+      - builtin-provider:docker:dev
+      - infra-cost-explorer:docker:dev
+      - infra-cron-scheduler:docker:dev
+      - infra-mcp-server:docker:dev
+      - infra-workspace-manager:docker:dev
+      - messaging-chat:docker:dev
+      - messaging-discord:docker:dev
+      - messaging-telegram:docker:dev
+      - messaging-whatsapp:docker:dev
+      - network-ngrok:docker:dev
+      - network-webhook-ingress:docker:dev
+      - storage-sss3:docker:dev
+      - storage-volume:docker:dev
+      - tool-nanobanana:docker:dev
+      - tool-seedance:docker:dev
+      - tool-stability:docker:dev
+      - tool-veo:docker:dev
+      - user-vscode-server:docker:dev
     cmds:
-      - |
-        for df in plugins/*/Dockerfile; do
-          dir=$(dirname "$df")
-          name=$(basename "$dir")
-          tag="teamagentica-${name}:dev"
-          echo "Building $tag ..."
-          docker build -t "$tag" -f "$df" --target dev . || exit 1
-        done
-        echo "All dev plugin images built successfully"
+      - echo "All dev plugin images built successfully"
       - task: restart:running
 
   restart:running:
@@ -224,14 +292,15 @@ tasks:
       - agent-openrouter:clean
       - agent-requesty:clean
       - builtin-provider:clean
-      - cost-explorer:clean
-      - sss3-storage:clean
-      - discord:clean
-      - ngrok:clean
-      - telegram:clean
+      - infra-cost-explorer:clean
+      - storage-sss3:clean
+      - messaging-discord:clean
+      - network-ngrok:clean
+      - messaging-telegram:clean
       - tool-nanobanana:clean
       - tool-seedance:clean
       - tool-stability:clean
       - tool-veo:clean
-      - webhook-ingress:clean
-      - whatsapp:clean
+      - network-webhook-ingress:clean
+      - messaging-whatsapp:clean
+      - user-vscode-server:clean
