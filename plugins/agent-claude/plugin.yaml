@@ -1,0 +1,62 @@
+id: agent-claude
+name: "Claude Agent"
+description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
+group: agents
+version: "1.0.0"
+image: "teamagentica-agent-claude:latest"
+author: teamagentica
+tags: [chat, ai, agent, claude, anthropic]
+config_schema:
+  CLAUDE_BACKEND:
+    type: select
+    label: Backend
+    default: cli
+    options: [cli, api_key]
+    help_text: "Choose how to interact with Claude"
+    order: 1
+  ANTHROPIC_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    help_text: "Get your API key at https://console.anthropic.com/settings/keys"
+    visible_when:
+      field: CLAUDE_BACKEND
+      value: api_key
+    order: 2
+  CLAUDE_MODEL:
+    type: select
+    label: Model
+    default: claude-sonnet-4-6
+    dynamic: true
+    order: 3
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: anthropic
+    model: claude-opus-4-6
+    input_per_1m: 15.00
+    output_per_1m: 75.00
+    cached_per_1m: 1.875
+    currency: USD
+  - provider: anthropic
+    model: claude-sonnet-4-6
+    input_per_1m: 3.00
+    output_per_1m: 15.00
+    cached_per_1m: 0.375
+    currency: USD
+  - provider: anthropic
+    model: claude-haiku-4-5-20251001
+    input_per_1m: 0.80
+    output_per_1m: 4.00
+    cached_per_1m: 0.08
+    currency: USD

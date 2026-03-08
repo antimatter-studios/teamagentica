@@ -1,0 +1,51 @@
+id: agent-gemini
+name: "Google Gemini Agent"
+description: "AI agent powered by Google Gemini models including Flash and Pro"
+group: agents
+version: "1.0.0"
+image: "teamagentica-agent-gemini:latest"
+author: teamagentica
+tags: [chat, ai, agent, gemini, google]
+config_schema:
+  GEMINI_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    order: 1
+  GEMINI_MODEL:
+    type: select
+    label: Model
+    default: gemini-2.5-flash
+    dynamic: true
+    order: 2
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: gemini
+    model: gemini-2.5-flash
+    input_per_1m: 0.15
+    output_per_1m: 0.60
+    cached_per_1m: 0.0375
+    currency: USD
+  - provider: gemini
+    model: gemini-2.5-pro
+    input_per_1m: 1.25
+    output_per_1m: 10.00
+    cached_per_1m: 0.3125
+    currency: USD
+  - provider: gemini
+    model: gemini-2.0-flash
+    input_per_1m: 0.10
+    output_per_1m: 0.40
+    cached_per_1m: 0.025
+    currency: USD

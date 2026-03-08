@@ -1,0 +1,63 @@
+id: agent-requesty
+name: "Requesty Router"
+description: "AI router providing unified access to OpenAI, Anthropic, Google and more via Requesty"
+group: agents
+version: "1.0.0"
+image: "teamagentica-agent-requesty:latest"
+author: teamagentica
+tags: [chat, ai, agent, requesty, router]
+config_schema:
+  REQUESTY_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    order: 1
+  REQUESTY_MODEL:
+    type: select
+    label: Model
+    default: google/gemini-2.5-flash
+    dynamic: true
+    order: 2
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: requesty
+    model: google/gemini-2.5-flash
+    input_per_1m: 0.15
+    output_per_1m: 0.60
+    cached_per_1m: 0.0375
+    currency: USD
+  - provider: requesty
+    model: openai/gpt-4o
+    input_per_1m: 2.50
+    output_per_1m: 10.00
+    cached_per_1m: 1.25
+    currency: USD
+  - provider: requesty
+    model: anthropic/claude-sonnet-4-20250514
+    input_per_1m: 3.00
+    output_per_1m: 15.00
+    cached_per_1m: 0.30
+    currency: USD
+  - provider: requesty
+    model: google/gemini-2.5-pro
+    input_per_1m: 1.25
+    output_per_1m: 10.00
+    cached_per_1m: 0.3125
+    currency: USD
+  - provider: requesty
+    model: openai/gpt-4o-mini
+    input_per_1m: 0.15
+    output_per_1m: 0.60
+    cached_per_1m: 0.075
+    currency: USD

@@ -7,38 +7,115 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/codexcli"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/handlers"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	cfg := config.Load()
+	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
+	sdkCfg := pluginsdk.LoadConfig()
+
+	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
+	if pluginID == "" {
+		pluginID = "agent-openai"
+	}
+
+	port := 8081
+	if v := os.Getenv("AGENT_OPENAI_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			port = n
+		}
+	}
+
+	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
+		ID:           pluginID,
+		Host:         getHostname(),
+		Port:         port,
+		Capabilities: []string{"ai:chat", "ai:chat:openai"},
+		Version:      "1.0.0",
+		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
+			"OPENAI_BACKEND": {Type: "select", Label: "Backend", Default: "subscription", Options: []string{"subscription", "api_key"}, HelpText: "Choose how to authenticate with OpenAI", Order: 1},
+			"OPENAI_AUTH":    {Type: "oauth", Label: "Login with OpenAI", HelpText: "Authenticate with your OpenAI account to use Codex models", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "subscription"}, Order: 2},
+			"OPENAI_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.openai.com/api-keys", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "api_key"}, Order: 2},
+			"OPENAI_MODEL":   {Type: "select", Label: "Model", Default: "gpt-4o", Dynamic: true, Order: 3},
+			"TOOL_LOOP_LIMIT": {Type: "string", Label: "Tool Loop Limit", Default: "20", HelpText: "Maximum tool-calling iterations per request. Set to 0 for unrestricted.", Order: 10},
+			"PLUGIN_ALIASES": {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.", Order: 90},
+			"PLUGIN_DEBUG":   {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
+		},
+	})
+
+	// Start SDK first (register with kernel + heartbeat loop + event server).
+	ctx := context.Background()
+	sdkClient.Start(ctx)
+
+	// Fetch plugin config from kernel API.
+	pluginConfig, err := sdkClient.FetchConfig()
+	if err != nil {
+		log.Fatalf("Failed to fetch plugin config: %v", err)
+	}
+
+	// Extract config values with defaults.
+	backend := configOrDefault(pluginConfig, "OPENAI_BACKEND", "subscription")
+	apiKey := pluginConfig["OPENAI_API_KEY"]
+	model := configOrDefault(pluginConfig, "OPENAI_MODEL", "gpt-4o")
+	endpoint := configOrDefault(pluginConfig, "OPENAI_API_ENDPOINT", "https://api.openai.com/v1")
+	dataPath := configOrDefault(pluginConfig, "CODEX_DATA_PATH", "/data")
+	cliBinary := configOrDefault(pluginConfig, "CODEX_CLI_BINARY", "/usr/local/bin/codex")
+	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
+
+	toolLoopLimit := 20
+	if v := pluginConfig["TOOL_LOOP_LIMIT"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			toolLoopLimit = n
+		}
+	}
+
+	cliTimeout := 300
+	if v := pluginConfig["CODEX_CLI_TIMEOUT"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cliTimeout = n
+		}
+	}
+
+	// When using Codex subscription and model is still the default, switch to
+	// the default Codex-compatible model.
+	if backend == "subscription" && model == "gpt-4o" {
+		model = "gpt-5.3-codex"
+	}
 
 	// Set up Gin router.
 	router := gin.Default()
 
 	// Create handler with config.
-	h := handlers.NewHandler(cfg)
+	h := handlers.NewHandler(handlers.HandlerConfig{
+		Backend:       backend,
+		APIKey:        apiKey,
+		Model:         model,
+		Endpoint:      endpoint,
+		ToolLoopLimit: toolLoopLimit,
+		Debug:         debug,
+		DataPath:      dataPath,
+	})
 
 	// Initialise the appropriate backend.
-	if cfg.Backend == "subscription" {
+	if backend == "subscription" {
 		log.Println("[subscription] initialising Codex CLI backend")
-		workdir := cfg.CodexDataPath + "/codex-workspace"
-		codexHome := cfg.CodexDataPath + "/codex-home"
+		workdir := dataPath + "/codex-workspace"
+		codexHome := dataPath + "/codex-home"
 		for _, dir := range []string{workdir, codexHome} {
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				log.Fatalf("failed to create directory %s: %v", dir, err)
 			}
 		}
 
-		cliClient := codexcli.NewClient(cfg.CodexCLIBinary, workdir, codexHome, cfg.CodexCLITimeout, cfg.Debug)
+		cliClient := codexcli.NewClient(cliBinary, workdir, codexHome, cliTimeout, debug)
 		h.SetCodexCLI(cliClient)
 
 		if cliClient.IsAuthenticated() {
@@ -66,27 +143,9 @@ func main() {
 	router.POST("/auth/poll", h.AuthPoll)
 	router.DELETE("/auth", h.AuthLogout)
 
-	// Create plugin SDK client and register with kernel.
-	sdkCfg := pluginsdk.LoadConfig()
-	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           cfg.PluginID,
-		Host:         getHostname(),
-		Port:         cfg.Port,
-		Capabilities: []string{"ai:chat", "ai:chat:openai"},
-		Version:      "1.0.0",
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"OPENAI_BACKEND": {Type: "select", Label: "Backend", Default: "subscription", Options: []string{"subscription", "api_key"}, HelpText: "Choose how to authenticate with OpenAI", Order: 1},
-			"OPENAI_AUTH":    {Type: "oauth", Label: "Login with OpenAI", HelpText: "Authenticate with your OpenAI account to use Codex models", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "subscription"}, Order: 2},
-			"OPENAI_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.openai.com/api-keys", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "api_key"}, Order: 2},
-			"OPENAI_MODEL":   {Type: "select", Label: "Model", Default: "gpt-4o", Dynamic: true, Order: 3},
-			"PLUGIN_ALIASES": {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.", Order: 90},
-			"PLUGIN_DEBUG":   {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
-		},
-	})
-
-	// Subscribe to MCP server events (must be before Start).
-	if cfg.Backend == "subscription" {
-		codexHome := cfg.CodexDataPath + "/codex-home"
+	// Subscribe to MCP server events.
+	if backend == "subscription" {
+		codexHome := dataPath + "/codex-home"
 
 		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			var detail struct {
@@ -112,7 +171,6 @@ func main() {
 		}))
 	}
 
-	sdkClient.Start(context.Background())
 	h.SetSDK(sdkClient)
 
 	// Pricing endpoints.
@@ -127,10 +185,17 @@ func main() {
 
 	// Run server with graceful shutdown.
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+}
+
+func configOrDefault(m map[string]string, key, fallback string) string {
+	if v, ok := m[key]; ok && v != "" {
+		return v
+	}
+	return fallback
 }
 
 func getHostname() string {

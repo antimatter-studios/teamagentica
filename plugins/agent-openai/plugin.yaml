@@ -1,0 +1,76 @@
+id: agent-openai
+name: "OpenAI Agent"
+description: "AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities"
+group: agents
+version: "1.0.0"
+image: "teamagentica-agent-openai:latest"
+author: teamagentica
+tags: [chat, ai, agent, codex]
+config_schema:
+  OPENAI_BACKEND:
+    type: select
+    label: Backend
+    default: subscription
+    options: [subscription, api_key]
+    help_text: "Choose how to authenticate with OpenAI"
+    order: 1
+  OPENAI_AUTH:
+    type: oauth
+    label: "Login with OpenAI"
+    help_text: "Authenticate with your OpenAI account to use Codex models"
+    visible_when:
+      field: OPENAI_BACKEND
+      value: subscription
+    order: 2
+  OPENAI_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    help_text: "Get your API key at https://platform.openai.com/api-keys"
+    visible_when:
+      field: OPENAI_BACKEND
+      value: api_key
+    order: 2
+  OPENAI_MODEL:
+    type: select
+    label: Model
+    default: gpt-4o
+    dynamic: true
+    order: 3
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: openai
+    model: gpt-4o
+    input_per_1m: 2.50
+    output_per_1m: 10.00
+    cached_per_1m: 1.25
+    currency: USD
+  - provider: openai
+    model: gpt-4o-mini
+    input_per_1m: 0.15
+    output_per_1m: 0.60
+    cached_per_1m: 0.075
+    currency: USD
+  - provider: openai
+    model: o4-mini
+    input_per_1m: 1.10
+    output_per_1m: 4.40
+    cached_per_1m: 0.275
+    currency: USD
+  - provider: openai
+    model: gpt-5.1-codex
+    input_per_1m: 1.25
+    output_per_1m: 10.00
+    cached_per_1m: 0.625
+    currency: USD

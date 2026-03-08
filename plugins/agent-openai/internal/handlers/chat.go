@@ -10,34 +10,46 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/codexcli"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/openai"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/usage"
 )
 
 // Handler holds the plugin's configuration and exposes HTTP handlers.
-// Config is immutable after construction — it comes from env vars injected
-// by the kernel. There are no runtime config endpoints.
+// Config is immutable after construction — it comes from the kernel API.
+// There are no runtime config endpoints.
 type Handler struct {
-	backend   string // "subscription" or "api_key"
-	apiKey    string
-	model     string
-	endpoint  string
-	debug     bool
-	sdk       *pluginsdk.Client
-	codexCLI *codexcli.Client
-	usage     *usage.Tracker
+	backend       string // "subscription" or "api_key"
+	apiKey        string
+	model         string
+	endpoint      string
+	toolLoopLimit int
+	debug         bool
+	sdk           *pluginsdk.Client
+	codexCLI      *codexcli.Client
+	usage         *usage.Tracker
 }
 
-// NewHandler creates a new Handler from env-var-based config.
-func NewHandler(cfg *config.Config) *Handler {
+// HandlerConfig holds the parameters for constructing a Handler.
+type HandlerConfig struct {
+	Backend       string
+	APIKey        string
+	Model         string
+	Endpoint      string
+	ToolLoopLimit int
+	Debug         bool
+	DataPath      string
+}
+
+// NewHandler creates a new Handler from the given config.
+func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
-		backend:  cfg.Backend,
-		apiKey:   cfg.OpenAIAPIKey,
-		model:    cfg.OpenAIModel,
-		endpoint: cfg.OpenAIEndpoint,
-		debug:    cfg.Debug,
-		usage:    usage.NewTracker(cfg.CodexDataPath),
+		backend:       cfg.Backend,
+		apiKey:        cfg.APIKey,
+		model:         cfg.Model,
+		endpoint:      cfg.Endpoint,
+		toolLoopLimit: cfg.ToolLoopLimit,
+		debug:         cfg.Debug,
+		usage:         usage.NewTracker(cfg.DataPath),
 	}
 }
 
@@ -82,6 +94,7 @@ type chatRequest struct {
 	Model        string           `json:"model,omitempty"`
 	ImageURLs    []string         `json:"image_urls,omitempty"`
 	Conversation []openai.Message `json:"conversation"`
+	WorkspaceID  string           `json:"workspace_id,omitempty"`
 }
 
 // Chat handles a chat completion request.
@@ -121,15 +134,21 @@ func (h *Handler) Chat(c *gin.Context) {
 		model = req.Model
 	}
 
+	// Validate workspace_id if provided.
+	if req.WorkspaceID != "" && !isValidWorkspaceID(req.WorkspaceID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workspace_id: must be alphanumeric, hyphens, or underscores"})
+		return
+	}
+
 	// Log incoming request.
 	lastMsg := ""
 	if len(messages) > 0 {
 		lastMsg = messages[len(messages)-1].Content
 	}
 	if h.debug {
-		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d content=%s", model, len(messages), truncateStr(lastMsg, 200)))
+		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d workspace=%s content=%s", model, len(messages), req.WorkspaceID, truncateStr(lastMsg, 200)))
 	} else {
-		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d", model, len(messages)))
+		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d workspace=%s", model, len(messages), req.WorkspaceID))
 	}
 
 	start := time.Now()
@@ -142,7 +161,12 @@ func (h *Handler) Chat(c *gin.Context) {
 			return
 		}
 
-		resp, err := h.codexCLI.ChatCompletion(model, messages, req.ImageURLs)
+		var workdir string
+		if req.WorkspaceID != "" {
+			workdir = "/workspaces/" + req.WorkspaceID
+		}
+
+		resp, err := h.codexCLI.ChatCompletion(model, messages, req.ImageURLs, workdir)
 		if err != nil {
 			log.Printf("Codex CLI error: %v", err)
 			h.emitEvent("error", fmt.Sprintf("subscription: %v", err))
@@ -207,9 +231,9 @@ func (h *Handler) Chat(c *gin.Context) {
 		// Collect media attachments from tool results (images, etc.).
 		var mediaAttachments []mediaAttachment
 
-		// Tool-use loop: up to 5 iterations.
-		const maxToolIterations = 5
-		for iteration := 0; iteration <= maxToolIterations; iteration++ {
+		// Tool-use loop: configurable iteration limit (0 = unrestricted).
+		maxIter := h.toolLoopLimit
+		for iteration := 0; maxIter == 0 || iteration <= maxIter; iteration++ {
 			var resp *openai.ChatResponse
 			var err error
 
@@ -237,7 +261,7 @@ func (h *Handler) Chat(c *gin.Context) {
 
 			// If the model wants to call tools, execute them and loop.
 			if choice.FinishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 {
-				if iteration == maxToolIterations {
+				if maxIter > 0 && iteration == maxIter {
 					h.emitEvent("tool_loop", "max iterations reached, returning last response")
 					break
 				}
@@ -334,7 +358,7 @@ func (h *Handler) Chat(c *gin.Context) {
 	}
 }
 
-// emitUsage sends a usage report via the SDK for guaranteed delivery to cost-explorer.
+// emitUsage sends a usage report via the SDK for guaranteed delivery to infra-cost-explorer.
 func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, totalTokens, cachedTokens int, durationMs int64, userID string) {
 	if h.sdk == nil {
 		return
@@ -349,6 +373,19 @@ func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, t
 		CachedTokens: cachedTokens,
 		DurationMs:   durationMs,
 	})
+}
+
+// isValidWorkspaceID checks that a workspace ID is safe for use as a directory name.
+func isValidWorkspaceID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // truncateStr shortens a string for debug logging.

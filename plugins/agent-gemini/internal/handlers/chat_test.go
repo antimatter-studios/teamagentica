@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/gemini"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/usage"
 )
@@ -226,13 +225,11 @@ func TestModelsNoAPIKey(t *testing.T) {
 }
 
 func TestNewHandlerFromConfig(t *testing.T) {
-	cfg := &config.Config{
+	h := NewHandler(HandlerConfig{
 		APIKey:   "test-key",
 		Model:    "gemini-2.5-pro",
 		DataPath: t.TempDir(),
-	}
-
-	h := NewHandler(cfg)
+	})
 	if h.apiKey != "test-key" {
 		t.Errorf("expected apiKey=test-key, got %s", h.apiKey)
 	}

@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "build"
 
 [build]
-  bin = "./build/air-requesty-plugin"
-  cmd = "go build -o ./build/air-requesty-plugin ."
+  bin = "./build/air-agent-claude"
+  cmd = "go build -o ./build/air-agent-claude ."
   delay = 1000
   exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []

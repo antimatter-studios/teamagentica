@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/gemini"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/usage"
 )
@@ -23,7 +22,16 @@ type Handler struct {
 	usage  *usage.Tracker
 }
 
-func NewHandler(cfg *config.Config) *Handler {
+// HandlerConfig holds the parameters for constructing a Handler.
+type HandlerConfig struct {
+	APIKey   string
+	Model    string
+	Debug    bool
+	DataPath string
+}
+
+// NewHandler creates a new Handler from the given config.
+func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
 		apiKey: cfg.APIKey,
 		model:  cfg.Model,

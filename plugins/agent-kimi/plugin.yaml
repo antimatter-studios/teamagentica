@@ -1,0 +1,69 @@
+id: agent-kimi
+name: "Kimi K2 Agent"
+description: "AI agent powered by Moonshot's Kimi K2 with 128K context and thinking mode"
+group: agents
+version: "1.0.0"
+image: "teamagentica-agent-kimi:latest"
+author: teamagentica
+tags: [chat, ai, agent, kimi, moonshot]
+config_schema:
+  KIMI_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    order: 1
+  KIMI_MODEL:
+    type: select
+    label: Model
+    default: kimi-k2-turbo-preview
+    dynamic: true
+    order: 2
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: moonshot
+    model: kimi-k2-turbo-preview
+    input_per_1m: 1.15
+    output_per_1m: 8.00
+    cached_per_1m: 0.29
+    currency: USD
+  - provider: moonshot
+    model: kimi-k2.5
+    input_per_1m: 0.60
+    output_per_1m: 3.00
+    cached_per_1m: 0.15
+    currency: USD
+  - provider: moonshot
+    model: kimi-k2-0905-preview
+    input_per_1m: 0.60
+    output_per_1m: 2.50
+    cached_per_1m: 0.15
+    currency: USD
+  - provider: moonshot
+    model: kimi-k2-0711-preview
+    input_per_1m: 0.60
+    output_per_1m: 2.50
+    cached_per_1m: 0.15
+    currency: USD
+  - provider: moonshot
+    model: kimi-k2-thinking
+    input_per_1m: 0.60
+    output_per_1m: 2.50
+    cached_per_1m: 0.15
+    currency: USD
+  - provider: moonshot
+    model: kimi-k2-thinking-turbo
+    input_per_1m: 1.15
+    output_per_1m: 8.00
+    cached_per_1m: 0.29
+    currency: USD

@@ -6,35 +6,31 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-requesty/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-requesty/internal/handlers"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	cfg := config.Load()
-
-	router := gin.Default()
-
-	h := handlers.NewHandler(cfg)
-
-	router.GET("/health", h.Health)
-	router.POST("/chat", h.Chat)
-	router.GET("/models", h.Models)
-	router.GET("/config/options/:field", h.ConfigOptions)
-	router.GET("/usage", h.Usage)
-	router.GET("/usage/records", h.UsageRecords)
-
+	// Load SDK infrastructure config from env.
 	sdkCfg := pluginsdk.LoadConfig()
+
+	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
+	if pluginID == "" {
+		pluginID = "agent-requesty"
+	}
+
+	const defaultPort = 8081
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           cfg.PluginID,
+		ID:           pluginID,
 		Host:         getHostname(),
-		Port:         cfg.Port,
+		Port:         defaultPort,
 		Capabilities: []string{"ai:chat", "ai:chat:requesty"},
 		Version:      "1.0.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
@@ -44,8 +40,45 @@ func main() {
 			"PLUGIN_DEBUG":    {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
 		},
 	})
+
+	// Start SDK first (register + heartbeat + event server).
 	sdkClient.Start(context.Background())
+
+	// Fetch plugin config from kernel API.
+	pluginConfig, err := sdkClient.FetchConfig()
+	if err != nil {
+		log.Fatalf("Failed to fetch plugin config: %v", err)
+	}
+
+	apiKey := pluginConfig["REQUESTY_API_KEY"]
+	model := pluginConfig["REQUESTY_MODEL"]
+	if model == "" {
+		model = "google/gemini-2.5-flash"
+	}
+	dataPath := pluginConfig["REQUESTY_DATA_PATH"]
+	if dataPath == "" {
+		dataPath = "/data"
+	}
+	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
+
+	port := defaultPort
+	if portStr := pluginConfig["AGENT_REQUESTY_PORT"]; portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+
+	router := gin.Default()
+
+	h := handlers.NewHandler(apiKey, model, dataPath, debug)
 	h.SetSDK(sdkClient)
+
+	router.GET("/health", h.Health)
+	router.POST("/chat", h.Chat)
+	router.GET("/models", h.Models)
+	router.GET("/config/options/:field", h.ConfigOptions)
+	router.GET("/usage", h.Usage)
+	router.GET("/usage/records", h.UsageRecords)
 
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
@@ -59,7 +92,7 @@ func main() {
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)

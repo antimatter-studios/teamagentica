@@ -240,7 +240,8 @@ func downloadImage(url string) (string, error) {
 }
 
 // ChatCompletion runs codex exec and parses the JSONL output.
-func (c *Client) ChatCompletion(model string, messages []openai.Message, imageURLs []string) (*openai.ChatResponse, error) {
+// workdirOverride, if non-empty, overrides the default working directory.
+func (c *Client) ChatCompletion(model string, messages []openai.Message, imageURLs []string, workdirOverride string) (*openai.ChatResponse, error) {
 	prompt := buildPrompt(messages)
 
 	// Download images to temp files for --image flags.
@@ -281,7 +282,11 @@ func (c *Client) ChatCompletion(model string, messages []openai.Message, imageUR
 	args = append(args, prompt)
 
 	cmd := exec.CommandContext(ctx, c.binary, args...)
-	cmd.Dir = c.workdir
+	if workdirOverride != "" {
+		cmd.Dir = workdirOverride
+	} else {
+		cmd.Dir = c.workdir
+	}
 	cmd.Env = append(os.Environ(), "CODEX_HOME="+c.codexHome)
 
 	if c.debug {

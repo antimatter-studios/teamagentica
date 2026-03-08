@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/usage"
 )
 
@@ -272,15 +271,13 @@ func TestModelsDefaultBackend(t *testing.T) {
 }
 
 func TestNewHandlerFromConfig(t *testing.T) {
-	cfg := &config.Config{
-		Backend:       "api_key",
-		OpenAIAPIKey:  "sk-test",
-		OpenAIModel:   "gpt-4o",
-		OpenAIEndpoint: "https://api.openai.com/v1",
-		CodexDataPath: t.TempDir(),
-	}
-
-	h := NewHandler(cfg)
+	h := NewHandler(HandlerConfig{
+		Backend:  "api_key",
+		APIKey:   "sk-test",
+		Model:    "gpt-4o",
+		Endpoint: "https://api.openai.com/v1",
+		DataPath: t.TempDir(),
+	})
 	if h.backend != "api_key" {
 		t.Errorf("expected backend=api_key, got %s", h.backend)
 	}

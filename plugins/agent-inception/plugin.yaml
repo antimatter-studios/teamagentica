@@ -1,0 +1,58 @@
+id: agent-inception
+name: "Inception Mercury"
+description: "AI agent powered by Inception Labs Mercury 2, the world's fastest diffusion-based reasoning LLM"
+group: agents
+version: "1.0.0"
+image: "teamagentica-agent-inception:latest"
+author: teamagentica
+tags: [chat, ai, agent, inception, mercury, diffusion, code]
+config_schema:
+  INCEPTION_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    order: 1
+  INCEPTION_MODEL:
+    type: select
+    label: Model
+    default: mercury-2
+    dynamic: true
+    order: 2
+  INCEPTION_INSTANT:
+    type: boolean
+    label: "Instant Mode"
+    default: "false"
+    order: 3
+  INCEPTION_DIFFUSING:
+    type: boolean
+    label: "Diffusing Mode"
+    default: "false"
+    order: 4
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: inception
+    model: mercury-2
+    input_per_1m: 0.25
+    output_per_1m: 0.75
+    currency: USD
+  - provider: inception
+    model: mercury-coder-small
+    input_per_1m: 0.25
+    output_per_1m: 0.75
+    currency: USD
+  - provider: inception
+    model: mercury-edit
+    input_per_1m: 0.25
+    output_per_1m: 0.75
+    currency: USD

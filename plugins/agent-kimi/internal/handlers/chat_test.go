@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/config"
 )
 
 func init() {
@@ -17,12 +15,7 @@ func init() {
 }
 
 func newTestHandler(apiKey, model, dataPath string) *Handler {
-	cfg := &config.Config{
-		APIKey:   apiKey,
-		Model:    model,
-		DataPath: dataPath,
-	}
-	return NewHandler(cfg)
+	return NewHandler(apiKey, model, dataPath, false)
 }
 
 func TestHealth(t *testing.T) {

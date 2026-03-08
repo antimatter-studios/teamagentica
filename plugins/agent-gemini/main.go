@@ -6,35 +6,36 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/handlers"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	cfg := config.Load()
-
-	router := gin.Default()
-
-	h := handlers.NewHandler(cfg)
-
-	router.GET("/health", h.Health)
-	router.POST("/chat", h.Chat)
-	router.GET("/models", h.Models)
-	router.GET("/config/options/:field", h.ConfigOptions)
-	router.GET("/usage", h.Usage)
-	router.GET("/usage/records", h.UsageRecords)
-
+	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
 	sdkCfg := pluginsdk.LoadConfig()
+
+	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
+	if pluginID == "" {
+		pluginID = "agent-gemini"
+	}
+
+	port := 8081
+	if v := os.Getenv("AGENT_GEMINI_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			port = n
+		}
+	}
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           cfg.PluginID,
+		ID:           pluginID,
 		Host:         getHostname(),
-		Port:         cfg.Port,
+		Port:         port,
 		Capabilities: []string{"ai:chat", "ai:chat:gemini"},
 		Version:      "1.0.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
@@ -44,8 +45,39 @@ func main() {
 			"PLUGIN_DEBUG":   {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
 		},
 	})
-	sdkClient.Start(context.Background())
+
+	// Start SDK first (register with kernel + heartbeat loop + event server).
+	ctx := context.Background()
+	sdkClient.Start(ctx)
+
+	// Fetch plugin config from kernel API.
+	pluginConfig, err := sdkClient.FetchConfig()
+	if err != nil {
+		log.Fatalf("Failed to fetch plugin config: %v", err)
+	}
+
+	// Extract config values with defaults.
+	apiKey := pluginConfig["GEMINI_API_KEY"]
+	model := configOrDefault(pluginConfig, "GEMINI_MODEL", "gemini-2.5-flash")
+	dataPath := configOrDefault(pluginConfig, "GEMINI_DATA_PATH", "/data")
+	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
+
+	router := gin.Default()
+
+	h := handlers.NewHandler(handlers.HandlerConfig{
+		APIKey:   apiKey,
+		Model:    model,
+		Debug:    debug,
+		DataPath: dataPath,
+	})
 	h.SetSDK(sdkClient)
+
+	router.GET("/health", h.Health)
+	router.POST("/chat", h.Chat)
+	router.GET("/models", h.Models)
+	router.GET("/config/options/:field", h.ConfigOptions)
+	router.GET("/usage", h.Usage)
+	router.GET("/usage/records", h.UsageRecords)
 
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
@@ -57,10 +89,17 @@ func main() {
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+}
+
+func configOrDefault(m map[string]string, key, fallback string) string {
+	if v, ok := m[key]; ok && v != "" {
+		return v
+	}
+	return fallback
 }
 
 func getHostname() string {
