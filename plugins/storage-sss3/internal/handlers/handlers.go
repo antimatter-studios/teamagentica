@@ -1,0 +1,471 @@
+package handlers
+
+import (
+	"encoding/base64"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/index"
+	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/s3client"
+)
+
+type Handler struct {
+	client *s3client.Client
+	index  *index.Index
+	sdk    *pluginsdk.Client
+}
+
+func NewHandler(client *s3client.Client, idx *index.Index) *Handler {
+	return &Handler{client: client, index: idx}
+}
+
+func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
+	h.sdk = sdk
+}
+
+func (h *Handler) emitEvent(eventType, detail string) {
+	if h.sdk != nil {
+		h.sdk.ReportEvent(eventType, detail)
+	}
+}
+
+// Health returns a simple health check.
+func (h *Handler) Health(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "cached_objects": h.index.Count()})
+}
+
+// PutObject handles PUT /objects/*key — upload an object.
+func (h *Handler) PutObject(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	contentType := c.GetHeader("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	if err := h.client.PutObject(c.Request.Context(), key, c.Request.Body, contentType); err != nil {
+		log.Printf("[handlers] put error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update cache with metadata from a head call
+	meta, err := h.client.HeadObject(c.Request.Context(), key)
+	if err != nil {
+		// Object was stored but we couldn't read back metadata — update cache with what we know
+		log.Printf("[handlers] head after put failed: %v", err)
+	} else {
+		h.index.Put(key, *meta)
+	}
+
+	h.emitEvent("object_uploaded", key)
+	c.JSON(http.StatusOK, gin.H{"key": key, "status": "uploaded"})
+}
+
+// GetObject handles GET /objects/*key — download an object.
+func (h *Handler) GetObject(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	out, err := h.client.GetObject(c.Request.Context(), key)
+	if err != nil {
+		log.Printf("[handlers] get error: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	defer out.Body.Close()
+
+	if out.ContentType != "" {
+		c.Header("Content-Type", out.ContentType)
+	}
+	if out.ETag != "" {
+		c.Header("ETag", out.ETag)
+	}
+
+	c.Status(http.StatusOK)
+	if _, err := io.Copy(c.Writer, out.Body); err != nil {
+		log.Printf("[handlers] stream error for %s: %v", key, err)
+	}
+}
+
+// DeleteObject handles DELETE /objects/*key — delete an object.
+func (h *Handler) DeleteObject(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	if err := h.client.DeleteObject(c.Request.Context(), key); err != nil {
+		log.Printf("[handlers] delete error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.index.Delete(key)
+	h.emitEvent("object_deleted", key)
+	c.JSON(http.StatusOK, gin.H{"key": key, "status": "deleted"})
+}
+
+// HeadObject handles HEAD /objects/*key — object metadata.
+func (h *Handler) HeadObject(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if key == "" {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	meta, err := h.client.HeadObject(c.Request.Context(), key)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	c.Header("Content-Type", meta.ContentType)
+	c.Header("ETag", meta.ETag)
+	c.Header("Content-Length", formatInt64(meta.Size))
+	c.Header("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+	c.Status(http.StatusOK)
+}
+
+// Browse handles GET /browse?prefix= — cached directory-like listing.
+func (h *Handler) Browse(c *gin.Context) {
+	prefix := c.Query("prefix")
+	result := h.index.Browse(prefix)
+	c.JSON(http.StatusOK, result)
+}
+
+// List handles GET /list?prefix= — flat key listing from cache.
+func (h *Handler) List(c *gin.Context) {
+	prefix := c.Query("prefix")
+	objects := h.index.List(prefix)
+	c.JSON(http.StatusOK, gin.H{"objects": objects, "count": len(objects)})
+}
+
+// Refresh handles POST /refresh — force re-warm index.
+func (h *Handler) Refresh(c *gin.Context) {
+	if err := h.index.Warm(c.Request.Context()); err != nil {
+		log.Printf("[handlers] refresh error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "refreshed", "cached_objects": h.index.Count()})
+}
+
+func formatInt64(n int64) string {
+	return fmt.Sprintf("%d", n)
+}
+
+// --- Tool interface for AI agents -------------------------------------------
+
+// Tools returns the tool definitions for agent discovery via GET /tools.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"tools": []gin.H{
+			{
+				"name":        "list_files",
+				"description": "List files and folders at a given path prefix in storage. Returns folder names and file metadata (key, size, content_type, last_modified). Use prefix '' or '/' to list root.",
+				"endpoint":    "/tool/list_files",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"prefix": gin.H{"type": "string", "description": "Path prefix to list, e.g. 'projects/' or 'data/reports/'. Use empty string for root."},
+					},
+					"required": []string{},
+				},
+			},
+			{
+				"name":        "read_file",
+				"description": "Read a file from storage. Returns the file content as text (for text files) or base64-encoded data (for binary files), along with metadata.",
+				"endpoint":    "/tool/read_file",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"key": gin.H{"type": "string", "description": "Full path/key of the file to read, e.g. 'projects/myapp/README.md'"},
+					},
+					"required": []string{"key"},
+				},
+			},
+			{
+				"name":        "write_file",
+				"description": "Write or overwrite a file in storage. Creates parent folders automatically. Use this to save code, data, configs, documents, or any content.",
+				"endpoint":    "/tool/write_file",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"key":          gin.H{"type": "string", "description": "Full path/key for the file, e.g. 'projects/myapp/src/main.go'"},
+						"content":      gin.H{"type": "string", "description": "File content as text (for text files) or base64-encoded string (for binary files)"},
+						"content_type": gin.H{"type": "string", "description": "MIME type, e.g. 'text/plain', 'application/json', 'image/png'. Defaults to 'text/plain' for text content."},
+						"encoding":     gin.H{"type": "string", "description": "Set to 'base64' if content is base64-encoded binary data. Omit for plain text.", "enum": []string{"base64", "text"}},
+					},
+					"required": []string{"key", "content"},
+				},
+			},
+			{
+				"name":        "delete_file",
+				"description": "Delete a file from storage permanently.",
+				"endpoint":    "/tool/delete_file",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"key": gin.H{"type": "string", "description": "Full path/key of the file to delete, e.g. 'projects/myapp/old_file.txt'"},
+					},
+					"required": []string{"key"},
+				},
+			},
+			{
+				"name":        "file_info",
+				"description": "Get metadata about a file without downloading it. Returns size, content type, last modified time, and ETag.",
+				"endpoint":    "/tool/file_info",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"key": gin.H{"type": "string", "description": "Full path/key of the file, e.g. 'projects/myapp/README.md'"},
+					},
+					"required": []string{"key"},
+				},
+			},
+			{
+				"name":        "create_folder",
+				"description": "Create a folder (directory) in storage. Folders are represented as empty marker objects ending with '/'.",
+				"endpoint":    "/tool/create_folder",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"path": gin.H{"type": "string", "description": "Folder path to create, e.g. 'projects/myapp/src/'. A trailing '/' is added if missing."},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+	})
+}
+
+// ToolListFiles handles POST /tool/list_files — list files and folders at a prefix.
+func (h *Handler) ToolListFiles(c *gin.Context) {
+	var req struct {
+		Prefix string `json:"prefix"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	result := h.index.Browse(req.Prefix)
+	h.emitEvent("tool_list_files", fmt.Sprintf("prefix=%s folders=%d files=%d", req.Prefix, len(result.Folders), len(result.Files)))
+	c.JSON(http.StatusOK, result)
+}
+
+// ToolReadFile handles POST /tool/read_file — read a file and return its content.
+func (h *Handler) ToolReadFile(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	out, err := h.client.GetObject(c.Request.Context(), req.Key)
+	if err != nil {
+		log.Printf("[tool] read error: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("file not found: %s", req.Key)})
+		return
+	}
+	defer out.Body.Close()
+
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+
+	h.emitEvent("tool_read_file", fmt.Sprintf("key=%s size=%d", req.Key, len(data)))
+
+	// Determine if content is text-like and return accordingly.
+	if isTextContentType(out.ContentType) {
+		c.JSON(http.StatusOK, gin.H{
+			"key":          req.Key,
+			"content":      string(data),
+			"content_type": out.ContentType,
+			"size":         len(data),
+			"encoding":     "text",
+		})
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"key":          req.Key,
+			"content":      base64.StdEncoding.EncodeToString(data),
+			"content_type": out.ContentType,
+			"size":         len(data),
+			"encoding":     "base64",
+		})
+	}
+}
+
+// ToolWriteFile handles POST /tool/write_file — write content to a file.
+func (h *Handler) ToolWriteFile(c *gin.Context) {
+	var req struct {
+		Key         string `json:"key"`
+		Content     string `json:"content"`
+		ContentType string `json:"content_type"`
+		Encoding    string `json:"encoding"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" || req.Content == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key and content are required"})
+		return
+	}
+
+	contentType := req.ContentType
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+
+	var body io.Reader
+	if req.Encoding == "base64" {
+		decoded, err := base64.StdEncoding.DecodeString(req.Content)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid base64 content"})
+			return
+		}
+		body = strings.NewReader(string(decoded))
+	} else {
+		body = strings.NewReader(req.Content)
+	}
+
+	if err := h.client.PutObject(c.Request.Context(), req.Key, body, contentType); err != nil {
+		log.Printf("[tool] write error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update index cache.
+	meta, err := h.client.HeadObject(c.Request.Context(), req.Key)
+	if err == nil {
+		h.index.Put(req.Key, *meta)
+	}
+
+	h.emitEvent("tool_write_file", fmt.Sprintf("key=%s content_type=%s", req.Key, contentType))
+	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "written", "content_type": contentType})
+}
+
+// ToolDeleteFile handles POST /tool/delete_file — delete a file.
+func (h *Handler) ToolDeleteFile(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	if err := h.client.DeleteObject(c.Request.Context(), req.Key); err != nil {
+		log.Printf("[tool] delete error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.index.Delete(req.Key)
+	h.emitEvent("tool_delete_file", req.Key)
+	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "deleted"})
+}
+
+// ToolFileInfo handles POST /tool/file_info — get file metadata.
+func (h *Handler) ToolFileInfo(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	meta, err := h.client.HeadObject(c.Request.Context(), req.Key)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("file not found: %s", req.Key)})
+		return
+	}
+
+	h.emitEvent("tool_file_info", req.Key)
+	c.JSON(http.StatusOK, gin.H{
+		"key":           meta.Key,
+		"size":          meta.Size,
+		"content_type":  meta.ContentType,
+		"last_modified": meta.LastModified,
+		"etag":          meta.ETag,
+	})
+}
+
+// ToolCreateFolder handles POST /tool/create_folder — create a folder marker.
+func (h *Handler) ToolCreateFolder(c *gin.Context) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path is required"})
+		return
+	}
+
+	path := req.Path
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	// Create an empty marker object to represent the folder.
+	if err := h.client.PutObject(c.Request.Context(), path, strings.NewReader(""), "application/x-directory"); err != nil {
+		log.Printf("[tool] create folder error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	meta, err := h.client.HeadObject(c.Request.Context(), path)
+	if err == nil {
+		h.index.Put(path, *meta)
+	}
+
+	h.emitEvent("tool_create_folder", path)
+	c.JSON(http.StatusOK, gin.H{"path": path, "status": "created"})
+}
+
+// isTextContentType returns true if the MIME type suggests text content.
+func isTextContentType(ct string) bool {
+	if ct == "" {
+		return true // assume text if unknown
+	}
+	ct = strings.ToLower(ct)
+	if strings.HasPrefix(ct, "text/") {
+		return true
+	}
+	textTypes := []string{
+		"application/json",
+		"application/xml",
+		"application/javascript",
+		"application/typescript",
+		"application/x-yaml",
+		"application/yaml",
+		"application/toml",
+		"application/x-sh",
+		"application/sql",
+		"application/graphql",
+		"application/xhtml+xml",
+		"application/x-httpd-php",
+	}
+	for _, t := range textTypes {
+		if strings.HasPrefix(ct, t) {
+			return true
+		}
+	}
+	return false
+}

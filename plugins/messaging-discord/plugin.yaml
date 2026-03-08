@@ -1,0 +1,27 @@
+id: messaging-discord
+name: "Discord Bot"
+description: "Discord bot integration for receiving and responding to messages"
+group: messaging
+version: "1.0.0"
+image: "teamagentica-messaging-discord:latest"
+author: teamagentica
+tags: [chat, discord, bot]
+config_schema:
+  DISCORD_BOT_TOKEN:
+    type: string
+    label: "Discord Bot Token"
+    required: true
+    secret: true
+    order: 1
+  DEFAULT_AGENT:
+    type: select
+    label: "Coordinator Agent"
+    dynamic: true
+    help_text: "Select the default agent to handle messages"
+    order: 5
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

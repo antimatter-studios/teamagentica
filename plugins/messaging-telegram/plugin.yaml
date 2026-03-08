@@ -1,0 +1,55 @@
+id: messaging-telegram
+name: "Telegram Bot"
+description: "Telegram bot integration for receiving and responding to messages"
+group: messaging
+version: "1.0.0"
+image: "teamagentica-messaging-telegram:latest"
+author: teamagentica
+tags: [chat, telegram, bot]
+config_schema:
+  TELEGRAM_BOT_TOKEN:
+    type: string
+    label: "Telegram Bot Token"
+    required: true
+    secret: true
+    order: 1
+  TELEGRAM_MODE:
+    type: select
+    label: "Mode"
+    default: poll
+    options: [poll, webhook]
+    order: 2
+  TELEGRAM_POLL_TIMEOUT:
+    type: number
+    label: "Poll Timeout"
+    default: 60
+    help_text: "Long poll timeout in seconds"
+    visible_when:
+      field: TELEGRAM_MODE
+      value: poll
+    order: 3
+  TELEGRAM_WEBHOOK_URL:
+    type: string
+    label: "Webhook URL"
+    help_text: "Public HTTPS URL for receiving Telegram webhook updates"
+    visible_when:
+      field: TELEGRAM_MODE
+      value: webhook
+    order: 3
+  TELEGRAM_ALLOWED_USERS:
+    type: string
+    label: "Allowed Users"
+    help_text: "Comma-separated Telegram user IDs that are allowed to interact with the bot"
+    order: 4
+  DEFAULT_AGENT:
+    type: select
+    label: "Default Agent"
+    dynamic: true
+    help_text: "Select the default agent to handle messages"
+    order: 5
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

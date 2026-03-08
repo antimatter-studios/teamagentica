@@ -1,0 +1,15 @@
+id: infra-workspace-manager
+name: "Workspace Manager"
+description: "Workspace lifecycle management - create, list, delete, and persist git-backed workspaces for AI coding agents"
+group: infrastructure
+version: "1.0.0"
+image: "teamagentica-infra-workspace-manager:latest"
+author: teamagentica
+tags: [workspace, git, infrastructure, coding]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

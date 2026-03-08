@@ -1,0 +1,42 @@
+id: messaging-whatsapp
+name: "WhatsApp Bot"
+description: "WhatsApp bot integration using the WhatsApp Business Cloud API for receiving and responding to messages"
+group: messaging
+version: "1.0.0"
+image: "teamagentica-messaging-whatsapp:latest"
+author: teamagentica
+tags: [chat, whatsapp, bot, messaging]
+config_schema:
+  WHATSAPP_ACCESS_TOKEN:
+    type: string
+    label: "Access Token"
+    required: true
+    secret: true
+    order: 1
+  WHATSAPP_PHONE_NUMBER_ID:
+    type: string
+    label: "Phone Number ID"
+    required: true
+    order: 2
+  WHATSAPP_VERIFY_TOKEN:
+    type: string
+    label: "Verify Token"
+    required: true
+    order: 3
+  WHATSAPP_APP_SECRET:
+    type: string
+    label: "App Secret"
+    secret: true
+    order: 4
+  DEFAULT_AGENT:
+    type: select
+    label: "Coordinator Agent"
+    dynamic: true
+    help_text: "Select the default agent to handle messages"
+    order: 5
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

@@ -1,0 +1,20 @@
+id: network-ngrok
+name: "ngrok Tunnel"
+description: "Creates an ngrok tunnel for exposing plugin services to the internet. Publishes tunnel URL events for other plugins to consume."
+group: network
+version: "1.0.0"
+image: "teamagentica-network-ngrok:latest"
+author: TeamAgentica
+tags: [tunnel, networking, ngrok, webhook]
+config_schema:
+  NGROK_AUTHTOKEN:
+    type: string
+    label: "Auth Token"
+    required: true
+    secret: true
+  NGROK_DOMAIN:
+    type: string
+    label: "Domain"
+  NGROK_TUNNEL_TARGET:
+    type: string
+    label: "Tunnel Target"

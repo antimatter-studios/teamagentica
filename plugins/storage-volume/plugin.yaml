@@ -1,0 +1,20 @@
+id: storage-volume
+name: "Disk Storage"
+description: "Managed disk volumes for isolated task storage. Provides persistent disks that other plugins (e.g. workspace-manager) use to create isolated work areas."
+group: storage
+version: "1.0.0"
+image: "teamagentica-storage-volume:latest"
+author: teamagentica
+tags: [storage, volume, disk, infrastructure, tool]
+config_schema:
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

@@ -1,0 +1,15 @@
+id: infra-cron-scheduler
+name: "Cron Scheduler"
+description: "Cron-style scheduled event system for automated workflows and recurring jobs"
+group: infrastructure
+version: "1.0.0"
+image: "teamagentica-infra-cron-scheduler:latest"
+author: teamagentica
+tags: [infrastructure, cron, scheduler, automation]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

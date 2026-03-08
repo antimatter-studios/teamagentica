@@ -1,0 +1,20 @@
+id: user-vscode-server
+name: "VS Code Server"
+description: "VS Code in the browser — edit workspace files with a full IDE including terminal, extensions, and git"
+group: user
+version: "1.0.0"
+image: "teamagentica-user-vscode-server:latest"
+author: teamagentica
+tags: [workspace, editor, ide, vscode]
+config_schema:
+  CODE_SERVER_THEME:
+    type: select
+    label: "Color Theme"
+    default: "dark"
+    options: ["dark", "light"]
+    order: 1
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    order: 99

@@ -1,0 +1,20 @@
+id: messaging-chat
+name: "Web Chat"
+description: "Built-in web chat interface for conversing with AI agents"
+group: messaging
+version: "1.0.0"
+image: "teamagentica-messaging-chat:latest"
+author: teamagentica
+tags: [system, chat, ui]
+config_schema:
+  DEFAULT_AGENT:
+    type: select
+    label: "Default Agent"
+    dynamic: true
+    order: 1
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
