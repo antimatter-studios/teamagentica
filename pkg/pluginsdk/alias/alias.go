@@ -14,6 +14,7 @@ const (
 	TargetAgent TargetType = iota
 	TargetImage
 	TargetVideo
+	TargetStorage
 )
 
 // Target describes the plugin an alias resolves to.
@@ -112,6 +113,9 @@ func typeFromCapabilities(capabilities []string) TargetType {
 		}
 		if strings.HasPrefix(cap, "tool:video") {
 			return TargetVideo
+		}
+		if strings.HasPrefix(cap, "tool:storage") || strings.HasPrefix(cap, "storage:") {
+			return TargetStorage
 		}
 	}
 	return TargetAgent
@@ -224,13 +228,15 @@ func (m *AliasMap) SystemPromptBlockWithTools(discoveredTools []ToolInfo) string
 		return ""
 	}
 
-	var agents, aliasedTools []AliasEntry
+	var agents, aliasedTools, storageAliases []AliasEntry
 	for _, e := range entries {
 		switch e.Target.Type {
 		case TargetAgent:
 			agents = append(agents, e)
 		case TargetImage, TargetVideo:
 			aliasedTools = append(aliasedTools, e)
+		case TargetStorage:
+			storageAliases = append(storageAliases, e)
 		}
 	}
 
@@ -261,6 +267,15 @@ func (m *AliasMap) SystemPromptBlockWithTools(discoveredTools []ToolInfo) string
 				desc += " (model: " + e.Target.Model + ")"
 			}
 			sb.WriteString(fmt.Sprintf("- @%s → %s\n", e.Alias, desc))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(storageAliases) > 0 {
+		sb.WriteString("AVAILABLE STORAGE:\n")
+		for _, e := range storageAliases {
+			desc := fmt.Sprintf("file storage via %s", e.Target.PluginID)
+			sb.WriteString(fmt.Sprintf("- @%s → %s — use its tools (list_files, read_file, write_file, delete_file, create_folder) to save and retrieve files\n", e.Alias, desc))
 		}
 		sb.WriteString("\n")
 	}

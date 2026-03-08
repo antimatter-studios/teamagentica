@@ -29,13 +29,14 @@ type DockerRuntime struct {
 	network     string
 	certManager *certs.CertManager
 	devMode     bool
+	baseDomain  string
 }
 
 // NewDockerRuntime creates a Docker client from environment and ensures the
 // network exists. Returns nil runtime (not an error) if Docker is unavailable,
 // so the kernel can still start without Docker.
 // The certManager parameter is optional; pass nil to disable mTLS cert injection.
-func NewDockerRuntime(networkName string, certManager *certs.CertManager, devMode bool) (*DockerRuntime, error) {
+func NewDockerRuntime(networkName string, certManager *certs.CertManager, devMode bool, baseDomain string) (*DockerRuntime, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		log.Printf("WARNING: docker client init failed: %v — plugin runtime disabled", err)
@@ -54,6 +55,7 @@ func NewDockerRuntime(networkName string, certManager *certs.CertManager, devMod
 		network:     networkName,
 		certManager: certManager,
 		devMode:     devMode,
+		baseDomain:  baseDomain,
 	}
 
 	if err := rt.ensureNetwork(ctx); err != nil {
@@ -136,7 +138,26 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		env["GOCACHE"] = "/root/.cache/go-build"
 	}
 
-	// Build env slice.
+	// Assign a public subdomain for plugins that need direct browser access
+	// (e.g. code-server iframes that can't work behind a sub-path proxy).
+	var labels map[string]string
+	if hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:editor") && d.baseDomain != "" {
+		subdomain := "code." + d.baseDomain
+		proxyName := "teamagentica-" + plugin.ID
+		// Use the plugin's configured port from env, fall back to 8092.
+		pluginPort := env["INFRA_CODE_SERVER_PORT"]
+		if pluginPort == "" {
+			pluginPort = "8092"
+		}
+		labels = map[string]string{
+			"docker-proxy." + proxyName + ".host": subdomain,
+			"docker-proxy." + proxyName + ".port": pluginPort,
+		}
+		env["TEAMAGENTICA_PUBLIC_HOST"] = subdomain
+		env["TEAMAGENTICA_BASE_DOMAIN"] = d.baseDomain
+	}
+
+	// Build env slice (after all env mutations).
 	var envSlice []string
 	for k, v := range env {
 		envSlice = append(envSlice, k+"="+v)
@@ -146,6 +167,7 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		Image:    plugin.Image,
 		Hostname: containerName,
 		Env:      envSlice,
+		Labels:   labels,
 	}
 
 	projectRoot := d.projectRoot()
@@ -153,10 +175,10 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	var dataMount mount.Mount
 	if d.devMode && projectRoot != "" {
 		// Dev mode: bind mount plugin data from host for persistence and visibility.
-		hostPluginData := filepath.Join(projectRoot, "data", "plugins", plugin.ID)
+		hostPluginData := filepath.Join(projectRoot, "data", plugin.ID)
 
 		// Create via our own /data mount (which maps to the same host directory).
-		localPluginData := filepath.Join("/data", "plugins", plugin.ID)
+		localPluginData := filepath.Join("/data", plugin.ID)
 		if err := os.MkdirAll(localPluginData, 0o755); err != nil {
 			return "", fmt.Errorf("create plugin data dir: %w", err)
 		}
@@ -178,6 +200,30 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	mounts := []mount.Mount{dataMount}
 	if certMount != nil {
 		mounts = append(mounts, *certMount)
+	}
+
+	// Cross-mount the storage:volume plugin's data into workspace-aware plugins.
+	if hasCapabilityPrefix(plugin.GetCapabilities(), "ai:chat") ||
+		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:") {
+		if d.devMode && projectRoot != "" {
+			hostVolume := filepath.Join(projectRoot, "data", "storage-volume")
+			localDir := filepath.Join("/data", "storage-volume")
+			if err := os.MkdirAll(localDir, 0o755); err != nil {
+				log.Printf("warning: create storage-volume dir: %v", err)
+			}
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: hostVolume,
+				Target: "/workspaces",
+			})
+		} else {
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeVolume,
+				Source: "teamagentica-data-storage-volume",
+				Target: "/workspaces",
+			})
+		}
+		log.Printf("cross-mounting workspace volume into plugin %s at /workspaces", plugin.ID)
 	}
 
 	// In dev mode, mount plugin source code and shared SDK for hot reload.
@@ -298,4 +344,14 @@ func (d *DockerRuntime) ContainerLogs(ctx context.Context, containerID string, t
 	}
 
 	return strings.TrimRight(buf.String(), "\n"), nil
+}
+
+// hasCapabilityPrefix checks if any capability starts with the given prefix.
+func hasCapabilityPrefix(caps []string, prefix string) bool {
+	for _, c := range caps {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -22,6 +22,7 @@ type Config struct {
 	DevMode        bool          // Use :dev image tags instead of :latest
 	ProjectRoot    string        // Host path to project root (for dev mode source mounts)
 	BackupInterval time.Duration // How often to snapshot the SQLite database (default 5m)
+	BaseDomain     string        // Base domain for subdomain routing (e.g. "teamagentica.localhost")
 }
 
 func Load() *Config {
@@ -37,7 +38,7 @@ func Load() *Config {
 		Host:          host,
 		Port:          getEnv("TEAMAGENTICA_KERNEL_PORT", "8080"),
 		JWTSecret:     jwtSecret,
-		DBPath:        getEnv("TEAMAGENTICA_DB_PATH", "./database.db"),
+		DBPath:        getEnv("TEAMAGENTICA_DB_PATH", "./data/kernel/database.db"),
 		DockerNetwork: getEnv("TEAMAGENTICA_DOCKER_NETWORK", "teamagentica"),
 		Runtime:       getEnv("TEAMAGENTICA_RUNTIME", "docker"),
 		DataDir:       getEnv("TEAMAGENTICA_DATA_DIR", "./data"),
@@ -47,6 +48,7 @@ func Load() *Config {
 		DevMode:        getEnv("TEAMAGENTICA_DEV_MODE", "false") == "true",
 		ProjectRoot:    getEnv("TEAMAGENTICA_PROJECT_ROOT", ""),
 		BackupInterval: parseDuration("TEAMAGENTICA_BACKUP_INTERVAL", 5*time.Minute),
+		BaseDomain:     getEnv("TEAMAGENTICA_BASE_DOMAIN", "teamagentica.localhost"),
 	}
 }
 

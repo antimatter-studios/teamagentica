@@ -428,6 +428,39 @@ func (h *PluginHandler) GetPluginLogs(c *gin.Context) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(logs))
 }
 
+// GetSelfConfig handles GET /api/plugins/:id/self-config — called by plugins
+// via the SDK to fetch their own configuration. Returns unmasked values
+// (including secrets) since this is authenticated with the plugin's service token.
+func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
+	id := c.Param("id")
+
+	var plugin models.Plugin
+	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		return
+	}
+
+	var configs []models.PluginConfig
+	h.db.Where("plugin_id = ?", id).Find(&configs)
+
+	result := make(map[string]string, len(configs))
+	for _, cfg := range configs {
+		result[cfg.Key] = cfg.Value
+	}
+
+	// Fill in defaults from config_schema for keys not explicitly set.
+	schema, err := plugin.GetConfigSchema()
+	if err == nil && schema != nil {
+		for key, field := range schema {
+			if _, exists := result[key]; !exists && field.Default != "" {
+				result[key] = field.Default
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"config": result})
+}
+
 // GetPluginConfig handles GET /api/plugins/:id/config.
 func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 	id := c.Param("id")

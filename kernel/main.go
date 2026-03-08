@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -29,13 +30,19 @@ const version = "0.1.0"
 func main() {
 	cfg := config.Load()
 
+	// Ensure kernel data subdirectory exists.
+	kernelDataDir := filepath.Join(cfg.DataDir, "kernel")
+	if err := os.MkdirAll(kernelDataDir, 0o755); err != nil {
+		log.Fatalf("failed to create kernel data dir: %v", err)
+	}
+
 	auth.InitJWT(cfg.JWTSecret)
 	database.Init(cfg.DBPath)
 
 	// SQLite online backups.
 	backupCtx, backupCancel := context.WithCancel(context.Background())
 	defer backupCancel()
-	database.StartBackups(backupCtx, cfg.DataDir, cfg.BackupInterval)
+	database.StartBackups(backupCtx, kernelDataDir, cfg.BackupInterval)
 
 	// mTLS setup (optional).
 	var certManager *certs.CertManager
@@ -44,7 +51,7 @@ func main() {
 
 	if cfg.MTLSEnabled {
 		var err error
-		certManager, err = certs.NewCertManager(cfg.DataDir)
+		certManager, err = certs.NewCertManager(kernelDataDir)
 		if err != nil {
 			log.Fatalf("failed to init cert manager: %v", err)
 		}
@@ -89,6 +96,7 @@ func main() {
 	{
 		authGroup.POST("/register", middleware.AuthOptional(), handlers.Register)
 		authGroup.POST("/login", handlers.Login)
+		authGroup.POST("/session", middleware.AuthRequired(), handlers.CreateSession)
 	}
 
 	// Service token routes (authenticated, admin only).
@@ -138,7 +146,7 @@ func main() {
 	}
 
 	// Docker runtime (gracefully degrades if Docker unavailable).
-	dockerRT, err := runtime.NewDockerRuntime(cfg.DockerNetwork, certManager, cfg.DevMode)
+	dockerRT, err := runtime.NewDockerRuntime(cfg.DockerNetwork, certManager, cfg.DevMode, cfg.BaseDomain)
 	if err != nil {
 		log.Fatalf("failed to init docker runtime: %v", err)
 	}
@@ -204,6 +212,7 @@ func main() {
 		pluginRegGroup.POST("/subscribe", pluginHandler.SubscribeEvent)
 		pluginRegGroup.POST("/unsubscribe", pluginHandler.UnsubscribeEvent)
 		pluginRegGroup.POST("/pricing", pluginHandler.UpdatePricing)
+		pluginRegGroup.GET("/:id/self-config", pluginHandler.GetSelfConfig)
 	}
 
 	// Plugin routing/proxy (user authenticated, kernel proxies to plugin).
@@ -239,6 +248,8 @@ func main() {
 		if err := orch.StartEnabledPlugins(orchCtx); err != nil {
 			log.Printf("orchestrator: boot error: %v", err)
 		}
+		// In dev mode, sync the catalog so new plugins appear without manual install.
+		orch.DevSyncCatalog()
 	}()
 
 	addr := cfg.Host + ":" + cfg.Port
@@ -250,8 +261,8 @@ func main() {
 			Handler:   r,
 			TLSConfig: serverTLS,
 		}
-		certPath := cfg.DataDir + "/certs/kernel.crt"
-		keyPath := cfg.DataDir + "/certs/kernel.key"
+		certPath := kernelDataDir + "/certs/kernel.crt"
+		keyPath := kernelDataDir + "/certs/kernel.key"
 		log.Printf("%s kernel starting on https://%s (v%s)\n", cfg.AppName, addr, version)
 		go func() {
 			if err := server.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {

@@ -43,6 +43,7 @@ type VisibleWhen struct {
 // Registration holds the plugin's self-description sent to the kernel on boot.
 type Registration struct {
 	ID           string                       `json:"id"`
+	Name         string                       `json:"name,omitempty"`
 	Host         string                       `json:"host"`
 	Port         int                          `json:"port"`
 	EventPort    int                          `json:"event_port,omitempty"`
@@ -506,6 +507,37 @@ func (c *Client) FetchAliases() ([]alias.AliasInfo, error) {
 	}
 
 	return result.Aliases, nil
+}
+
+/// FetchConfig retrieves the plugin's own configuration from the kernel API.
+// Returns a map of config key → value (unmasked, including secrets).
+func (c *Client) FetchConfig() (map[string]string, error) {
+	url := fmt.Sprintf("%s/api/plugins/%s/self-config", c.kernelURL(), c.registration.ID)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Config map[string]string `json:"config"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return result.Config, nil
 }
 
 // --- Storage helpers (route through kernel to storage:api plugin) ---

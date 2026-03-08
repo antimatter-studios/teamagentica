@@ -49,6 +49,7 @@ func Init(path string) {
 	seedSystemPlugins(DB)
 	migratePluginTokens(DB)
 	migrateAliasConfig(DB)
+	repairMissingTokens(DB)
 
 	log.Println("database initialized at", dbPath)
 }
@@ -149,12 +150,12 @@ var systemPlugins = []systemPlugin{
 		Capabilities: []string{"marketplace:provider"},
 	},
 	{
-		ID:           "cost-explorer",
+		ID:           "infra-cost-explorer",
 		Name:         "Cost Explorer",
 		Version:      "1.0.0",
-		Image:        "teamagentica-cost-explorer:latest",
+		Image:        "teamagentica-infra-cost-explorer:latest",
 		HTTPPort:     8090,
-		Capabilities: []string{"system:cost-explorer"},
+		Capabilities: []string{"system:infra-cost-explorer"},
 	},
 }
 
@@ -316,6 +317,25 @@ func migrateAliasConfig(db *gorm.DB) {
 
 	if migrated > 0 {
 		log.Printf("database: migrated %d plugin(s) from PLUGIN_ALIAS to PLUGIN_ALIASES", migrated)
+	}
+}
+
+// repairMissingTokens generates service tokens for any enabled plugin that is
+// missing either its service_token field or its service_tokens table entry.
+// This handles cases where plugins were renamed and their token associations were lost.
+func repairMissingTokens(db *gorm.DB) {
+	var plugins []models.Plugin
+	db.Where("enabled = ?", true).Find(&plugins)
+
+	for _, p := range plugins {
+		// Check if the service_tokens table entry exists.
+		var st models.ServiceToken
+		hasTableEntry := db.Where("name = ? AND revoked = ?", p.ID, false).First(&st).Error == nil
+
+		if p.ServiceToken == "" || !hasTableEntry {
+			ensureServiceToken(db, p.ID)
+			log.Printf("database: repaired missing service token for plugin %s", p.ID)
+		}
 	}
 }
 

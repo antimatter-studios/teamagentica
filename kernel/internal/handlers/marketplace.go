@@ -57,6 +57,7 @@ type CatalogEntry struct {
 	PluginID       string                 `json:"plugin_id"`
 	Name           string                 `json:"name"`
 	Description    string                 `json:"description"`
+	Group          string                 `json:"group,omitempty"`
 	Version        string                 `json:"version"`
 	Image          string                 `json:"image"`
 	Author         string                 `json:"author"`
@@ -64,6 +65,14 @@ type CatalogEntry struct {
 	ConfigSchema   map[string]interface{} `json:"config_schema,omitempty"`
 	DefaultPricing []CatalogPricingEntry  `json:"default_pricing,omitempty"`
 	Provider       string                 `json:"provider,omitempty"`
+}
+
+// CatalogGroup holds display metadata for a plugin group.
+type CatalogGroup struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Order       int    `json:"order"`
 }
 
 // --- Provider management ---
@@ -141,6 +150,7 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 
 	type providerResult struct {
 		entries []CatalogEntry
+		groups  []CatalogGroup
 		err     error
 	}
 
@@ -151,30 +161,41 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 		wg.Add(1)
 		go func(idx int, p models.Provider) {
 			defer wg.Done()
-			entries, err := fetchProviderCatalog(p.URL, p.Name, q)
-			results[idx] = providerResult{entries: entries, err: err}
+			entries, groups, err := fetchProviderCatalog(p.URL, p.Name, q)
+			results[idx] = providerResult{entries: entries, groups: groups, err: err}
 		}(i, prov)
 	}
 	wg.Wait()
 
 	var all []CatalogEntry
+	groupsSeen := map[string]bool{}
+	var allGroups []CatalogGroup
 	for _, r := range results {
 		if r.err != nil {
 			log.Printf("marketplace: provider fetch error: %v", r.err)
 			continue
 		}
 		all = append(all, r.entries...)
+		for _, g := range r.groups {
+			if !groupsSeen[g.ID] {
+				groupsSeen[g.ID] = true
+				allGroups = append(allGroups, g)
+			}
+		}
 	}
 
 	if all == nil {
 		all = []CatalogEntry{}
 	}
+	if allGroups == nil {
+		allGroups = []CatalogGroup{}
+	}
 
-	c.JSON(http.StatusOK, gin.H{"plugins": all})
+	c.JSON(http.StatusOK, gin.H{"plugins": all, "groups": allGroups})
 }
 
 // fetchProviderCatalog fetches the plugin catalog from a provider URL.
-func fetchProviderCatalog(providerURL, providerName, query string) ([]CatalogEntry, error) {
+func fetchProviderCatalog(providerURL, providerName, query string) ([]CatalogEntry, []CatalogGroup, error) {
 	url := providerURL + "/plugins"
 	if query != "" {
 		url += "?q=" + query
@@ -183,24 +204,25 @@ func fetchProviderCatalog(providerURL, providerName, query string) ([]CatalogEnt
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", providerURL, err)
+		return nil, nil, fmt.Errorf("fetch %s: %w", providerURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("provider %s returned status %d", providerURL, resp.StatusCode)
+		return nil, nil, fmt.Errorf("provider %s returned status %d", providerURL, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read body from %s: %w", providerURL, err)
+		return nil, nil, fmt.Errorf("read body from %s: %w", providerURL, err)
 	}
 
 	var result struct {
 		Plugins []CatalogEntry `json:"plugins"`
+		Groups  []CatalogGroup `json:"groups"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parse response from %s: %w", providerURL, err)
+		return nil, nil, fmt.Errorf("parse response from %s: %w", providerURL, err)
 	}
 
 	// Tag each entry with the provider name.
@@ -208,7 +230,7 @@ func fetchProviderCatalog(providerURL, providerName, query string) ([]CatalogEnt
 		result.Plugins[i].Provider = providerName
 	}
 
-	return result.Plugins, nil
+	return result.Plugins, result.Groups, nil
 }
 
 // --- Install ---
@@ -244,7 +266,7 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	}
 
 	// Fetch plugin info from provider.
-	entries, err := fetchProviderCatalog(provider.URL, provider.Name, req.PluginID)
+	entries, _, err := fetchProviderCatalog(provider.URL, provider.Name, req.PluginID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch from provider: " + err.Error()})
 		return

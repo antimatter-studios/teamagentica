@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -73,77 +74,91 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 	log.Printf("orchestrator: starting %d enabled plugin(s)", len(plugins))
 	o.emit("orchestrator", "kernel", fmt.Sprintf("boot: starting %d enabled plugin(s)", len(plugins)))
 
+	// Start all plugins in parallel — each plugin gets its own goroutine.
+	var wg sync.WaitGroup
 	for i := range plugins {
-		plugin := &plugins[i]
+		plugin := plugins[i] // copy for goroutine
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			o.startPlugin(ctx, &plugin)
+		}()
+	}
+	wg.Wait()
 
-		// Look up service token for this plugin.
-		var serviceToken models.ServiceToken
-		if err := o.db.Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
-			log.Printf("orchestrator: WARNING: no service token found for plugin %s, skipping (plugin cannot auth without a token)", plugin.ID)
-			o.emit("warning", plugin.ID, "no service token found, skipping")
-			continue
-		}
+	log.Printf("orchestrator: all %d plugin(s) started", len(plugins))
+	return nil
+}
 
-		// Build env from plugin config.
-		env := o.buildEnv(plugin.ID)
+// startPlugin handles the full lifecycle of starting a single plugin container.
+func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
+	// Look up service token for this plugin.
+	var serviceToken models.ServiceToken
+	if err := o.db.Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
+		log.Printf("orchestrator: WARNING: no service token found for plugin %s, skipping (plugin cannot auth without a token)", plugin.ID)
+		o.emit("warning", plugin.ID, "no service token found, skipping")
+		return
+	}
 
-		// Inject kernel connection info.
-		env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
-		env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
-		env["TEAMAGENTICA_PLUGIN_ID"] = plugin.ID
+	// Build env from plugin config.
+	env := o.buildEnv(plugin.ID)
 
-		// Inject the service token stored on the plugin record.
-		if plugin.ServiceToken != "" {
-			env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
-		} else {
-			log.Printf("orchestrator: WARNING: plugin %s has no service token — plugin cannot authenticate with kernel", plugin.ID)
-			o.emit("warning", plugin.ID, "no service token on plugin record")
-		}
+	// Inject kernel connection info.
+	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
+	env["TEAMAGENTICA_PLUGIN_ID"] = plugin.ID
 
-		// Stop existing container if still running.
-		if plugin.ContainerID != "" {
-			o.emit("stop", plugin.ID, fmt.Sprintf("stopping old container=%s", plugin.ContainerID[:12]))
-			_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
-		}
+	// Inject the service token stored on the plugin record.
+	if plugin.ServiceToken != "" {
+		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
+	} else {
+		log.Printf("orchestrator: WARNING: plugin %s has no service token — plugin cannot authenticate with kernel", plugin.ID)
+		o.emit("warning", plugin.ID, "no service token on plugin record")
+	}
 
-		// Resolve image tag for dev mode.
-		plugin.Image = o.config.ResolveImage(plugin.Image)
+	// Stop existing container if still running.
+	if plugin.ContainerID != "" {
+		o.emit("stop", plugin.ID, fmt.Sprintf("stopping old container=%s", plugin.ContainerID[:12]))
+		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
+	}
 
-		// Pull image (don't fail if pull fails, image might be local).
+	// Resolve image tag for dev mode.
+	plugin.Image = o.config.ResolveImage(plugin.Image)
+
+	// In dev mode, skip pulling — images are always built locally.
+	if !o.config.DevMode {
 		o.emit("start", plugin.ID, fmt.Sprintf("pulling image=%s", plugin.Image))
 		if err := o.runtime.PullImage(ctx, plugin.Image); err != nil {
 			log.Printf("orchestrator: pull image %s for plugin %s failed (continuing, image may be local): %v", plugin.Image, plugin.ID, err)
 			o.emit("warning", plugin.ID, fmt.Sprintf("image pull failed (may be local): %v", err))
 		}
-
-		// Start the container.
-		o.emit("start", plugin.ID, fmt.Sprintf("starting container image=%s", plugin.Image))
-		containerID, err := o.runtime.StartPlugin(ctx, plugin, env)
-		if err != nil {
-			log.Printf("orchestrator: ERROR: failed to start plugin %s: %v", plugin.ID, err)
-			o.emit("error", plugin.ID, fmt.Sprintf("start failed: %v", err))
-			o.db.Model(plugin).Updates(map[string]interface{}{
-				"container_id": "",
-				"status":       "error",
-			})
-			continue
-		}
-
-		// Update plugin status and clear stale registration data so the health
-		// monitor uses Docker-level checks (not heartbeat staleness) while the
-		// plugin is still building/booting.
-		o.db.Model(plugin).Updates(map[string]interface{}{
-			"container_id": containerID,
-			"status":       "running",
-			"host":         "",
-			"last_seen":    time.Time{},
-		})
-
-		log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
-		o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
 	}
 
-	return nil
+	// Start the container.
+	o.emit("start", plugin.ID, fmt.Sprintf("starting container image=%s", plugin.Image))
+	containerID, err := o.runtime.StartPlugin(ctx, plugin, env)
+	if err != nil {
+		log.Printf("orchestrator: ERROR: failed to start plugin %s: %v", plugin.ID, err)
+		o.emit("error", plugin.ID, fmt.Sprintf("start failed: %v", err))
+		o.db.Model(plugin).Updates(map[string]interface{}{
+			"container_id": "",
+			"status":       "error",
+		})
+		return
+	}
+
+	// Update plugin status and clear stale registration data so the health
+	// monitor uses Docker-level checks (not heartbeat staleness) while the
+	// plugin is still building/booting.
+	o.db.Model(plugin).Updates(map[string]interface{}{
+		"container_id": containerID,
+		"status":       "running",
+		"host":         "",
+		"last_seen":    time.Time{},
+	})
+
+	log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
+	o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
 }
 
 // RestartPlugin restarts a single enabled plugin by ID.

@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -42,6 +44,7 @@ func (h *PluginHandler) pluginScheme() string {
 
 type pluginSelfRegisterRequest struct {
 	ID           string                 `json:"id" binding:"required"`
+	Name         string                 `json:"name"`
 	Host         string                 `json:"host" binding:"required"`
 	Port         int                    `json:"port"`
 	EventPort    int                    `json:"event_port,omitempty"`
@@ -86,6 +89,10 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 
 	if req.Version != "" {
 		updates["version"] = req.Version
+	}
+
+	if req.Name != "" {
+		updates["name"] = req.Name
 	}
 
 	if req.Capabilities != nil {
@@ -507,7 +514,8 @@ func (h *PluginHandler) WebhookIngress(c *gin.Context) {
 }
 
 // RouteToPlugin handles POST /api/route/:plugin_id/*path — proxies requests
-// through the kernel to the target plugin.
+// through the kernel to the target plugin. Uses httputil.ReverseProxy to
+// support both regular HTTP and WebSocket connections transparently.
 func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 	pluginID := c.Param("plugin_id")
 	path := c.Param("path")
@@ -529,52 +537,44 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 		return
 	}
 
-	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, plugin.HTTPPort, path)
+	target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), plugin.Host, plugin.HTTPPort))
+	proxy := httputil.NewSingleHostReverseProxy(target)
 
-	proxyReq, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, targetURL, c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create proxy request"})
-		return
+	// Use mTLS transport if configured.
+	if h.clientTLS != nil {
+		proxy.Transport = &http.Transport{TLSClientConfig: h.clientTLS}
 	}
 
-	// Forward all headers.
-	for key, vals := range c.Request.Header {
-		for _, val := range vals {
-			proxyReq.Header.Add(key, val)
+	// Rewrite the request path to strip the /api/route/:plugin_id prefix.
+	c.Request.URL.Path = path
+	c.Request.URL.Host = target.Host
+	c.Request.Host = target.Host
+
+	// Extract the caller's origin (scheme+host only) to restrict iframe embedding.
+	var callerOrigin string
+	if origin := c.Request.Header.Get("Origin"); origin != "" {
+		callerOrigin = origin
+	} else if referer := c.Request.Header.Get("Referer"); referer != "" {
+		if u, err := url.Parse(referer); err == nil {
+			callerOrigin = u.Scheme + "://" + u.Host
 		}
 	}
 
-	// Forward query string.
-	proxyReq.URL.RawQuery = c.Request.URL.RawQuery
-
-	resp, err := h.proxyClient().Do(proxyReq)
-	if err != nil {
-		h.Events.Emit(events.DebugEvent{
-			Type:     eventType,
-			PluginID: pluginID,
-			Method:   c.Request.Method,
-			Path:     path,
-			Status:   502,
-			Duration: time.Since(start).Milliseconds(),
-			Detail:   err.Error(),
-		})
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Plugin is not reachable — it may have stopped or is still starting up"})
-		return
-	}
-	defer resp.Body.Close()
-
-	// Copy response headers.
-	for key, vals := range resp.Header {
-		for _, val := range vals {
-			c.Writer.Header().Add(key, val)
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		// Restrict iframe embedding — only the teamagentica UI can embed plugin pages.
+		// 'self' is needed because code-server creates internal sub-iframes.
+		if callerOrigin != "" {
+			resp.Header.Set("Content-Security-Policy", fmt.Sprintf("frame-ancestors 'self' %s", callerOrigin))
+		} else {
+			resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self'")
 		}
-	}
 
-	// For error responses, buffer the body so we can include it in the debug event.
-	var detail string
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		detail = string(body)
+		var detail string
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			detail = string(body)
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		h.Events.Emit(events.DebugEvent{
 			Type:     eventType,
 			PluginID: pluginID,
@@ -584,20 +584,25 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 			Duration: time.Since(start).Milliseconds(),
 			Detail:   detail,
 		})
-		c.Status(resp.StatusCode)
-		c.Writer.Write(body)
-	} else {
+		return nil
+	}
+
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		h.Events.Emit(events.DebugEvent{
 			Type:     eventType,
 			PluginID: pluginID,
 			Method:   c.Request.Method,
 			Path:     path,
-			Status:   resp.StatusCode,
+			Status:   502,
 			Duration: time.Since(start).Milliseconds(),
+			Detail:   err.Error(),
 		})
-		c.Status(resp.StatusCode)
-		io.Copy(c.Writer, resp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, `{"error":"Plugin is not reachable — it may have stopped or is still starting up"}`)
 	}
+
+	proxy.ServeHTTP(c.Writer, c.Request)
 }
 
 // --- inter-plugin event subscription handlers ---

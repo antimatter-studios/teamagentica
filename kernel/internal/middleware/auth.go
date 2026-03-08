@@ -50,21 +50,32 @@ func AuthOptional() gin.HandlerFunc {
 }
 
 // AuthRequired validates the Bearer token and injects claims into context.
+// Accepts the token via Authorization header or session cookie (for iframe embedding).
 func AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var token string
+
 		header := c.GetHeader("Authorization")
-		if header == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+		if header != "" {
+			parts := strings.SplitN(header, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				token = parts[1]
+			}
+		}
+
+		// Fall back to cookie (used by iframe embeds like code-server).
+		if token == "" {
+			if cookie, err := c.Cookie("teamagentica_session"); err == nil {
+				token = cookie
+			}
+		}
+
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing authorization"})
 			return
 		}
 
-		parts := strings.SplitN(header, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization format"})
-			return
-		}
-
-		claims, err := auth.ValidateToken(parts[1])
+		claims, err := auth.ValidateToken(token)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
@@ -131,10 +142,14 @@ func PluginTokenAuth() gin.HandlerFunc {
 	}
 }
 
-// CORS allows all origins for development.
+// CORS reflects the request origin and allows credentials.
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+		if origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		c.Writer.Header().Set("Access-Control-Max-Age", "86400")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -156,6 +157,37 @@ func Login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, authResponse{Token: token, User: user})
+}
+
+// CreateSession sets an HttpOnly session cookie containing the caller's JWT.
+// Used by iframe embeds (e.g. code-server) that cannot send Authorization headers.
+// The caller must already be authenticated via Bearer token.
+func CreateSession(c *gin.Context) {
+	// Re-extract the Bearer token from the header (already validated by AuthRequired).
+	header := c.GetHeader("Authorization")
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing bearer token"})
+		return
+	}
+	token := parts[1]
+
+	// Set HttpOnly cookie on the parent domain so it's shared across subdomains
+	// (e.g. api.teamagentica.localhost and code.teamagentica.localhost).
+	cookieDomain := ""
+	if host := c.Request.Host; host != "" {
+		// Strip port if present.
+		if idx := strings.LastIndex(host, ":"); idx > 0 {
+			host = host[:idx]
+		}
+		// Strip first subdomain to get parent (api.example.com → example.com).
+		if dot := strings.Index(host, "."); dot >= 0 {
+			cookieDomain = host[dot:] // ".example.com"
+		}
+	}
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("teamagentica_session", token, 86400, "/", cookieDomain, false, true)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // --- service token types ---
