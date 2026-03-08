@@ -197,66 +197,64 @@ tasks:
       - user-vscode-server:build
 
   build:images:
-    desc: Build all plugin Docker images (parallel)
-    deps:
-      - agent-claude:docker:prod
-      - agent-gemini:docker:prod
-      - agent-inception:docker:prod
-      - agent-kimi:docker:prod
-      - agent-openai:docker:prod
-      - agent-openrouter:docker:prod
-      - agent-requesty:docker:prod
-      - builtin-provider:docker:prod
-      - infra-cost-explorer:docker:prod
-      - infra-cron-scheduler:docker:prod
-      - infra-mcp-server:docker:prod
-      - infra-workspace-manager:docker:prod
-      - messaging-chat:docker:prod
-      - messaging-discord:docker:prod
-      - messaging-telegram:docker:prod
-      - messaging-whatsapp:docker:prod
-      - network-ngrok:docker:prod
-      - network-webhook-ingress:docker:prod
-      - storage-sss3:docker:prod
-      - storage-volume:docker:prod
-      - tool-nanobanana:docker:prod
-      - tool-seedance:docker:prod
-      - tool-stability:docker:prod
-      - tool-veo:docker:prod
-      - user-vscode-server:docker:prod
+    desc: Build all plugin Docker images (sequential)
     cmds:
+      - task: agent-claude:docker:prod
+      - task: agent-gemini:docker:prod
+      - task: agent-inception:docker:prod
+      - task: agent-kimi:docker:prod
+      - task: agent-openai:docker:prod
+      - task: agent-openrouter:docker:prod
+      - task: agent-requesty:docker:prod
+      - task: builtin-provider:docker:prod
+      - task: infra-cost-explorer:docker:prod
+      - task: infra-cron-scheduler:docker:prod
+      - task: infra-mcp-server:docker:prod
+      - task: infra-workspace-manager:docker:prod
+      - task: messaging-chat:docker:prod
+      - task: messaging-discord:docker:prod
+      - task: messaging-telegram:docker:prod
+      - task: messaging-whatsapp:docker:prod
+      - task: network-ngrok:docker:prod
+      - task: network-webhook-ingress:docker:prod
+      - task: storage-sss3:docker:prod
+      - task: storage-volume:docker:prod
+      - task: tool-nanobanana:docker:prod
+      - task: tool-seedance:docker:prod
+      - task: tool-stability:docker:prod
+      - task: tool-veo:docker:prod
+      - task: user-vscode-server:docker:prod
       - echo "All plugin images built successfully"
       - task: restart:running
 
   build:images:dev:
-    desc: Build all plugin Docker images for dev (parallel)
-    deps:
-      - agent-claude:docker:dev
-      - agent-gemini:docker:dev
-      - agent-inception:docker:dev
-      - agent-kimi:docker:dev
-      - agent-openai:docker:dev
-      - agent-openrouter:docker:dev
-      - agent-requesty:docker:dev
-      - builtin-provider:docker:dev
-      - infra-cost-explorer:docker:dev
-      - infra-cron-scheduler:docker:dev
-      - infra-mcp-server:docker:dev
-      - infra-workspace-manager:docker:dev
-      - messaging-chat:docker:dev
-      - messaging-discord:docker:dev
-      - messaging-telegram:docker:dev
-      - messaging-whatsapp:docker:dev
-      - network-ngrok:docker:dev
-      - network-webhook-ingress:docker:dev
-      - storage-sss3:docker:dev
-      - storage-volume:docker:dev
-      - tool-nanobanana:docker:dev
-      - tool-seedance:docker:dev
-      - tool-stability:docker:dev
-      - tool-veo:docker:dev
-      - user-vscode-server:docker:dev
+    desc: Build all plugin Docker images for dev (sequential)
     cmds:
+      - task: agent-claude:docker:dev
+      - task: agent-gemini:docker:dev
+      - task: agent-inception:docker:dev
+      - task: agent-kimi:docker:dev
+      - task: agent-openai:docker:dev
+      - task: agent-openrouter:docker:dev
+      - task: agent-requesty:docker:dev
+      - task: builtin-provider:docker:dev
+      - task: infra-cost-explorer:docker:dev
+      - task: infra-cron-scheduler:docker:dev
+      - task: infra-mcp-server:docker:dev
+      - task: infra-workspace-manager:docker:dev
+      - task: messaging-chat:docker:dev
+      - task: messaging-discord:docker:dev
+      - task: messaging-telegram:docker:dev
+      - task: messaging-whatsapp:docker:dev
+      - task: network-ngrok:docker:dev
+      - task: network-webhook-ingress:docker:dev
+      - task: storage-sss3:docker:dev
+      - task: storage-volume:docker:dev
+      - task: tool-nanobanana:docker:dev
+      - task: tool-seedance:docker:dev
+      - task: tool-stability:docker:dev
+      - task: tool-veo:docker:dev
+      - task: user-vscode-server:docker:dev
       - echo "All dev plugin images built successfully"
       - task: restart:running
 

@@ -108,7 +108,7 @@ This is a novel approach: instead of a plugin API, you fork the project and appl
 
 **TeamAgentica** uses a traditional plugin model with SDK, Docker images, and a marketplace. This scales better for teams but requires more infrastructure.
 
-**Potential benefit**: The skills concept could complement our plugin system — a skill could scaffold a new plugin project with boilerplate, Dockerfile, CI pipeline, and SDK integration. `/create-plugin telegram-bot` could generate a ready-to-deploy plugin.
+**Potential benefit**: The skills concept could complement our plugin system — a skill could scaffold a new plugin project with boilerplate, Dockerfile, CI pipeline, and SDK integration. `/create-plugin messaging-telegram` could generate a ready-to-deploy plugin.
 
 ### 6. Apple Container Support
 
@@ -181,11 +181,11 @@ This is remarkably simple and debuggable — you can literally `ls` the IPC dire
 - Plugins emit events via `POST /api/plugins/event`
 - Other plugins subscribe to event types and receive HTTP callbacks
 - The routing proxy enables direct plugin-to-plugin communication through the kernel
-- Example: webhook-ingress emits `webhook:url` → Telegram plugin receives tunnel URL
+- Example: network-webhook-ingress emits `webhook:url` → Telegram plugin receives tunnel URL
 
 **NanoClaw** has no inter-process communication beyond host↔container IPC. Containers are isolated from each other by design.
 
-**Technical advantage**: Event-driven architecture enables loose coupling and emergent behavior. The cost-explorer subscribing to `usage:report` events from all plugins is a pattern that cannot exist in NanoClaw's model.
+**Technical advantage**: Event-driven architecture enables loose coupling and emergent behavior. The infra-cost-explorer subscribing to `usage:report` events from all plugins is a pattern that cannot exist in NanoClaw's model.
 
 ### 5. Plugin Marketplace and Distribution
 
@@ -219,7 +219,7 @@ This is remarkably simple and debuggable — you can literally `ls` the IPC dire
 - **Video generation**: Veo, Seedance, Stability, NanoBanana — discoverable via `tool:video` capability
 - **Image generation**: via `tool:image` capability
 - **Cost tracking**: `system:cost-explorer`
-- **Tunnel/webhooks**: ngrok, webhook-ingress
+- **Tunnel/webhooks**: network-ngrok, network-webhook-ingress
 
 The capability-based discovery system means messaging bots auto-discover available tools. The Telegram bot dynamically creates `/<provider>` commands for each running video tool.
 

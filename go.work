@@ -5,22 +5,27 @@ use (
 	./pkg/pluginsdk
 	./plugins/agent-gemini
 	./plugins/agent-kimi
+	./plugins/agent-claude
 	./plugins/agent-openai
+	./plugins/agent-inception
 	./plugins/agent-openrouter
 	./plugins/agent-requesty
 	./plugins/builtin-provider
-	./plugins/chat
-	./plugins/mcp-server
-	./plugins/cost-explorer
-	./plugins/discord
-	./plugins/ngrok
-	./plugins/scheduler
-	./plugins/sss3-storage
-	./plugins/telegram
+	./plugins/messaging-chat
+	./plugins/infra-mcp-server
+	./plugins/infra-cost-explorer
+	./plugins/messaging-discord
+	./plugins/network-ngrok
+	./plugins/infra-cron-scheduler
+	./plugins/storage-sss3
+	./plugins/storage-volume
+	./plugins/user-vscode-server
+	./plugins/infra-workspace-manager
+	./plugins/messaging-telegram
 	./plugins/tool-nanobanana
 	./plugins/tool-seedance
 	./plugins/tool-stability
 	./plugins/tool-veo
-	./plugins/webhook-ingress
-	./plugins/whatsapp
+	./plugins/network-webhook-ingress
+	./plugins/messaging-whatsapp
 )

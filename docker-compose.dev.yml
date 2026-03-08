@@ -22,12 +22,13 @@ services:
       - TEAMAGENTICA_KERNEL_PORT=8080
       - TEAMAGENTICA_KERNEL_ADVERTISE_HOST=teamagentica-kernel
       - TEAMAGENTICA_JWT_SECRET=${TEAMAGENTICA_JWT_SECRET:?JWT secret required}
-      - TEAMAGENTICA_DB_PATH=/data/database.db
+      - TEAMAGENTICA_DB_PATH=/data/kernel/database.db
       - TEAMAGENTICA_DATA_DIR=/data
       - TEAMAGENTICA_DOCKER_NETWORK=teamagentica_default
       - TEAMAGENTICA_DEV_MODE=true
       - TEAMAGENTICA_PROJECT_ROOT=${PWD}
       - TEAMAGENTICA_MTLS_ENABLED=false
+      - TEAMAGENTICA_BASE_DOMAIN=teamagentica.localhost
       - TEAMAGENTICA_PROVIDER_URL=http://teamagentica-plugin-builtin-provider:8083
       - CGO_ENABLED=1
     restart: unless-stopped
