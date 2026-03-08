@@ -1,0 +1,37 @@
+id: tool-veo
+name: "Google Veo Video"
+description: "AI video generation tool powered by Google Veo"
+group: tools
+version: "1.0.0"
+image: "teamagentica-tool-veo:latest"
+author: teamagentica
+tags: [video, ai, tool, veo, google, gemini]
+config_schema:
+  GEMINI_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    order: 1
+  VEO_MODEL:
+    type: select
+    label: Model
+    default: veo-3.1-generate-preview
+    dynamic: true
+    order: 2
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: veo
+    model: veo-3.1-generate-preview
+    per_request: 0.025
+    currency: USD

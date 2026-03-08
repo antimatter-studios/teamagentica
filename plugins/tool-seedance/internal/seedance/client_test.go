@@ -3,15 +3,12 @@ package seedance
 import "testing"
 
 func TestNewClient(t *testing.T) {
-	c := NewClient("key123", "seedance-2.0", true)
+	c := NewClient("key123", true)
 	if c == nil {
 		t.Fatal("expected non-nil client")
 	}
 	if c.apiKey != "key123" {
 		t.Errorf("expected apiKey=key123, got %s", c.apiKey)
-	}
-	if c.model != "seedance-2.0" {
-		t.Errorf("expected model=seedance-2.0, got %s", c.model)
 	}
 	if !c.debug {
 		t.Error("expected debug=true")
@@ -19,7 +16,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestNewClientDefaults(t *testing.T) {
-	c := NewClient("", "seedance-1.0-lite", false)
+	c := NewClient("", false)
 	if c == nil {
 		t.Fatal("expected non-nil client")
 	}

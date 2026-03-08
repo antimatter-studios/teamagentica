@@ -1,0 +1,15 @@
+id: builtin-provider
+name: "Builtin Plugin Provider"
+description: "Default marketplace provider serving the official plugin catalog"
+group: infrastructure
+version: "1.0.0"
+image: "teamagentica-builtin-provider:latest"
+author: teamagentica
+tags: [system, marketplace, provider]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

@@ -16,6 +16,15 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
+	// Load the pre-built catalog file.
+	catalogPath := os.Getenv("CATALOG_PATH")
+	if catalogPath == "" {
+		catalogPath = "/app/plugins/builtin-provider/catalog.yaml"
+	}
+	if err := catalog.LoadFile(catalogPath); err != nil {
+		log.Printf("warning: failed to load catalog from %s: %v", catalogPath, err)
+	}
+
 	port := os.Getenv("PROVIDER_PORT")
 	if port == "" {
 		port = "8083"
@@ -45,7 +54,10 @@ func main() {
 	r.GET("/plugins", func(c *gin.Context) {
 		q := c.Query("q")
 		results := catalog.Search(q)
-		c.JSON(http.StatusOK, gin.H{"plugins": results})
+		c.JSON(http.StatusOK, gin.H{
+			"plugins": results,
+			"groups":  catalog.Groups,
+		})
 	})
 
 	server := &http.Server{

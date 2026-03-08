@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/usage"
 )
 
@@ -21,17 +20,12 @@ func newTestTracker(t *testing.T) *usage.Tracker {
 	return usage.NewTracker(t.TempDir())
 }
 
-func newTestHandler(apiKey, model string) *Handler {
-	cfg := &config.Config{
-		APIKey:   apiKey,
-		Model:    model,
-		DataPath: "/tmp/test-seedance",
-	}
-	return NewHandler(cfg)
+func newTestHandler(apiKey string) *Handler {
+	return NewHandler(apiKey, "/tmp/test-seedance", false)
 }
 
 func TestHealth(t *testing.T) {
-	h := newTestHandler("test-key", "seedance-2.0")
+	h := newTestHandler("test-key")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -55,16 +49,13 @@ func TestHealth(t *testing.T) {
 	if resp["configured"] != true {
 		t.Errorf("expected configured=true, got %v", resp["configured"])
 	}
-	if resp["model"] != "seedance-2.0" {
-		t.Errorf("expected model=seedance-2.0, got %v", resp["model"])
-	}
 	if resp["status"] != "ok" {
 		t.Errorf("expected status=ok, got %v", resp["status"])
 	}
 }
 
 func TestHealthNoAPIKey(t *testing.T) {
-	h := newTestHandler("", "seedance-2.0")
+	h := newTestHandler("")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -79,7 +70,7 @@ func TestHealthNoAPIKey(t *testing.T) {
 }
 
 func TestGenerateNoAPIKey(t *testing.T) {
-	h := newTestHandler("", "seedance-2.0")
+	h := newTestHandler("")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -103,7 +94,7 @@ func TestGenerateNoAPIKey(t *testing.T) {
 }
 
 func TestGenerateMissingPrompt(t *testing.T) {
-	h := newTestHandler("test-key", "seedance-2.0")
+	h := newTestHandler("test-key")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -126,7 +117,7 @@ func TestGenerateMissingPrompt(t *testing.T) {
 }
 
 func TestGenerateEmptyBody(t *testing.T) {
-	h := newTestHandler("test-key", "seedance-2.0")
+	h := newTestHandler("test-key")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -141,7 +132,7 @@ func TestGenerateEmptyBody(t *testing.T) {
 }
 
 func TestConfigOptionsModel(t *testing.T) {
-	h := newTestHandler("", "seedance-2.0")
+	h := newTestHandler("")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Params = gin.Params{{Key: "field", Value: "SEEDANCE_MODEL"}}
@@ -156,16 +147,16 @@ func TestConfigOptionsModel(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
 	options, ok := resp["options"].([]interface{})
-	if !ok || len(options) == 0 {
-		t.Errorf("expected non-empty options list, got %v", resp["options"])
+	if !ok || len(options) != 1 {
+		t.Errorf("expected 1 model option, got %v", resp["options"])
 	}
-	if resp["fallback"] != true {
-		t.Errorf("expected fallback=true (static list), got %v", resp["fallback"])
+	if options[0] != "seedance-2.0" {
+		t.Errorf("expected seedance-2.0, got %v", options[0])
 	}
 }
 
 func TestConfigOptionsUnknownField(t *testing.T) {
-	h := newTestHandler("", "seedance-2.0")
+	h := newTestHandler("")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Params = gin.Params{{Key: "field", Value: "UNKNOWN"}}
@@ -186,7 +177,7 @@ func TestConfigOptionsUnknownField(t *testing.T) {
 }
 
 func TestUsageRecordsEmpty(t *testing.T) {
-	h := newTestHandler("test-key", "seedance-2.0")
+	h := newTestHandler("test-key")
 	h.usage = newTestTracker(t)
 
 	w := httptest.NewRecorder()
@@ -212,9 +203,10 @@ func TestUsageRecordsEmpty(t *testing.T) {
 }
 
 func TestStatusNotFound(t *testing.T) {
-	h := newTestHandler("test-key", "seedance-2.0")
+	h := newTestHandler("test-key")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/status/nonexistent", nil)
 	c.Params = gin.Params{{Key: "taskId", Value: "nonexistent"}}
 
 	h.Status(c)

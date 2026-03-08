@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/nanobanana"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/usage"
 )
@@ -23,13 +22,13 @@ type Handler struct {
 	usage  *usage.Tracker
 }
 
-func NewHandler(cfg *config.Config) *Handler {
+func NewHandler(apiKey, model, dataPath string, debug bool) *Handler {
 	return &Handler{
-		apiKey: cfg.APIKey,
-		model:  cfg.Model,
-		debug:  cfg.Debug,
-		client: nanobanana.NewClient(cfg.APIKey, cfg.Model, cfg.Debug),
-		usage:  usage.NewTracker(cfg.DataPath),
+		apiKey: apiKey,
+		model:  model,
+		debug:  debug,
+		client: nanobanana.NewClient(apiKey, model, debug),
+		usage:  usage.NewTracker(dataPath),
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/tool-stability/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-stability/internal/usage"
 )
 
@@ -22,12 +21,7 @@ func init() {
 }
 
 func newTestHandler(apiKey, model string) *Handler {
-	cfg := &config.Config{
-		APIKey:   apiKey,
-		Model:    model,
-		DataPath: "/tmp/test-stability",
-	}
-	return NewHandler(cfg)
+	return NewHandler(apiKey, model, "/tmp/test-stability", false)
 }
 
 func TestHealth(t *testing.T) {

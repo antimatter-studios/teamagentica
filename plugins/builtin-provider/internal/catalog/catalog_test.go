@@ -35,13 +35,13 @@ func TestSearch_ByName(t *testing.T) {
 	}
 	found := false
 	for _, r := range results {
-		if r.PluginID == "telegram-bot" {
+		if r.PluginID == "messaging-telegram" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected telegram-bot in results")
+		t.Error("expected messaging-telegram in results")
 	}
 }
 
@@ -52,13 +52,13 @@ func TestSearch_ByTag(t *testing.T) {
 	}
 	found := false
 	for _, r := range results {
-		if r.PluginID == "discord-bot" {
+		if r.PluginID == "messaging-discord" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected discord-bot in results")
+		t.Error("expected messaging-discord in results")
 	}
 }
 
@@ -69,7 +69,7 @@ func TestSearch_ByDescription(t *testing.T) {
 	}
 	found := false
 	for _, r := range results {
-		if r.PluginID == "ngrok" {
+		if r.PluginID == "network-ngrok" {
 			found = true
 			break
 		}
@@ -152,8 +152,8 @@ func TestMatches_NoMatch(t *testing.T) {
 
 func TestOfficialCatalog_HasExpectedPlugins(t *testing.T) {
 	expectedIDs := []string{
-		"agent-openai", "discord-bot", "telegram-bot", "whatsapp-bot",
-		"ngrok", "webhook-ingress", "agent-gemini",
+		"agent-openai", "messaging-discord", "messaging-telegram", "messaging-whatsapp",
+		"network-ngrok", "network-webhook-ingress", "agent-gemini",
 	}
 	for _, id := range expectedIDs {
 		found := false

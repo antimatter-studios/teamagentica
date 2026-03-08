@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/seedance"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/usage"
 )
@@ -19,7 +18,6 @@ import (
 type task struct {
 	ID          string    `json:"id"`
 	Prompt      string    `json:"prompt"`
-	Model       string    `json:"model"`
 	RemoteID    string    `json:"remote_id"` // Seedance task_id
 	Status      string    `json:"status"`    // "processing", "completed", "failed"
 	VideoURL    string    `json:"video_url,omitempty"`
@@ -30,7 +28,6 @@ type task struct {
 
 type Handler struct {
 	apiKey string
-	model  string
 	debug  bool
 	sdk    *pluginsdk.Client
 	client *seedance.Client
@@ -41,13 +38,12 @@ type Handler struct {
 	nextID int
 }
 
-func NewHandler(cfg *config.Config) *Handler {
+func NewHandler(apiKey, dataPath string, debug bool) *Handler {
 	return &Handler{
-		apiKey: cfg.APIKey,
-		model:  cfg.Model,
-		debug:  cfg.Debug,
-		client: seedance.NewClient(cfg.APIKey, cfg.Model, cfg.Debug),
-		usage:  usage.NewTracker(cfg.DataPath),
+		apiKey: apiKey,
+		debug:  debug,
+		client: seedance.NewClient(apiKey, debug),
+		usage:  usage.NewTracker(dataPath),
 		tasks:  make(map[string]*task),
 	}
 }
@@ -68,15 +64,17 @@ func (h *Handler) Health(c *gin.Context) {
 		"plugin":     "tool-seedance",
 		"version":    "1.0.0",
 		"configured": h.apiKey != "",
-		"model":      h.model,
 	})
 }
 
 type generateRequest struct {
-	Prompt         string `json:"prompt" binding:"required"`
-	AspectRatio    string `json:"aspect_ratio,omitempty"`
-	NegativePrompt string `json:"negative_prompt,omitempty"`
-	Duration       int    `json:"duration,omitempty"`
+	Prompt        string   `json:"prompt" binding:"required"`
+	AspectRatio   string   `json:"aspect_ratio,omitempty"`
+	Resolution    string   `json:"resolution,omitempty"`
+	Duration      string   `json:"duration,omitempty"`
+	GenerateAudio bool     `json:"generate_audio,omitempty"`
+	FixedLens     bool     `json:"fixed_lens,omitempty"`
+	ImageURLs     []string `json:"image_urls,omitempty"`
 }
 
 func (h *Handler) Generate(c *gin.Context) {
@@ -93,13 +91,16 @@ func (h *Handler) Generate(c *gin.Context) {
 
 	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
 
-	h.emitEvent("generate_request", fmt.Sprintf("model=%s prompt=%s", h.model, truncateStr(req.Prompt, 100)))
+	h.emitEvent("generate_request", fmt.Sprintf("prompt=%s", truncateStr(req.Prompt, 100)))
 
 	result, err := h.client.Generate(seedance.GenerateRequest{
-		Prompt:         req.Prompt,
-		AspectRatio:    req.AspectRatio,
-		NegativePrompt: req.NegativePrompt,
-		Duration:       req.Duration,
+		Prompt:        req.Prompt,
+		AspectRatio:   req.AspectRatio,
+		Resolution:    req.Resolution,
+		Duration:      req.Duration,
+		GenerateAudio: req.GenerateAudio,
+		FixedLens:     req.FixedLens,
+		ImageURLs:     req.ImageURLs,
 	})
 	if err != nil {
 		log.Printf("Seedance generate error: %v", err)
@@ -115,7 +116,6 @@ func (h *Handler) Generate(c *gin.Context) {
 	t := &task{
 		ID:        taskID,
 		Prompt:    req.Prompt,
-		Model:     h.model,
 		RemoteID:  result.TaskID,
 		Status:    "processing",
 		CreatedAt: time.Now().UTC(),
@@ -124,7 +124,7 @@ func (h *Handler) Generate(c *gin.Context) {
 	h.mu.Unlock()
 
 	h.usage.RecordRequest(usage.RequestRecord{
-		Model:  h.model,
+		Model:  "seedance-2.0",
 		Prompt: truncateStr(req.Prompt, 200),
 		TaskID: taskID,
 		Status: "submitted",
@@ -133,7 +133,7 @@ func (h *Handler) Generate(c *gin.Context) {
 		h.sdk.ReportUsage(pluginsdk.UsageReport{
 			UserID:     userID,
 			Provider:   "seedance",
-			Model:      h.model,
+			Model:      "seedance-2.0",
 			RecordType: "request",
 			Status:     "submitted",
 			Prompt:     truncateStr(req.Prompt, 200),
@@ -170,7 +170,6 @@ func (h *Handler) Status(c *gin.Context) {
 			"status":       t.Status,
 			"video_url":    t.VideoURL,
 			"error":        t.Error,
-			"model":        t.Model,
 			"prompt":       t.Prompt,
 			"created_at":   t.CreatedAt,
 			"completed_at": t.CompletedAt,
@@ -186,7 +185,6 @@ func (h *Handler) Status(c *gin.Context) {
 			"task_id": t.ID,
 			"status":  "processing",
 			"error":   "status check failed: " + err.Error(),
-			"model":   t.Model,
 			"prompt":  t.Prompt,
 		})
 		return
@@ -203,7 +201,7 @@ func (h *Handler) Status(c *gin.Context) {
 
 		elapsed := t.CompletedAt.Sub(t.CreatedAt)
 		h.usage.RecordRequest(usage.RequestRecord{
-			Model:      t.Model,
+			Model:      "seedance-2.0",
 			Prompt:     truncateStr(t.Prompt, 200),
 			TaskID:     t.ID,
 			Status:     "completed",
@@ -213,7 +211,7 @@ func (h *Handler) Status(c *gin.Context) {
 			h.sdk.ReportUsage(pluginsdk.UsageReport{
 				UserID:     userID,
 				Provider:   "seedance",
-				Model:      t.Model,
+				Model:      "seedance-2.0",
 				RecordType: "request",
 				Status:     "completed",
 				Prompt:     truncateStr(t.Prompt, 200),
@@ -231,7 +229,7 @@ func (h *Handler) Status(c *gin.Context) {
 		h.mu.Unlock()
 
 		h.usage.RecordRequest(usage.RequestRecord{
-			Model:  t.Model,
+			Model:  "seedance-2.0",
 			Prompt: truncateStr(t.Prompt, 200),
 			TaskID: t.ID,
 			Status: "failed",
@@ -240,7 +238,7 @@ func (h *Handler) Status(c *gin.Context) {
 			h.sdk.ReportUsage(pluginsdk.UsageReport{
 				UserID:     userID,
 				Provider:   "seedance",
-				Model:      t.Model,
+				Model:      "seedance-2.0",
 				RecordType: "request",
 				Status:     "failed",
 				Prompt:     truncateStr(t.Prompt, 200),
@@ -255,7 +253,6 @@ func (h *Handler) Status(c *gin.Context) {
 		"status":       t.Status,
 		"video_url":    t.VideoURL,
 		"error":        t.Error,
-		"model":        t.Model,
 		"prompt":       t.Prompt,
 		"created_at":   t.CreatedAt,
 		"completed_at": t.CompletedAt,
@@ -267,8 +264,7 @@ func (h *Handler) ConfigOptions(c *gin.Context) {
 
 	switch field {
 	case "SEEDANCE_MODEL":
-		// Seedance doesn't have a list-models endpoint yet; return static list.
-		c.JSON(http.StatusOK, gin.H{"options": defaultModels(), "fallback": true})
+		c.JSON(http.StatusOK, gin.H{"options": []string{"seedance-2.0"}})
 	default:
 		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Unknown field"})
 	}
@@ -286,14 +282,6 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 		records = []usage.RequestRecord{}
 	}
 	c.JSON(http.StatusOK, gin.H{"records": records})
-}
-
-func defaultModels() []string {
-	return []string{
-		"seedance-2.0",
-		"seedance-1.0-pro",
-		"seedance-1.0-lite",
-	}
 }
 
 func truncateStr(s string, maxLen int) string {

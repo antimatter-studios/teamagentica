@@ -1,0 +1,1068 @@
+- author: teamagentica
+  config_schema:
+    ANTHROPIC_API_KEY:
+        help_text: Get your API key at https://console.anthropic.com/settings/keys
+        label: API Key
+        order: 2
+        required: true
+        secret: true
+        type: string
+        visible_when:
+            field: CLAUDE_BACKEND
+            value: api_key
+    CLAUDE_BACKEND:
+        default: cli
+        help_text: Choose how to interact with Claude
+        label: Backend
+        options:
+            - cli
+            - api_key
+        order: 1
+        type: select
+    CLAUDE_MODEL:
+        default: claude-sonnet-4-6
+        dynamic: true
+        label: Model
+        order: 3
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - cached_per_1m: 1.875
+      currency: USD
+      input_per_1m: 15
+      model: claude-opus-4-6
+      output_per_1m: 75
+      provider: anthropic
+    - cached_per_1m: 0.375
+      currency: USD
+      input_per_1m: 3
+      model: claude-sonnet-4-6
+      output_per_1m: 15
+      provider: anthropic
+    - cached_per_1m: 0.08
+      currency: USD
+      input_per_1m: 0.8
+      model: claude-haiku-4-5-20251001
+      output_per_1m: 4
+      provider: anthropic
+  description: AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration
+  group: agents
+  id: agent-claude
+  image: teamagentica-agent-claude:latest
+  name: Claude Agent
+  tags:
+    - chat
+    - ai
+    - agent
+    - claude
+    - anthropic
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    GEMINI_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    GEMINI_MODEL:
+        default: gemini-2.5-flash
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - cached_per_1m: 0.0375
+      currency: USD
+      input_per_1m: 0.15
+      model: gemini-2.5-flash
+      output_per_1m: 0.6
+      provider: gemini
+    - cached_per_1m: 0.3125
+      currency: USD
+      input_per_1m: 1.25
+      model: gemini-2.5-pro
+      output_per_1m: 10
+      provider: gemini
+    - cached_per_1m: 0.025
+      currency: USD
+      input_per_1m: 0.1
+      model: gemini-2.0-flash
+      output_per_1m: 0.4
+      provider: gemini
+  description: AI agent powered by Google Gemini models including Flash and Pro
+  group: agents
+  id: agent-gemini
+  image: teamagentica-agent-gemini:latest
+  name: Google Gemini Agent
+  tags:
+    - chat
+    - ai
+    - agent
+    - gemini
+    - google
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    INCEPTION_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    INCEPTION_DIFFUSING:
+        default: "false"
+        label: Diffusing Mode
+        order: 4
+        type: boolean
+    INCEPTION_INSTANT:
+        default: "false"
+        label: Instant Mode
+        order: 3
+        type: boolean
+    INCEPTION_MODEL:
+        default: mercury-2
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - currency: USD
+      input_per_1m: 0.25
+      model: mercury-2
+      output_per_1m: 0.75
+      provider: inception
+    - currency: USD
+      input_per_1m: 0.25
+      model: mercury-coder-small
+      output_per_1m: 0.75
+      provider: inception
+    - currency: USD
+      input_per_1m: 0.25
+      model: mercury-edit
+      output_per_1m: 0.75
+      provider: inception
+  description: AI agent powered by Inception Labs Mercury 2, the world's fastest diffusion-based reasoning LLM
+  group: agents
+  id: agent-inception
+  image: teamagentica-agent-inception:latest
+  name: Inception Mercury
+  tags:
+    - chat
+    - ai
+    - agent
+    - inception
+    - mercury
+    - diffusion
+    - code
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    KIMI_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    KIMI_MODEL:
+        default: kimi-k2-turbo-preview
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - cached_per_1m: 0.29
+      currency: USD
+      input_per_1m: 1.15
+      model: kimi-k2-turbo-preview
+      output_per_1m: 8
+      provider: moonshot
+    - cached_per_1m: 0.15
+      currency: USD
+      input_per_1m: 0.6
+      model: kimi-k2.5
+      output_per_1m: 3
+      provider: moonshot
+    - cached_per_1m: 0.15
+      currency: USD
+      input_per_1m: 0.6
+      model: kimi-k2-0905-preview
+      output_per_1m: 2.5
+      provider: moonshot
+    - cached_per_1m: 0.15
+      currency: USD
+      input_per_1m: 0.6
+      model: kimi-k2-0711-preview
+      output_per_1m: 2.5
+      provider: moonshot
+    - cached_per_1m: 0.15
+      currency: USD
+      input_per_1m: 0.6
+      model: kimi-k2-thinking
+      output_per_1m: 2.5
+      provider: moonshot
+    - cached_per_1m: 0.29
+      currency: USD
+      input_per_1m: 1.15
+      model: kimi-k2-thinking-turbo
+      output_per_1m: 8
+      provider: moonshot
+  description: AI agent powered by Moonshot's Kimi K2 with 128K context and thinking mode
+  group: agents
+  id: agent-kimi
+  image: teamagentica-agent-kimi:latest
+  name: Kimi K2 Agent
+  tags:
+    - chat
+    - ai
+    - agent
+    - kimi
+    - moonshot
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    OPENAI_API_KEY:
+        help_text: Get your API key at https://platform.openai.com/api-keys
+        label: API Key
+        order: 2
+        required: true
+        secret: true
+        type: string
+        visible_when:
+            field: OPENAI_BACKEND
+            value: api_key
+    OPENAI_AUTH:
+        help_text: Authenticate with your OpenAI account to use Codex models
+        label: Login with OpenAI
+        order: 2
+        type: oauth
+        visible_when:
+            field: OPENAI_BACKEND
+            value: subscription
+    OPENAI_BACKEND:
+        default: subscription
+        help_text: Choose how to authenticate with OpenAI
+        label: Backend
+        options:
+            - subscription
+            - api_key
+        order: 1
+        type: select
+    OPENAI_MODEL:
+        default: gpt-4o
+        dynamic: true
+        label: Model
+        order: 3
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - cached_per_1m: 1.25
+      currency: USD
+      input_per_1m: 2.5
+      model: gpt-4o
+      output_per_1m: 10
+      provider: openai
+    - cached_per_1m: 0.075
+      currency: USD
+      input_per_1m: 0.15
+      model: gpt-4o-mini
+      output_per_1m: 0.6
+      provider: openai
+    - cached_per_1m: 0.275
+      currency: USD
+      input_per_1m: 1.1
+      model: o4-mini
+      output_per_1m: 4.4
+      provider: openai
+    - cached_per_1m: 0.625
+      currency: USD
+      input_per_1m: 1.25
+      model: gpt-5.1-codex
+      output_per_1m: 10
+      provider: openai
+  description: AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities
+  group: agents
+  id: agent-openai
+  image: teamagentica-agent-openai:latest
+  name: OpenAI Agent
+  tags:
+    - chat
+    - ai
+    - agent
+    - codex
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    OPENROUTER_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    OPENROUTER_MODEL:
+        default: google/gemini-2.5-flash
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - cached_per_1m: 0.0375
+      currency: USD
+      input_per_1m: 0.15
+      model: google/gemini-2.5-flash
+      output_per_1m: 0.6
+      provider: openrouter
+    - cached_per_1m: 1.25
+      currency: USD
+      input_per_1m: 2.5
+      model: openai/gpt-4o
+      output_per_1m: 10
+      provider: openrouter
+    - cached_per_1m: 0.3
+      currency: USD
+      input_per_1m: 3
+      model: anthropic/claude-sonnet-4
+      output_per_1m: 15
+      provider: openrouter
+    - cached_per_1m: 0.3125
+      currency: USD
+      input_per_1m: 1.25
+      model: google/gemini-2.5-pro
+      output_per_1m: 10
+      provider: openrouter
+    - currency: USD
+      input_per_1m: 0.5
+      model: meta-llama/llama-4-maverick
+      output_per_1m: 1.5
+      provider: openrouter
+  description: AI router providing access to hundreds of models from OpenAI, Anthropic, Google, Meta and more via OpenRouter
+  group: agents
+  id: agent-openrouter
+  image: teamagentica-agent-openrouter:latest
+  name: OpenRouter
+  tags:
+    - chat
+    - ai
+    - agent
+    - openrouter
+    - router
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    REQUESTY_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    REQUESTY_MODEL:
+        default: google/gemini-2.5-flash
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+  default_pricing:
+    - cached_per_1m: 0.0375
+      currency: USD
+      input_per_1m: 0.15
+      model: google/gemini-2.5-flash
+      output_per_1m: 0.6
+      provider: requesty
+    - cached_per_1m: 1.25
+      currency: USD
+      input_per_1m: 2.5
+      model: openai/gpt-4o
+      output_per_1m: 10
+      provider: requesty
+    - cached_per_1m: 0.3
+      currency: USD
+      input_per_1m: 3
+      model: anthropic/claude-sonnet-4-20250514
+      output_per_1m: 15
+      provider: requesty
+    - cached_per_1m: 0.3125
+      currency: USD
+      input_per_1m: 1.25
+      model: google/gemini-2.5-pro
+      output_per_1m: 10
+      provider: requesty
+    - cached_per_1m: 0.075
+      currency: USD
+      input_per_1m: 0.15
+      model: openai/gpt-4o-mini
+      output_per_1m: 0.6
+      provider: requesty
+  description: AI router providing unified access to OpenAI, Anthropic, Google and more via Requesty
+  group: agents
+  id: agent-requesty
+  image: teamagentica-agent-requesty:latest
+  name: Requesty Router
+  tags:
+    - chat
+    - ai
+    - agent
+    - requesty
+    - router
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Default marketplace provider serving the official plugin catalog
+  group: infrastructure
+  id: builtin-provider
+  image: teamagentica-builtin-provider:latest
+  name: Builtin Plugin Provider
+  tags:
+    - system
+    - marketplace
+    - provider
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Centralized usage tracking and cost analytics for all AI agent and tool plugins
+  group: infrastructure
+  id: infra-cost-explorer
+  image: teamagentica-infra-cost-explorer:latest
+  name: Cost Explorer
+  tags:
+    - system
+    - costs
+    - usage
+    - analytics
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Cron-style scheduled event system for automated workflows and recurring jobs
+  group: infrastructure
+  id: infra-cron-scheduler
+  image: teamagentica-infra-cron-scheduler:latest
+  name: Cron Scheduler
+  tags:
+    - infrastructure
+    - cron
+    - scheduler
+    - automation
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Model Context Protocol server that exposes platform tools and agent routing to all AI agents via MCP
+  group: infrastructure
+  id: infra-mcp-server
+  image: teamagentica-infra-mcp-server:latest
+  name: MCP Server
+  tags:
+    - infrastructure
+    - mcp
+    - tools
+    - routing
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Workspace lifecycle management - create, list, delete, and persist git-backed workspaces for AI coding agents
+  group: infrastructure
+  id: infra-workspace-manager
+  image: teamagentica-infra-workspace-manager:latest
+  name: Workspace Manager
+  tags:
+    - workspace
+    - git
+    - infrastructure
+    - coding
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    DEFAULT_AGENT:
+        dynamic: true
+        label: Default Agent
+        order: 1
+        type: select
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Built-in web chat interface for conversing with AI agents
+  group: messaging
+  id: messaging-chat
+  image: teamagentica-messaging-chat:latest
+  name: Web Chat
+  tags:
+    - system
+    - chat
+    - ui
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    DEFAULT_AGENT:
+        dynamic: true
+        help_text: Select the default agent to handle messages
+        label: Coordinator Agent
+        order: 5
+        type: select
+    DISCORD_BOT_TOKEN:
+        label: Discord Bot Token
+        order: 1
+        required: true
+        secret: true
+        type: string
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Discord bot integration for receiving and responding to messages
+  group: messaging
+  id: messaging-discord
+  image: teamagentica-messaging-discord:latest
+  name: Discord Bot
+  tags:
+    - chat
+    - discord
+    - bot
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    DEFAULT_AGENT:
+        dynamic: true
+        help_text: Select the default agent to handle messages
+        label: Default Agent
+        order: 5
+        type: select
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    TELEGRAM_ALLOWED_USERS:
+        help_text: Comma-separated Telegram user IDs that are allowed to interact with the bot
+        label: Allowed Users
+        order: 4
+        type: string
+    TELEGRAM_BOT_TOKEN:
+        label: Telegram Bot Token
+        order: 1
+        required: true
+        secret: true
+        type: string
+    TELEGRAM_MODE:
+        default: poll
+        label: Mode
+        options:
+            - poll
+            - webhook
+        order: 2
+        type: select
+    TELEGRAM_POLL_TIMEOUT:
+        default: 60
+        help_text: Long poll timeout in seconds
+        label: Poll Timeout
+        order: 3
+        type: number
+        visible_when:
+            field: TELEGRAM_MODE
+            value: poll
+    TELEGRAM_WEBHOOK_URL:
+        help_text: Public HTTPS URL for receiving Telegram webhook updates
+        label: Webhook URL
+        order: 3
+        type: string
+        visible_when:
+            field: TELEGRAM_MODE
+            value: webhook
+  description: Telegram bot integration for receiving and responding to messages
+  group: messaging
+  id: messaging-telegram
+  image: teamagentica-messaging-telegram:latest
+  name: Telegram Bot
+  tags:
+    - chat
+    - telegram
+    - bot
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    DEFAULT_AGENT:
+        dynamic: true
+        help_text: Select the default agent to handle messages
+        label: Coordinator Agent
+        order: 5
+        type: select
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    WHATSAPP_ACCESS_TOKEN:
+        label: Access Token
+        order: 1
+        required: true
+        secret: true
+        type: string
+    WHATSAPP_APP_SECRET:
+        label: App Secret
+        order: 4
+        secret: true
+        type: string
+    WHATSAPP_PHONE_NUMBER_ID:
+        label: Phone Number ID
+        order: 2
+        required: true
+        type: string
+    WHATSAPP_VERIFY_TOKEN:
+        label: Verify Token
+        order: 3
+        required: true
+        type: string
+  description: WhatsApp bot integration using the WhatsApp Business Cloud API for receiving and responding to messages
+  group: messaging
+  id: messaging-whatsapp
+  image: teamagentica-messaging-whatsapp:latest
+  name: WhatsApp Bot
+  tags:
+    - chat
+    - whatsapp
+    - bot
+    - messaging
+  version: 1.0.0
+- author: TeamAgentica
+  config_schema:
+    NGROK_AUTHTOKEN:
+        label: Auth Token
+        required: true
+        secret: true
+        type: string
+    NGROK_DOMAIN:
+        label: Domain
+        type: string
+    NGROK_TUNNEL_TARGET:
+        label: Tunnel Target
+        type: string
+  description: Creates an ngrok tunnel for exposing plugin services to the internet. Publishes tunnel URL events for other plugins to consume.
+  group: network
+  id: network-ngrok
+  image: teamagentica-network-ngrok:latest
+  name: ngrok Tunnel
+  tags:
+    - tunnel
+    - networking
+    - ngrok
+    - webhook
+  version: 1.0.0
+- author: TeamAgentica
+  config_schema:
+    WEBHOOK_INGRESS_PORT:
+        default: 9000
+        label: Ingress Port
+        type: number
+  description: Public-facing HTTP server that routes external webhook traffic to plugins
+  group: network
+  id: network-webhook-ingress
+  image: teamagentica-network-webhook-ingress:latest
+  name: Webhook Ingress
+  tags:
+    - webhook
+    - ingress
+    - networking
+    - routing
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    S3_ACCESS_KEY:
+        default: minioadmin
+        label: Access Key
+        order: 3
+        required: true
+        secret: true
+        type: string
+    S3_BUCKET:
+        default: teamagentica
+        label: Bucket
+        order: 2
+        required: true
+        type: string
+    S3_ENDPOINT:
+        default: http://sss3:9000
+        label: Endpoint
+        order: 1
+        required: true
+        type: string
+    S3_REGION:
+        default: us-east-1
+        label: Region
+        order: 5
+        type: string
+    S3_SECRET_KEY:
+        default: minioadmin
+        label: Secret Key
+        order: 4
+        required: true
+        secret: true
+        type: string
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin.
+        label: Aliases
+        order: 90
+        type: aliases
+  description: S3-compatible object storage powered by stupid-simple-s3
+  group: storage
+  id: storage-sss3
+  image: teamagentica-storage-sss3:latest
+  name: S3 Storage
+  tags:
+    - storage
+    - s3
+    - files
+    - media
+    - tool
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Managed disk volumes for isolated task storage. Provides persistent disks that other plugins (e.g. workspace-manager) use to create isolated work areas.
+  group: storage
+  id: storage-volume
+  image: teamagentica-storage-volume:latest
+  name: Disk Storage
+  tags:
+    - storage
+    - volume
+    - disk
+    - infrastructure
+    - tool
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    GEMINI_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    NANOBANANA_MODEL:
+        default: gemini-2.5-flash-image
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+  default_pricing:
+    - cached_per_1m: 0.0375
+      currency: USD
+      input_per_1m: 0.15
+      model: gemini-2.5-flash-image
+      output_per_1m: 0.6
+      provider: nanobanana
+    - cached_per_1m: 0.0375
+      currency: USD
+      input_per_1m: 0.15
+      model: gemini-3.1-flash-image-preview
+      output_per_1m: 0.6
+      provider: nanobanana
+    - cached_per_1m: 0.3125
+      currency: USD
+      input_per_1m: 1.25
+      model: gemini-3-pro-image-preview
+      output_per_1m: 10
+      provider: nanobanana
+  description: AI image generation using Google Gemini's native image output
+  group: tools
+  id: tool-nanobanana
+  image: teamagentica-tool-nanobanana:latest
+  name: Nano Banana Image
+  tags:
+    - image
+    - ai
+    - tool
+    - gemini
+    - google
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    SEEDANCE_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    SEEDANCE_MODEL:
+        default: seedance-2.0
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+  default_pricing:
+    - currency: USD
+      model: seedance-2.0
+      per_request: 0.03
+      provider: seedance
+  description: AI video generation tool powered by ByteDance Seedance
+  group: tools
+  id: tool-seedance
+  image: teamagentica-tool-seedance:latest
+  name: Seedance Video
+  tags:
+    - video
+    - ai
+    - tool
+    - seedance
+    - bytedance
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    STABILITY_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    STABILITY_MODEL:
+        default: sd3-medium
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+  default_pricing:
+    - currency: USD
+      model: sd3-medium
+      per_request: 0.035
+      provider: stability
+    - currency: USD
+      model: sd3-large
+      per_request: 0.065
+      provider: stability
+    - currency: USD
+      model: sd3-large-turbo
+      per_request: 0.04
+      provider: stability
+  description: AI image generation powered by Stable Diffusion 3
+  group: tools
+  id: tool-stability
+  image: teamagentica-tool-stability:latest
+  name: Stability AI Image
+  tags:
+    - image
+    - ai
+    - tool
+    - stability
+    - stable-diffusion
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    GEMINI_API_KEY:
+        label: API Key
+        order: 1
+        required: true
+        secret: true
+        type: string
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.
+        label: Aliases
+        order: 90
+        type: aliases
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
+        label: Debug Mode
+        order: 99
+        type: boolean
+    VEO_MODEL:
+        default: veo-3.1-generate-preview
+        dynamic: true
+        label: Model
+        order: 2
+        type: select
+  default_pricing:
+    - currency: USD
+      model: veo-3.1-generate-preview
+      per_request: 0.025
+      provider: veo
+  description: AI video generation tool powered by Google Veo
+  group: tools
+  id: tool-veo
+  image: teamagentica-tool-veo:latest
+  name: Google Veo Video
+  tags:
+    - video
+    - ai
+    - tool
+    - veo
+    - google
+    - gemini
+  version: 1.0.0
+- author: teamagentica
+  config_schema:
+    CODE_SERVER_THEME:
+        default: dark
+        label: Color Theme
+        options:
+            - dark
+            - light
+        order: 1
+        type: select
+    PLUGIN_DEBUG:
+        default: "false"
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: VS Code in the browser — edit workspace files with a full IDE including terminal, extensions, and git
+  group: user
+  id: user-vscode-server
+  image: teamagentica-user-vscode-server:latest
+  name: VS Code Server
+  tags:
+    - workspace
+    - editor
+    - ide
+    - vscode
+  version: 1.0.0

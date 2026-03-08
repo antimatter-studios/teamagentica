@@ -6,36 +6,29 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/handlers"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	cfg := config.Load()
+	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
+	if pluginID == "" {
+		pluginID = "tool-nanobanana"
+	}
 
-	router := gin.Default()
-
-	h := handlers.NewHandler(cfg)
-
-	router.GET("/health", h.Health)
-	router.POST("/generate", h.Generate)
-	router.POST("/chat", h.Chat)
-	router.GET("/tools", h.Tools)
-	router.GET("/config/options/:field", h.ConfigOptions)
-	router.GET("/usage", h.Usage)
-	router.GET("/usage/records", h.UsageRecords)
+	const defaultPort = 8081
 
 	sdkCfg := pluginsdk.LoadConfig()
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           cfg.PluginID,
+		ID:           pluginID,
 		Host:         getHostname(),
-		Port:         cfg.Port,
+		Port:         defaultPort,
 		Capabilities: []string{"tool:image", "tool:image:nanobanana"},
 		Version:      "1.0.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
@@ -46,7 +39,42 @@ func main() {
 		},
 	})
 	sdkClient.Start(context.Background())
+
+	pluginConfig, err := sdkClient.FetchConfig()
+	if err != nil {
+		log.Fatalf("Failed to fetch plugin config: %v", err)
+	}
+
+	apiKey := pluginConfig["GEMINI_API_KEY"]
+	model := pluginConfig["NANOBANANA_MODEL"]
+	if model == "" {
+		model = "gemini-2.5-flash-image"
+	}
+	dataPath := pluginConfig["NANOBANANA_DATA_PATH"]
+	if dataPath == "" {
+		dataPath = "/data"
+	}
+	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
+
+	port := defaultPort
+	if portStr := pluginConfig["TOOL_NANOBANANA_PORT"]; portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+
+	router := gin.Default()
+
+	h := handlers.NewHandler(apiKey, model, dataPath, debug)
 	h.SetSDK(sdkClient)
+
+	router.GET("/health", h.Health)
+	router.POST("/generate", h.Generate)
+	router.POST("/chat", h.Chat)
+	router.GET("/tools", h.Tools)
+	router.GET("/config/options/:field", h.ConfigOptions)
+	router.GET("/usage", h.Usage)
+	router.GET("/usage/records", h.UsageRecords)
 
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
@@ -58,7 +86,7 @@ func main() {
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)

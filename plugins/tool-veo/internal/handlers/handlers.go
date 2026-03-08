@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/usage"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/veo"
 )
@@ -41,13 +40,13 @@ type Handler struct {
 	nextID int
 }
 
-func NewHandler(cfg *config.Config) *Handler {
+func NewHandler(apiKey, model, dataPath string, debug bool) *Handler {
 	return &Handler{
-		apiKey: cfg.APIKey,
-		model:  cfg.Model,
-		debug:  cfg.Debug,
-		client: veo.NewClient(cfg.APIKey, cfg.Model, cfg.Debug),
-		usage:  usage.NewTracker(cfg.DataPath),
+		apiKey: apiKey,
+		model:  model,
+		debug:  debug,
+		client: veo.NewClient(apiKey, model, debug),
+		usage:  usage.NewTracker(dataPath),
 		tasks:  make(map[string]*task),
 	}
 }

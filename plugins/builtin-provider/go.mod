@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v0.0.0-00010101000000-000000000000
 	github.com/gin-gonic/gin v1.10.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -33,7 +34,6 @@ require (
 	golang.org/x/sys v0.20.0 // indirect
 	golang.org/x/text v0.15.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk

@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/config"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/usage"
 )
 
@@ -22,12 +21,7 @@ func newTestTracker(t *testing.T) *usage.Tracker {
 }
 
 func newTestHandler(apiKey, model string) *Handler {
-	cfg := &config.Config{
-		APIKey:   apiKey,
-		Model:    model,
-		DataPath: "/tmp/test-nanobanana",
-	}
-	return NewHandler(cfg)
+	return NewHandler(apiKey, model, "/tmp/test-nanobanana", false)
 }
 
 func TestHealth(t *testing.T) {

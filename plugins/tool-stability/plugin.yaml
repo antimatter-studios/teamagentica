@@ -1,0 +1,45 @@
+id: tool-stability
+name: "Stability AI Image"
+description: "AI image generation powered by Stable Diffusion 3"
+group: tools
+version: "1.0.0"
+image: "teamagentica-tool-stability:latest"
+author: teamagentica
+tags: [image, ai, tool, stability, stable-diffusion]
+config_schema:
+  STABILITY_API_KEY:
+    type: string
+    label: "API Key"
+    required: true
+    secret: true
+    order: 1
+  STABILITY_MODEL:
+    type: select
+    label: Model
+    default: sd3-medium
+    dynamic: true
+    order: 2
+  PLUGIN_ALIASES:
+    type: aliases
+    label: Aliases
+    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
+    order: 90
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
+default_pricing:
+  - provider: stability
+    model: sd3-medium
+    per_request: 0.035
+    currency: USD
+  - provider: stability
+    model: sd3-large
+    per_request: 0.065
+    currency: USD
+  - provider: stability
+    model: sd3-large-turbo
+    per_request: 0.04
+    currency: USD
