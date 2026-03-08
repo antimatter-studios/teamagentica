@@ -8,11 +8,12 @@ import Marketplace from "./components/Marketplace";
 import PluginSettings from "./components/PluginSettings";
 import DebugConsole from "./components/DebugConsole";
 import CostDashboard from "./components/CostDashboard";
+import CodeEditor from "./components/CodeEditor";
 import { useAuthStore } from "./stores/authStore";
 import { searchPlugins } from "./api/plugins";
 import { useEventStore } from "./stores/eventStore";
 
-type Page = "dashboard" | "chat" | "files" | "marketplace" | "plugins" | "costs" | "console";
+type Page = "dashboard" | "chat" | "code" | "files" | "marketplace" | "plugins" | "costs" | "console";
 
 // Plugin lifecycle event types that can change which capabilities are available.
 const PLUGIN_LIFECYCLE_EVENTS = new Set([
@@ -28,6 +29,7 @@ export default function App() {
   const fetchUser = useAuthStore((s) => s.fetchUser);
   const [page, setPage] = useState<Page>("dashboard");
   const [hasChat, setHasChat] = useState(false);
+  const [hasEditor, setHasEditor] = useState(false);
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
   const disconnectEvents = useEventStore((s) => s.disconnect);
@@ -35,6 +37,9 @@ export default function App() {
   const checkCapabilities = useCallback(() => {
     searchPlugins("system:chat")
       .then((p) => setHasChat(p.length > 0))
+      .catch(() => {});
+    searchPlugins("workspace:editor")
+      .then((p) => setHasEditor(p.length > 0))
       .catch(() => {});
   }, []);
 
@@ -47,6 +52,7 @@ export default function App() {
     } else {
       disconnectEvents();
       setHasChat(false);
+      setHasEditor(false);
     }
     return () => disconnectEvents();
   }, [authenticated, fetchUser, connectEvents, disconnectEvents, checkCapabilities]);
@@ -66,12 +72,11 @@ export default function App() {
     }
   }, [events, checkCapabilities]);
 
-  // If user is on the chat page and chat becomes unavailable, redirect to dashboard.
+  // If user is on a capability page and it becomes unavailable, redirect to dashboard.
   useEffect(() => {
-    if (!hasChat && page === "chat") {
-      setPage("dashboard");
-    }
-  }, [hasChat, page]);
+    if (!hasChat && page === "chat") setPage("dashboard");
+    if (!hasEditor && page === "code") setPage("dashboard");
+  }, [hasChat, hasEditor, page]);
 
   const canAccessPlugins = user?.role === "admin";
 
@@ -101,6 +106,14 @@ export default function App() {
               onClick={() => setPage("chat")}
             >
               CHAT
+            </button>
+          )}
+          {hasEditor && (
+            <button
+              className={`nav-tab ${page === "code" ? "active" : ""}`}
+              onClick={() => setPage("code")}
+            >
+              CODE
             </button>
           )}
           <button
@@ -158,6 +171,7 @@ export default function App() {
 
       {page === "dashboard" && <Dashboard />}
       {page === "chat" && hasChat && <Chat />}
+      {page === "code" && hasEditor && <CodeEditor />}
       {page === "files" && <FileBrowser />}
       {page === "marketplace" && <Marketplace />}
       {page === "plugins" && <PluginSettings />}

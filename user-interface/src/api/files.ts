@@ -16,7 +16,7 @@ export interface BrowseResult {
 }
 
 export async function fetchStorageProviders(): Promise<Plugin[]> {
-  return searchPlugins("storage:api");
+  return searchPlugins("storage:");
 }
 
 export async function browseStorage(pluginId: string, prefix: string): Promise<BrowseResult> {
@@ -111,6 +111,19 @@ export async function downloadFile(pluginId: string, key: string): Promise<void>
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+export async function fetchObjectBlob(pluginId: string, key: string): Promise<Blob> {
+  const token = localStorage.getItem("teamagentica_token");
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}/api/route/${pluginId}/objects/${encodeURIComponent(key)}`, {
+    method: "GET",
+    headers,
+  });
+  if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+  return res.blob();
 }
 
 export function formatBytes(bytes: number): string {

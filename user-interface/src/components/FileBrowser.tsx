@@ -4,6 +4,8 @@ import { useFileStore } from "../stores/fileStore";
 import { useUploadStore } from "../stores/uploadStore";
 import { downloadFile, formatBytes, filenameFromKey, folderName } from "../api/files";
 import UploadQueue from "./UploadQueue";
+import FileInfoPanel from "./FileInfoPanel";
+import FolderTree from "./FolderTree";
 
 export default function FileBrowser() {
   const {
@@ -17,9 +19,10 @@ export default function FileBrowser() {
     loadProviders,
     selectProvider,
     browse,
-    navigateUp,
     deleteFile,
     refresh,
+    selectedFile,
+    selectFile,
   } = useFileStore(
     useShallow((s) => ({
       providers: s.providers,
@@ -32,9 +35,10 @@ export default function FileBrowser() {
       loadProviders: s.loadProviders,
       selectProvider: s.selectProvider,
       browse: s.browse,
-      navigateUp: s.navigateUp,
       deleteFile: s.deleteFile,
       refresh: s.refresh,
+      selectedFile: s.selectedFile,
+      selectFile: s.selectFile,
     }))
   );
 
@@ -82,21 +86,16 @@ export default function FileBrowser() {
         {providers.length === 0 ? (
           <div className="plugin-sidebar-empty">No storage providers found</div>
         ) : (
-          <div className="plugin-sidebar-list">
+          <div className="folder-tree-list">
             {providers.map((p) => (
-              <button
+              <FolderTree
                 key={p.id}
-                className={`plugin-sidebar-item ${selectedProvider?.id === p.id ? "active" : ""}`}
-                onClick={() => selectProvider(p)}
-              >
-                <span
-                  className="plugin-sidebar-status"
-                  style={{ color: p.status === "running" ? "var(--success)" : "var(--text-muted)" }}
-                >
-                  {"\u25CF"}
-                </span>
-                <span className="plugin-sidebar-name">{p.id}</span>
-              </button>
+                provider={p}
+                isSelected={selectedProvider?.id === p.id}
+                activePath={selectedProvider?.id === p.id ? prefix : ""}
+                onSelectProvider={selectProvider}
+                onNavigate={browse}
+              />
             ))}
           </div>
         )}
@@ -114,28 +113,23 @@ export default function FileBrowser() {
             {/* Toolbar */}
             <div className="file-toolbar">
               <div className="file-breadcrumbs">
-                {prefix && (
-                  <button className="file-breadcrumb-btn" onClick={navigateUp}>
-                    ..
-                  </button>
-                )}
                 <button
                   className="file-breadcrumb-btn"
                   onClick={() => browse("")}
                 >
-                  /
+                  {selectedProvider?.name || selectedProvider?.id || "Disk"}
                 </button>
                 {breadcrumbs.map((part, i) => {
                   const crumbPath = breadcrumbs.slice(0, i + 1).join("/") + "/";
                   return (
                     <span key={crumbPath}>
+                      <span className="file-breadcrumb-sep">/</span>
                       <button
                         className="file-breadcrumb-btn"
                         onClick={() => browse(crumbPath)}
                       >
                         {part}
                       </button>
-                      {i < breadcrumbs.length - 1 && <span className="file-breadcrumb-sep">/</span>}
                     </span>
                   );
                 })}
@@ -191,7 +185,11 @@ export default function FileBrowser() {
 
                 {/* Files */}
                 {files.map((f) => (
-                  <div key={f.key} className="file-row">
+                  <div
+                    key={f.key}
+                    className={`file-row file-selectable ${selectedFile?.key === f.key ? "selected" : ""}`}
+                    onClick={() => selectFile(selectedFile?.key === f.key ? null : f)}
+                  >
                     <span className="file-col-name">{filenameFromKey(f.key)}</span>
                     <span className="file-col-size">{formatBytes(f.size)}</span>
                     <span className="file-col-type">{f.content_type || "-"}</span>
@@ -203,14 +201,14 @@ export default function FileBrowser() {
                     <span className="file-col-actions">
                       <button
                         className="file-action-btn"
-                        onClick={() => handleDownload(f.key)}
+                        onClick={(e) => { e.stopPropagation(); handleDownload(f.key); }}
                         title="Download"
                       >
                         &#x2B07;
                       </button>
                       <button
                         className={`file-action-btn file-delete-btn ${confirmDelete === f.key ? "confirm" : ""}`}
-                        onClick={() => handleDelete(f.key)}
+                        onClick={(e) => { e.stopPropagation(); handleDelete(f.key); }}
                         title={confirmDelete === f.key ? "Click again to confirm" : "Delete"}
                       >
                         {confirmDelete === f.key ? "?" : "\u2716"}
@@ -223,6 +221,13 @@ export default function FileBrowser() {
           </>
         )}
       </div>
+      {selectedFile && selectedProvider && (
+        <FileInfoPanel
+          file={selectedFile}
+          pluginId={selectedProvider.id}
+          onClose={() => selectFile(null)}
+        />
+      )}
       <UploadQueue />
     </div>
   );

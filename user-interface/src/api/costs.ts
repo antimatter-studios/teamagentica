@@ -99,7 +99,7 @@ export async function fetchCostExplorerRecords(
   if (since) params.set("since", since);
   if (userID) params.set("user_id", userID);
   const qs = params.toString() ? `?${params}` : "";
-  return apiGet(`/api/route/cost-explorer/usage/records${qs}`);
+  return apiGet(`/api/route/infra-cost-explorer/usage/records${qs}`);
 }
 
 export interface CostExplorerUser {
@@ -108,7 +108,7 @@ export interface CostExplorerUser {
 }
 
 export async function fetchCostExplorerUsers(): Promise<{ users: CostExplorerUser[] }> {
-  return apiGet("/api/route/cost-explorer/usage/users");
+  return apiGet("/api/route/infra-cost-explorer/usage/users");
 }
 
 // External user mapping (kernel API).

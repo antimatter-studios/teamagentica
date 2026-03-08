@@ -4,12 +4,20 @@ export interface MarketplacePlugin {
   plugin_id: string;
   name: string;
   description: string;
+  group: string;
   version: string;
   image: string;
   author: string;
   tags: string[];
   config_schema: Record<string, unknown>;
   provider: string;
+}
+
+export interface MarketplaceGroup {
+  id: string;
+  name: string;
+  description: string;
+  order: number;
 }
 
 export interface MarketplaceProvider {
@@ -23,6 +31,7 @@ export interface MarketplaceProvider {
 
 interface BrowseResponse {
   plugins: MarketplacePlugin[];
+  groups: MarketplaceGroup[];
 }
 
 interface ProvidersResponse {
@@ -34,10 +43,10 @@ interface InstallResponse {
   plugin: unknown;
 }
 
-export async function browseMarketplace(query?: string): Promise<MarketplacePlugin[]> {
+export async function browseMarketplace(query?: string): Promise<BrowseResponse> {
   const q = query ? `?q=${encodeURIComponent(query)}` : "";
   const res = await apiGet<BrowseResponse>(`/api/marketplace/plugins${q}`);
-  return res.plugins || [];
+  return { plugins: res.plugins || [], groups: res.groups || [] };
 }
 
 export async function listProviders(): Promise<MarketplaceProvider[]> {

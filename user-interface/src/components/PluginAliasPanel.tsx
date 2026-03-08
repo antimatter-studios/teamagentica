@@ -137,6 +137,8 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
     }
   };
 
+  const modelFieldKey = findModelFieldKey(plugin);
+  const supportsModels = modelFieldKey !== null;
   const hasModels = modelOptions.length > 0;
 
   if (loading) {
@@ -151,16 +153,19 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
   return (
     <div className="alias-panel">
       <p className="alias-panel-desc">
-        Map short @nicknames to models on this plugin. Use <code>@nickname</code> in chat to route to that model.
+        {supportsModels
+          ? <>Map short @nicknames to models on this plugin. Use <code>@nickname</code> in chat to route to that model.</>
+          : <>Map short @nicknames to this plugin. Use <code>@nickname</code> in chat to reference it.</>
+        }
       </p>
 
-      {plugin.status !== "running" && (
+      {supportsModels && plugin.status !== "running" && (
         <div className="alias-panel-warn">Plugin must be running to fetch available models.</div>
       )}
-      {modelsLoading && (
+      {supportsModels && modelsLoading && (
         <div className="alias-panel-info"><span className="spinner" /> Fetching available models...</div>
       )}
-      {modelsError && (
+      {supportsModels && modelsError && (
         <div className="alias-panel-warn">
           {modelsError} — <button className="alias-retry" onClick={fetchModels}>retry</button>
         </div>
@@ -172,7 +177,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
         <div className="alias-panel-table">
           <div className="alias-panel-header-row">
             <span className="alias-col-name">NICKNAME</span>
-            <span className="alias-col-model">MODEL</span>
+            {supportsModels && <span className="alias-col-model">MODEL</span>}
             <span className="alias-col-del" />
           </div>
           {entries.map((entry, i) => (
@@ -182,9 +187,9 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
                 type="text"
                 value={entry.name}
                 onChange={(e) => updateEntry(i, "name", e.target.value)}
-                placeholder="e.g. codex"
+                placeholder="e.g. files"
               />
-              {hasModels ? (
+              {supportsModels && (hasModels ? (
                 <select
                   className="alias-model-select"
                   value={targetToModel(entry.target, plugin.id)}
@@ -203,7 +208,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
                   onChange={(e) => updateEntry(i, "model", e.target.value)}
                   placeholder={modelsLoading ? "loading models..." : "model name"}
                 />
-              )}
+              ))}
               <button
                 className="alias-delete"
                 onClick={() => removeEntry(i)}

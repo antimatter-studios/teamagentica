@@ -16,6 +16,7 @@ interface FileStore {
   files: StorageFile[];
   loading: boolean;
   error: string | null;
+  selectedFile: StorageFile | null;
   loadProviders: () => Promise<void>;
   selectProvider: (p: Plugin) => void;
   browse: (prefix: string) => Promise<void>;
@@ -23,6 +24,7 @@ interface FileStore {
   upload: (files: FileList) => Promise<void>;
   deleteFile: (key: string) => Promise<void>;
   refresh: () => Promise<void>;
+  selectFile: (file: StorageFile | null) => void;
 }
 
 export const useFileStore = create<FileStore>((set, get) => ({
@@ -33,6 +35,9 @@ export const useFileStore = create<FileStore>((set, get) => ({
   files: [],
   loading: false,
   error: null,
+  selectedFile: null,
+
+  selectFile: (file) => set({ selectedFile: file }),
 
   loadProviders: async () => {
     try {
@@ -47,14 +52,14 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   selectProvider: (p: Plugin) => {
-    set({ selectedProvider: p, prefix: "", folders: [], files: [] });
+    set({ selectedProvider: p, prefix: "", folders: [], files: [], selectedFile: null });
     get().browse("");
   },
 
   browse: async (prefix: string) => {
     const provider = get().selectedProvider;
     if (!provider) return;
-    set({ loading: true, error: null, prefix });
+    set({ loading: true, error: null, prefix, selectedFile: null });
     try {
       const result = await browseStorage(provider.id, prefix);
       set({ folders: result.folders || [], files: result.files || [], loading: false });

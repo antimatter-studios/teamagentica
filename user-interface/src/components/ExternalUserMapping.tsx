@@ -19,7 +19,7 @@ export default function ExternalUserMapping({ onClose }: Props) {
 
   // New mapping form.
   const [newExternalID, setNewExternalID] = useState("");
-  const [newSource, setNewSource] = useState("telegram");
+  const [newSource, setNewSource] = useState("messaging-telegram");
   const [newTeamagenticaUserID, setNewTeamagenticaUserID] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [saving, setSaving] = useState(false);
@@ -122,9 +122,9 @@ export default function ExternalUserMapping({ onClose }: Props) {
               onChange={(e) => setNewSource(e.target.value)}
               style={{ display: "block", marginTop: 2 }}
             >
-              <option value="telegram">telegram</option>
-              <option value="discord">discord</option>
-              <option value="whatsapp">whatsapp</option>
+              <option value="messaging-telegram">messaging-telegram</option>
+              <option value="messaging-discord">messaging-discord</option>
+              <option value="messaging-whatsapp">messaging-whatsapp</option>
             </select>
           </div>
           <div>

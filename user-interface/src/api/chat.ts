@@ -41,13 +41,13 @@ export interface Attachment {
 }
 
 export async function fetchAgents(): Promise<{ agents: Agent[]; has_coordinator: boolean }> {
-  const resp = await apiGet<{ agents: Agent[]; has_coordinator: boolean }>("/api/route/chat/agents");
+  const resp = await apiGet<{ agents: Agent[]; has_coordinator: boolean }>("/api/route/messaging-chat/agents");
   return { agents: resp.agents || [], has_coordinator: resp.has_coordinator || false };
 }
 
 export async function fetchConversations(): Promise<Conversation[]> {
   const resp = await apiGet<{ conversations: Conversation[] }>(
-    "/api/route/chat/conversations"
+    "/api/route/messaging-chat/conversations"
   );
   return resp.conversations || [];
 }
@@ -59,24 +59,24 @@ export async function createConversation(
   const body: Record<string, unknown> = {};
   if (agentAlias && agentAlias !== "auto") body.agent_alias = agentAlias;
   if (title) body.title = title;
-  return apiPost<Conversation>("/api/route/chat/conversations", body);
+  return apiPost<Conversation>("/api/route/messaging-chat/conversations", body);
 }
 
 export async function getConversation(
   id: number
 ): Promise<{ conversation: Conversation; messages: ChatMessage[] }> {
-  return apiGet(`/api/route/chat/conversations/${id}`);
+  return apiGet(`/api/route/messaging-chat/conversations/${id}`);
 }
 
 export async function updateConversation(
   id: number,
   title: string
 ): Promise<Conversation> {
-  return apiPut<Conversation>(`/api/route/chat/conversations/${id}`, { title });
+  return apiPut<Conversation>(`/api/route/messaging-chat/conversations/${id}`, { title });
 }
 
 export async function deleteConversation(id: number): Promise<void> {
-  return apiDelete(`/api/route/chat/conversations/${id}`);
+  return apiDelete(`/api/route/messaging-chat/conversations/${id}`);
 }
 
 export async function sendMessage(
@@ -88,7 +88,7 @@ export async function sendMessage(
   const body: Record<string, unknown> = { content };
   if (agentAlias && agentAlias !== "auto") body.agent_alias = agentAlias;
   if (attachmentIds && attachmentIds.length > 0) body.attachment_ids = attachmentIds;
-  return apiPost(`/api/route/chat/conversations/${conversationId}/messages`, body);
+  return apiPost(`/api/route/messaging-chat/conversations/${conversationId}/messages`, body);
 }
 
 export async function uploadFile(
@@ -101,7 +101,7 @@ export async function uploadFile(
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}/api/route/chat/upload`, {
+  const res = await fetch(`${API_BASE}/api/route/messaging-chat/upload`, {
     method: "POST",
     headers,
     body: formData,
@@ -115,7 +115,7 @@ export async function uploadFile(
 }
 
 export function filePath(fileIdOrKey: string): string {
-  return `${API_BASE}/api/route/chat/files/${fileIdOrKey}`;
+  return `${API_BASE}/api/route/messaging-chat/files/${fileIdOrKey}`;
 }
 
 export async function fetchFileBlob(fileIdOrKey: string): Promise<string> {

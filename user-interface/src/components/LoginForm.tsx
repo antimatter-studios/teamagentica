@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useAuthStore } from "../stores/authStore";
+import KoiBackground from "./KoiBackground";
 
 export default function LoginForm() {
   const login = useAuthStore((s) => s.login);
@@ -37,6 +38,7 @@ export default function LoginForm() {
 
   return (
     <div className="login-page">
+      <KoiBackground />
       <div className="login-container">
         <div className="login-card">
           <div className="login-header">

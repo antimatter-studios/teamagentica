@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useChatStore } from "../stores/chatStore";
 import { uploadFile, fetchFileBlob, downloadFile, type Attachment } from "../api/chat";
@@ -44,6 +44,8 @@ export default function Chat() {
     { file_id: string; filename: string }[]
   >([]);
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const dragCounter = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -87,6 +89,59 @@ export default function Chat() {
     setUploading(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter((f) =>
+      f.type.startsWith("image/")
+    );
+    if (imageFiles.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of imageFiles) {
+        const result = await uploadFile(file);
+        setPendingFiles((prev) => [...prev, result]);
+      }
+    } catch (err) {
+      console.error("Upload failed:", err);
+    }
+    setUploading(false);
+  }, []);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) {
+      setDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setDragOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current = 0;
+      setDragOver(false);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        uploadFiles(e.dataTransfer.files);
+      }
+    },
+    [uploadFiles]
+  );
 
   const parseAttachments = (attachmentsJson?: string): Attachment[] => {
     if (!attachmentsJson) return [];
@@ -132,7 +187,18 @@ export default function Chat() {
       </div>
 
       {/* Main area */}
-      <div className="chat-main">
+      <div
+        className="chat-main"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {dragOver && (
+          <div className="chat-drop-overlay">
+            <div className="chat-drop-label">Drop images here</div>
+          </div>
+        )}
         <div className="chat-messages">
           {loading && (
             <div className="chat-loading">Loading messages...</div>
