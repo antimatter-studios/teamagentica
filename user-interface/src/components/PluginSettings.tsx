@@ -1,14 +1,68 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { parseCapabilities, parseConfigSchema } from "../api/plugins";
+import { parseCapabilities, parseConfigSchema, type Plugin } from "../api/plugins";
 import { apiGet } from "../api/client";
 import { usePluginStore } from "../stores/pluginStore";
 import PluginConfigForm from "./PluginConfigForm";
 import PluginAliasPanel from "./PluginAliasPanel";
 import PluginLogsInline from "./PluginLogsInline";
 import PluginPricing from "./PluginPricing";
+import PluginTools from "./PluginTools";
 
-type DetailTab = "config" | "aliases" | "logs" | "pricing";
+type DetailTab = "config" | "aliases" | "logs" | "pricing" | "tools";
+
+// Plugin group metadata — matches the catalog group ordering.
+const GROUP_META: { id: string; name: string; order: number }[] = [
+  { id: "agents", name: "AI Agents", order: 1 },
+  { id: "messaging", name: "Messaging", order: 2 },
+  { id: "tools", name: "Tools", order: 3 },
+  { id: "storage", name: "Storage", order: 4 },
+  { id: "network", name: "Network", order: 5 },
+  { id: "infrastructure", name: "Infrastructure", order: 6 },
+  { id: "user", name: "User", order: 7 },
+];
+
+// Map plugin ID prefix → group ID.
+const PREFIX_TO_GROUP: Record<string, string> = {
+  "agent-": "agents",
+  "messaging-": "messaging",
+  "tool-": "tools",
+  "storage-": "storage",
+  "network-": "network",
+  "infra-": "infrastructure",
+  "user-": "user",
+  "builtin-": "infrastructure",
+};
+
+function pluginGroup(p: Plugin): string {
+  for (const [prefix, group] of Object.entries(PREFIX_TO_GROUP)) {
+    if (p.id.startsWith(prefix)) return group;
+  }
+  return "other";
+}
+
+function groupedPlugins(plugins: Plugin[]): { id: string; name: string; plugins: Plugin[] }[] {
+  const byGroup = new Map<string, Plugin[]>();
+  for (const p of plugins) {
+    const g = pluginGroup(p);
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g)!.push(p);
+  }
+
+  const sections: { id: string; name: string; plugins: Plugin[] }[] = [];
+  for (const gm of GROUP_META) {
+    const entries = byGroup.get(gm.id);
+    if (entries && entries.length > 0) {
+      sections.push({ id: gm.id, name: gm.name, plugins: entries });
+      byGroup.delete(gm.id);
+    }
+  }
+  // Any remaining groups not in metadata.
+  for (const [id, entries] of byGroup) {
+    sections.push({ id, name: id.charAt(0).toUpperCase() + id.slice(1), plugins: entries });
+  }
+  return sections;
+}
 
 export default function PluginSettings() {
   const { plugins, loading, error } = usePluginStore(
@@ -24,6 +78,7 @@ export default function PluginSettings() {
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("config");
   const [hasPricing, setHasPricing] = useState(false);
+  const [hasTools, setHasTools] = useState(false);
 
   useEffect(() => {
     fetch();
@@ -41,6 +96,7 @@ export default function PluginSettings() {
   }, [plugins, selectedId]);
 
   const selected = plugins.find((p) => p.id === selectedId) || null;
+  const groups = useMemo(() => groupedPlugins(plugins), [plugins]);
 
   // Check if selected plugin has an aliases field in its schema.
   const hasAliases = (() => {
@@ -63,11 +119,26 @@ export default function PluginSettings() {
     }
   }, []);
 
+  // Probe tools endpoint when selected plugin changes.
+  const probeTools = useCallback(async (pluginId: string, status: string) => {
+    if (status !== "running") {
+      setHasTools(false);
+      return;
+    }
+    try {
+      await apiGet(`/api/route/${pluginId}/tools`);
+      setHasTools(true);
+    } catch {
+      setHasTools(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (selected) {
       probePricing(selected.id, selected.status);
+      probeTools(selected.id, selected.status);
       // Reset to config tab if current tab won't be available.
-      if (detailTab === "pricing" && selected.status !== "running") {
+      if ((detailTab === "pricing" || detailTab === "tools") && selected.status !== "running") {
         setDetailTab("config");
       }
       if (detailTab === "aliases" && !hasAliases) {
@@ -75,8 +146,9 @@ export default function PluginSettings() {
       }
     } else {
       setHasPricing(false);
+      setHasTools(false);
     }
-  }, [selected?.id, selected?.status, probePricing]);
+  }, [selected?.id, selected?.status, probePricing, probeTools]);
 
   async function handleAction(action: () => Promise<void>) {
     setActionError("");
@@ -130,33 +202,41 @@ export default function PluginSettings() {
         )}
 
         <nav className="plugin-sidebar-list">
-          {plugins.map((p) => (
-            <div
-              key={p.id}
-              className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}`}
-              onClick={() => {
-                setSelectedId(p.id);
-                setConfirmUninstall(null);
-                setActionError("");
-              }}
-            >
-              <span className={`plugin-status-dot ${statusClass(p.status)}`} />
-              <span className="plugin-sidebar-name">{p.name}</span>
-              {p.status === "running" && (
-                <button
-                  className="plugin-sidebar-restart"
-                  title="Restart"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleAction(() => restart(p.id));
+          {groups.map((g) => (
+            <div key={g.id} className="plugin-sidebar-group">
+              <div className="plugin-sidebar-group-header">
+                <span className="plugin-sidebar-group-name">{g.name}</span>
+                <span className="marketplace-sidebar-count">{g.plugins.length}</span>
+              </div>
+              {g.plugins.map((p) => (
+                <div
+                  key={p.id}
+                  className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}`}
+                  onClick={() => {
+                    setSelectedId(p.id);
+                    setConfirmUninstall(null);
+                    setActionError("");
                   }}
                 >
-                  ↻
-                </button>
-              )}
-              <span className={`plugin-sidebar-status ${statusClass(p.status)}`}>
-                {p.status.toUpperCase()}
-              </span>
+                  <span className={`plugin-status-dot ${statusClass(p.status)}`} />
+                  <span className="plugin-sidebar-name">{p.name}</span>
+                  {p.status === "running" && (
+                    <button
+                      className="plugin-sidebar-restart"
+                      title="Restart"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAction(() => restart(p.id));
+                      }}
+                    >
+                      ↻
+                    </button>
+                  )}
+                  <span className={`plugin-sidebar-status ${statusClass(p.status)}`}>
+                    {p.status.toUpperCase()}
+                  </span>
+                </div>
+              ))}
             </div>
           ))}
         </nav>
@@ -226,7 +306,7 @@ export default function PluginSettings() {
                   UNINSTALL
                 </button>
 
-                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), "logs"] as DetailTab[]).map((tab) => (
+                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), "logs"] as DetailTab[]).map((tab) => (
                   <button
                     key={tab}
                     className={`plugin-action-btn${detailTab === tab ? " btn-active" : ""}`}
@@ -278,6 +358,12 @@ export default function PluginSettings() {
               )}
               {detailTab === "pricing" && (
                 <PluginPricing
+                  key={selected.id}
+                  pluginId={selected.id}
+                />
+              )}
+              {detailTab === "tools" && (
+                <PluginTools
                   key={selected.id}
                   pluginId={selected.id}
                 />
