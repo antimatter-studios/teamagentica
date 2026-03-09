@@ -31,10 +31,12 @@ type Client struct {
 
 // chatRequest is the request body for the routed chat endpoint.
 type chatRequest struct {
-	Message      string            `json:"message"`
-	Model        string            `json:"model,omitempty"`
-	ImageURLs    []string          `json:"image_urls,omitempty"`
-	Conversation []conversationMsg `json:"conversation"`
+	Message       string            `json:"message"`
+	Model         string            `json:"model,omitempty"`
+	ImageURLs     []string          `json:"image_urls,omitempty"`
+	Conversation  []conversationMsg `json:"conversation"`
+	IsCoordinator bool              `json:"is_coordinator,omitempty"`
+	AgentAlias    string            `json:"agent_alias,omitempty"`
 }
 
 type conversationMsg struct {
@@ -359,29 +361,28 @@ func (c *Client) GenerateImage(ctx context.Context, provider, prompt string) (*i
 
 // ChatWithAgentDirect routes a message to a specific plugin+model.
 // Includes per-chat conversation history.
-func (c *Client) ChatWithAgentDirect(ctx context.Context, chatID int64, userID int64, pluginID, model, message string, imageURLs []string, systemPrompt string) (string, error) {
-	return c.chatWithPlugin(ctx, chatID, userID, pluginID, model, message, imageURLs, systemPrompt)
+func (c *Client) ChatWithAgentDirect(ctx context.Context, chatID int64, userID int64, pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
+	return c.chatWithPlugin(ctx, chatID, userID, pluginID, model, message, imageURLs, isCoordinator, agentAlias)
 }
 
 // chatWithPlugin is the shared HTTP+history logic for routing a chat message.
-func (c *Client) chatWithPlugin(ctx context.Context, chatID int64, userID int64, pluginID, model, message string, imageURLs []string, systemPrompt string) (string, error) {
-	// Build conversation: optional system prompt + prior history + new user message.
+func (c *Client) chatWithPlugin(ctx context.Context, chatID int64, userID int64, pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
+	// Build conversation: prior history + new user message.
 	c.histMu.Lock()
 	hist := c.history[chatID]
-	conv := make([]conversationMsg, 0, len(hist)+2)
-	if systemPrompt != "" {
-		conv = append(conv, conversationMsg{Role: "system", Content: systemPrompt})
-	}
+	conv := make([]conversationMsg, 0, len(hist)+1)
 	conv = append(conv, hist...)
 	c.histMu.Unlock()
 
 	conv = append(conv, conversationMsg{Role: "user", Content: message})
 
 	reqBody := chatRequest{
-		Message:      message,
-		Model:        model,
-		ImageURLs:    imageURLs,
-		Conversation: conv,
+		Message:       message,
+		Model:         model,
+		ImageURLs:     imageURLs,
+		Conversation:  conv,
+		IsCoordinator: isCoordinator,
+		AgentAlias:    agentAlias,
 	}
 
 	body, err := json.Marshal(reqBody)

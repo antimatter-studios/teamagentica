@@ -19,10 +19,12 @@ type Client struct {
 
 // chatRequest is the request body for the routed chat endpoint.
 type chatRequest struct {
-	Message      string            `json:"message"`
-	Model        string            `json:"model,omitempty"`
-	ImageURLs    []string          `json:"image_urls,omitempty"`
-	Conversation []conversationMsg `json:"conversation"`
+	Message       string            `json:"message"`
+	Model         string            `json:"model,omitempty"`
+	ImageURLs     []string          `json:"image_urls,omitempty"`
+	Conversation  []conversationMsg `json:"conversation"`
+	IsCoordinator bool              `json:"is_coordinator,omitempty"`
+	AgentAlias    string            `json:"agent_alias,omitempty"`
 }
 
 type conversationMsg struct {
@@ -282,24 +284,22 @@ func (c *Client) findPluginByCapability(capability string) (string, error) {
 }
 
 // ChatWithAgentDirect routes a message to a specific plugin.
-// Accepts an optional systemPrompt prepended to the conversation.
-func (c *Client) ChatWithAgentDirect(pluginID, model, message string, imageURLs []string, systemPrompt string) (string, error) {
-	return c.chatWithPlugin(pluginID, model, message, imageURLs, systemPrompt)
+// Pass isCoordinator=true for coordinator calls, and agentAlias for the target agent's alias.
+func (c *Client) ChatWithAgentDirect(pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
+	return c.chatWithPlugin(pluginID, model, message, imageURLs, isCoordinator, agentAlias)
 }
 
 // chatWithPlugin is the shared HTTP logic for routing a chat message to a plugin.
-func (c *Client) chatWithPlugin(pluginID, model, message string, imageURLs []string, systemPrompt string) (string, error) {
-	var conv []conversationMsg
-	if systemPrompt != "" {
-		conv = append(conv, conversationMsg{Role: "system", Content: systemPrompt})
-	}
-	conv = append(conv, conversationMsg{Role: "user", Content: message})
+func (c *Client) chatWithPlugin(pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
+	conv := []conversationMsg{{Role: "user", Content: message}}
 
 	reqBody := chatRequest{
-		Message:      message,
-		Model:        model,
-		ImageURLs:    imageURLs,
-		Conversation: conv,
+		Message:       message,
+		Model:         model,
+		ImageURLs:     imageURLs,
+		Conversation:  conv,
+		IsCoordinator: isCoordinator,
+		AgentAlias:    agentAlias,
 	}
 
 	body, err := json.Marshal(reqBody)
