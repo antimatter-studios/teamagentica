@@ -23,6 +23,7 @@ export default function PluginTools({ pluginId }: Props) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const isMCP = pluginId.startsWith("infra-mcp");
+  const isAgent = pluginId.startsWith("agent-");
 
   useEffect(() => {
     loadTools();
@@ -37,7 +38,13 @@ export default function PluginTools({ pluginId }: Props) {
       );
       setTools(data.tools || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load tools");
+      const msg = err instanceof Error ? err.message : String(err);
+      // 404 or "not found" means the plugin simply doesn't expose tools
+      if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
+        setTools([]);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -64,7 +71,7 @@ export default function PluginTools({ pluginId }: Props) {
     <div className="plugin-pricing">
       <div className="pricing-header-row">
         <h3 className="pricing-section-title">
-          {isMCP ? "AGGREGATED MCP TOOLS" : "EXPOSED TOOLS"}
+          {isMCP ? "AGGREGATED MCP TOOLS" : isAgent ? "DISCOVERED TOOLS" : "EXPOSED TOOLS"}
         </h3>
         <button className="plugin-action-btn" onClick={loadTools}>
           REFRESH
@@ -74,15 +81,31 @@ export default function PluginTools({ pluginId }: Props) {
       <p className="pricing-hint">
         {isMCP
           ? "Tools aggregated from all tool:* and storage:* plugins via alias discovery. Shows the full MCP tool set exposed to agents."
+          : isAgent
+          ? "Tools discovered from tool:* plugins that this agent will send to the LLM during chat requests."
           : "Tools this plugin exposes to the MCP server for agent use."}
       </p>
 
       {error && <div className="form-error">{error}</div>}
 
       {tools.length === 0 ? (
-        <div className="pricing-empty">
-          No tools discovered. The plugin may not expose any tools, or it may
-          not be running.
+        <div style={{
+          padding: "20px 24px",
+          background: "var(--bg-secondary, #1a1a2e)",
+          borderRadius: 8,
+          textAlign: "center",
+          color: "var(--text-muted, #888)",
+          fontSize: "0.85rem",
+          lineHeight: 1.6,
+        }}>
+          <span style={{ fontSize: "1.5rem", display: "block", marginBottom: 8, opacity: 0.5 }}>
+            ⚙️
+          </span>
+          No tools available
+          <br />
+          <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
+            This plugin does not expose any tools, or it may not be running.
+          </span>
         </div>
       ) : (
         <div className="pricing-table-wrapper">
@@ -90,7 +113,7 @@ export default function PluginTools({ pluginId }: Props) {
             <thead>
               <tr>
                 <th>Name</th>
-                {isMCP && <th>Plugin</th>}
+                {(isMCP || isAgent) && <th>Source Plugin</th>}
                 {isMCP && <th>Alias</th>}
                 <th>Description</th>
                 <th>Endpoint</th>
@@ -103,7 +126,7 @@ export default function PluginTools({ pluginId }: Props) {
                   <td>
                     <code>{isMCP ? t.full_name || t.name : t.name}</code>
                   </td>
-                  {isMCP && <td>{t.plugin_id || "—"}</td>}
+                  {(isMCP || isAgent) && <td>{t.plugin_id || "—"}</td>}
                   {isMCP && (
                     <td>
                       {t.alias_name ? (
