@@ -49,6 +49,7 @@ func main() {
 			"TELEGRAM_WEBHOOK_URL":   {Type: "string", Label: "Webhook URL", HelpText: "Public HTTPS URL that Telegram will POST updates to", VisibleWhen: &pluginsdk.VisibleWhen{Field: "TELEGRAM_MODE", Value: "webhook"}, Order: 3},
 			"TELEGRAM_ALLOWED_USERS": {Type: "string", Label: "Allowed User IDs", HelpText: "Comma-separated Telegram user IDs. Leave empty to allow all users.", Order: 4},
 			"DEFAULT_AGENT":          {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator. Leave empty to require @mention routing.", Order: 5},
+			"MESSAGE_BUFFER_MS":      {Type: "number", Label: "Message Buffer (ms)", Default: "1000", HelpText: "Debounce window for consolidating sequential messages (e.g. forwarded image + text). Set to 0 to disable.", Order: 6},
 			"PLUGIN_DEBUG":           {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
 		},
 	})
@@ -112,6 +113,13 @@ func main() {
 		telegramBot.SetDefaultAgent(agent)
 	}
 
+	// Apply initial MESSAGE_BUFFER_MS from fetched config.
+	if v := pluginConfig["MESSAGE_BUFFER_MS"]; v != "" {
+		if ms, err := strconv.Atoi(v); err == nil {
+			telegramBot.SetMessageBufferMS(ms)
+		}
+	}
+
 	// Subscribe to live alias updates from kernel (debounced — coalesce rapid updates).
 	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
 		var detail struct {
@@ -136,6 +144,11 @@ func main() {
 		}
 		if agent, ok := detail.Config["DEFAULT_AGENT"]; ok {
 			telegramBot.SetDefaultAgent(agent)
+		}
+		if v, ok := detail.Config["MESSAGE_BUFFER_MS"]; ok {
+			if ms, err := strconv.Atoi(v); err == nil {
+				telegramBot.SetMessageBufferMS(ms)
+			}
 		}
 	}))
 

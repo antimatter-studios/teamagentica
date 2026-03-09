@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -42,6 +43,7 @@ func main() {
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"DISCORD_BOT_TOKEN": {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Discord bot token from developer portal", Order: 1},
 			"DEFAULT_AGENT":     {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator", Order: 5},
+			"MESSAGE_BUFFER_MS": {Type: "number", Label: "Message Buffer (ms)", Default: "1000", HelpText: "Debounce window for consolidating sequential messages (e.g. forwarded image + text). Set to 0 to disable.", Order: 6},
 			"PLUGIN_DEBUG":      {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
 		},
 	})
@@ -96,6 +98,11 @@ func main() {
 	if agent := pluginConfig["DEFAULT_AGENT"]; agent != "" {
 		discordBot.SetDefaultAgent(agent)
 	}
+	if v := pluginConfig["MESSAGE_BUFFER_MS"]; v != "" {
+		if ms, err := strconv.Atoi(v); err == nil {
+			discordBot.SetMessageBufferMS(ms)
+		}
+	}
 
 	// Subscribe to live alias updates from kernel (debounced — coalesce rapid updates).
 	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
@@ -124,6 +131,11 @@ func main() {
 		}
 		if d, ok := detail.Config["PLUGIN_DEBUG"]; ok {
 			discordBot.SetDebug(d == "true" || d == "1")
+		}
+		if v, ok := detail.Config["MESSAGE_BUFFER_MS"]; ok {
+			if ms, err := strconv.Atoi(v); err == nil {
+				discordBot.SetMessageBufferMS(ms)
+			}
 		}
 	}))
 
