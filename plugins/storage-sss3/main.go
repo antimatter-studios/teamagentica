@@ -43,7 +43,7 @@ func main() {
 		Name:         "Object Storage",
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"storage:api", "tool:storage"},
+		Capabilities: []string{"storage:api", "storage:object", "tool:storage"},
 		Version:      "1.0.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"S3_ENDPOINT":      {Type: "string", Label: "S3 Endpoint", Required: true, Default: "http://sss3:9000", HelpText: "S3-compatible endpoint URL", Order: 1},

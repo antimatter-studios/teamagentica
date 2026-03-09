@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -37,11 +38,12 @@ func main() {
 		Name:         "Volume Storage",
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"storage:api", "storage:volume", "tool:storage"},
+		Capabilities: []string{"storage:block", "storage:api"},
 		Version:      "1.0.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"STORAGE_DATA_PATH":  {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Local filesystem path for volume storage", Order: 1},
-			"STORAGE_VOLUME_PORT": {Type: "string", Label: "Plugin Port", Default: "8090", HelpText: "HTTP port for the storage plugin", Order: 2},
+			"STORAGE_DATA_PATH":    {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Local filesystem path for volume storage", Order: 1},
+			"STORAGE_VOLUMES_PATH": {Type: "string", Label: "Volumes Path", Default: "/data/volumes", HelpText: "Path for namespace-isolated block storage volumes", Order: 2},
+			"STORAGE_VOLUME_PORT":  {Type: "string", Label: "Plugin Port", Default: "8090", HelpText: "HTTP port for the storage plugin", Order: 3},
 			"PLUGIN_ALIASES":     {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin.", Order: 90},
 			"PLUGIN_DEBUG":       {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed operations", Order: 99},
 		},
@@ -84,29 +86,45 @@ func main() {
 
 	// Extract config values with defaults.
 	dataPath := configOrDefault(pluginConfig, "STORAGE_DATA_PATH", "/data")
+	volumesPath := configOrDefault(pluginConfig, "STORAGE_VOLUMES_PATH", "/data/volumes")
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 	port := parseIntOrDefault(configOrDefault(pluginConfig, "STORAGE_VOLUME_PORT", ""), defaultPort)
 
+	// Ensure volumes and metadata directories exist.
+	for _, dir := range []string{volumesPath, filepath.Join(dataPath, "meta")} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Fatalf("[storage-volume] failed to create directory %s: %v", dir, err)
+		}
+	}
+
 	router := gin.Default()
-	h := handlers.NewHandler(dataPath, debug)
+	h := handlers.NewHandler(dataPath, volumesPath, debug)
 
 	router.GET("/health", h.Health)
-	router.GET("/usage", h.Usage)
-	router.GET("/dirs", h.Dirs)
+
+	// storage:api — standard file interface on dataPath.
 	router.GET("/browse", h.Browse)
 	router.PUT("/objects/*key", h.PutObject)
 	router.GET("/objects/*key", h.GetObject)
 	router.DELETE("/objects/*key", h.DeleteObject)
 	router.HEAD("/objects/*key", h.HeadObject)
 
-	// Tool interface — allows AI agents to discover and use storage operations.
+	// storage:block — volume management endpoints.
+	router.POST("/volumes", h.CreateVolume)
+	router.GET("/volumes", h.ListVolumes)
+	router.GET("/volumes/:name", h.GetVolume)
+	router.GET("/volumes/:name/path", h.GetVolumePath)
+	router.DELETE("/volumes/:name", h.DeleteVolume)
+
+	// Tool interface for AI agents.
 	router.GET("/tools", h.Tools)
+	router.POST("/tool/create_volume", h.ToolCreateVolume)
+	router.POST("/tool/list_volumes", h.ToolListVolumes)
+	router.POST("/tool/delete_volume", h.ToolDeleteVolume)
 	router.POST("/tool/list_files", h.ToolListFiles)
 	router.POST("/tool/read_file", h.ToolReadFile)
 	router.POST("/tool/write_file", h.ToolWriteFile)
 	router.POST("/tool/delete_file", h.ToolDeleteFile)
-	router.POST("/tool/file_info", h.ToolFileInfo)
-	router.POST("/tool/create_folder", h.ToolCreateFolder)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
