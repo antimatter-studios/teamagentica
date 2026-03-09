@@ -279,7 +279,10 @@ func (c *Client) ChatCompletion(model string, messages []openai.Message, imageUR
 	for _, p := range imagePaths {
 		args = append(args, "--image", p)
 	}
-	args = append(args, prompt)
+
+	// Pass prompt via stdin — newer codex CLI versions read from stdin
+	// instead of accepting the prompt as a trailing positional argument.
+	promptReader := strings.NewReader(prompt)
 
 	cmd := exec.CommandContext(ctx, c.binary, args...)
 	if workdirOverride != "" {
@@ -290,10 +293,11 @@ func (c *Client) ChatCompletion(model string, messages []openai.Message, imageUR
 	cmd.Env = append(os.Environ(), "CODEX_HOME="+c.codexHome)
 
 	if c.debug {
-		log.Printf("[codex-cli] running: %s %s", c.binary, strings.Join(args, " "))
+		log.Printf("[codex-cli] running: %s %s (prompt via stdin, %d bytes)", c.binary, strings.Join(args, " "), len(prompt))
 	}
 
 	var stdout, stderr bytes.Buffer
+	cmd.Stdin = promptReader
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 

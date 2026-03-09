@@ -20,10 +20,11 @@ func init() {
 // newHandlerWithTmpDir creates a test handler with the given settings.
 func newHandlerWithTmpDir(apiKey, model, tmpDir string) *Handler {
 	return &Handler{
-		apiKey: apiKey,
-		model:  model,
-		client: gemini.NewClient(apiKey, false),
-		usage:  usage.NewTracker(tmpDir),
+		apiKey:        apiKey,
+		model:         model,
+		toolLoopLimit: 20,
+		client:        gemini.NewClient(apiKey, false),
+		usage:         usage.NewTracker(tmpDir),
 	}
 }
 

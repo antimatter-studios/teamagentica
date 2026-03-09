@@ -128,6 +128,8 @@ func main() {
 	// Register routes.
 	router.GET("/health", h.Health)
 	router.POST("/chat", h.Chat)
+	router.GET("/tools", h.DiscoveredTools)
+	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
 
 	// Config options route (dynamic select fields).

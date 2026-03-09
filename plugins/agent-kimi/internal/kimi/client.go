@@ -15,8 +15,10 @@ const baseURL = "https://api.moonshot.ai/v1"
 
 // Message is the standard role+content pair used by the handler layer.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // Usage holds token counts from the API response.
@@ -28,16 +30,42 @@ type Usage struct {
 
 // ChatResponse is the parsed result of a chat completion call.
 type ChatResponse struct {
-	Content string
-	Usage   Usage
-	Headers http.Header
+	Content      string
+	ToolCalls    []ToolCall
+	FinishReason string
+	Usage        Usage
+	Headers      http.Header
+}
+
+// ToolDef describes a tool available for function calling.
+type ToolDef struct {
+	Type     string      `json:"type"` // "function"
+	Function FunctionDef `json:"function"`
+}
+
+// FunctionDef describes a callable function.
+type FunctionDef struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// ToolCall represents a tool invocation requested by the model.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"` // "function"
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 // chatCompletionRequest is the request body for /v1/chat/completions.
 type chatCompletionRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model    string        `json:"model"`
+	Messages []interface{} `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Tools    []ToolDef     `json:"tools,omitempty"`
 }
 
 // Client talks to the Moonshot Kimi API (OpenAI-compatible).
@@ -57,12 +85,47 @@ func NewClient(apiKey string, debug bool) *Client {
 	}
 }
 
+// buildAPIMessages converts typed Messages into interface{} maps suitable for
+// the JSON request body, handling tool call and tool result messages correctly.
+func buildAPIMessages(messages []Message) []interface{} {
+	result := make([]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			result = append(result, map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": msg.ToolCallID,
+				"content":      msg.Content,
+			})
+			continue
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			m := map[string]interface{}{
+				"role":       "assistant",
+				"tool_calls": msg.ToolCalls,
+			}
+			if msg.Content != "" {
+				m["content"] = msg.Content
+			}
+			result = append(result, m)
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		})
+	}
+	return result
+}
+
 // ChatCompletion sends a chat request to the Kimi chat/completions endpoint.
-func (c *Client) ChatCompletion(model string, messages []Message) (*ChatResponse, error) {
+func (c *Client) ChatCompletion(model string, messages []Message, tools ...ToolDef) (*ChatResponse, error) {
 	reqBody := chatCompletionRequest{
 		Model:    model,
-		Messages: messages,
+		Messages: buildAPIMessages(messages),
 		Stream:   false,
+	}
+	if len(tools) > 0 {
+		reqBody.Tools = tools
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -102,8 +165,10 @@ func (c *Client) ChatCompletion(model string, messages []Message) (*ChatResponse
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -117,12 +182,18 @@ func (c *Client) ChatCompletion(model string, messages []Message) (*ChatResponse
 	}
 
 	responseText := ""
+	finishReason := ""
+	var toolCalls []ToolCall
 	if len(result.Choices) > 0 {
 		responseText = result.Choices[0].Message.Content
+		toolCalls = result.Choices[0].Message.ToolCalls
+		finishReason = result.Choices[0].FinishReason
 	}
 
 	return &ChatResponse{
-		Content: responseText,
+		Content:      responseText,
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
 		Usage: Usage{
 			PromptTokens:     result.Usage.PromptTokens,
 			CompletionTokens: result.Usage.CompletionTokens,

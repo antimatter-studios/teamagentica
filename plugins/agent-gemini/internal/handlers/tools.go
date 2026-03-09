@@ -12,7 +12,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-inception/internal/inception"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/gemini"
 )
 
 // discoveredTool holds a tool schema from a plugin with its routing info.
@@ -59,7 +59,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 
 	plugins, err := sdk.SearchPlugins("tool:")
 	if err != nil {
-		log.Printf("agent-inception: tool discovery failed: %v", err)
+		log.Printf("agent-gemini: tool discovery failed: %v", err)
 		return nil
 	}
 
@@ -70,7 +70,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 	for _, p := range plugins {
 		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/tools", nil)
 		if err != nil {
-			log.Printf("agent-inception: failed to get tools from %s: %v", p.ID, err)
+			log.Printf("agent-gemini: failed to get tools from %s: %v", p.ID, err)
 			continue
 		}
 
@@ -83,7 +83,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 			} `json:"tools"`
 		}
 		if err := json.Unmarshal(body, &resp); err != nil {
-			log.Printf("agent-inception: failed to parse tools from %s: %v", p.ID, err)
+			log.Printf("agent-gemini: failed to parse tools from %s: %v", p.ID, err)
 			continue
 		}
 
@@ -107,33 +107,30 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 		for i, t := range allTools {
 			names[i] = t.PrefixedName
 		}
-		log.Printf("agent-inception: discovered %d tools: %s", len(allTools), strings.Join(names, ", "))
+		log.Printf("agent-gemini: discovered %d tools: %s", len(allTools), strings.Join(names, ", "))
 	}
 
 	return allTools
 }
 
-// buildToolDefs converts discovered tools into Inception ToolDef format.
-func buildToolDefs(tools []discoveredTool) []inception.ToolDef {
-	defs := make([]inception.ToolDef, len(tools))
+// buildToolDefs converts discovered tools into Gemini FunctionDeclaration format.
+func buildToolDefs(tools []discoveredTool) []gemini.FunctionDeclaration {
+	defs := make([]gemini.FunctionDeclaration, len(tools))
 	for i, t := range tools {
-		defs[i] = inception.ToolDef{
-			Type: "function",
-			Function: inception.FunctionDef{
-				Name:        t.PrefixedName,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
+		defs[i] = gemini.FunctionDeclaration{
+			Name:        t.PrefixedName,
+			Description: t.Description,
+			Parameters:  t.Parameters,
 		}
 	}
 	return defs
 }
 
 // executeToolCall runs a single tool call by routing through the kernel proxy.
-func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, call inception.ToolCall) (string, error) {
-	parts := strings.SplitN(call.Function.Name, "__", 2)
+func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, funcName string, args map[string]interface{}) (string, error) {
+	parts := strings.SplitN(funcName, "__", 2)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid tool name format: %s", call.Function.Name)
+		return "", fmt.Errorf("invalid tool name format: %s", funcName)
 	}
 	pluginID, toolName := parts[0], parts[1]
 
@@ -151,16 +148,14 @@ func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, call incepti
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	var body *bytes.Reader
-	if call.Function.Arguments != "" {
-		body = bytes.NewReader([]byte(call.Function.Arguments))
-	} else {
-		body = bytes.NewReader([]byte("{}"))
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("marshal args: %w", err)
 	}
 
-	resp, err := sdk.RouteToPlugin(ctx, pluginID, "POST", endpoint, body)
+	resp, err := sdk.RouteToPlugin(ctx, pluginID, "POST", endpoint, bytes.NewReader(argsJSON))
 	if err != nil {
-		return "", fmt.Errorf("execute tool %s: %w", call.Function.Name, err)
+		return "", fmt.Errorf("execute tool %s: %w", funcName, err)
 	}
 
 	return string(resp), nil
@@ -258,6 +253,9 @@ type mediaAttachment struct {
 }
 
 // processToolResultMedia inspects a tool result for embedded image data.
+// If the JSON contains "image_data" + "mime_type" fields, it extracts them
+// and replaces the base64 blob with a short placeholder so the model gets a clean summary.
+// Returns (cleanedResult, attachment or nil).
 func processToolResultMedia(result string) (string, *mediaAttachment) {
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
@@ -270,6 +268,7 @@ func processToolResultMedia(result string) (string, *mediaAttachment) {
 		return result, nil
 	}
 
+	// Replace the base64 blob so the model sees a short summary instead.
 	parsed["image_data"] = "[image generated]"
 	cleaned, err := json.Marshal(parsed)
 	if err != nil {

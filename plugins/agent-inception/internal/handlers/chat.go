@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -68,6 +69,8 @@ type chatRequest struct {
 	Conversation    []inception.Message `json:"conversation"`
 	ReasoningEffort string             `json:"reasoning_effort,omitempty"` // "instant", "low", "medium", "high"
 	Diffusing       *bool              `json:"diffusing,omitempty"`
+	IsCoordinator   bool               `json:"is_coordinator,omitempty"`
+	AgentAlias      string             `json:"agent_alias,omitempty"`
 }
 
 // Chat handles a chat completion request.
@@ -132,6 +135,18 @@ func (h *Handler) Chat(c *gin.Context) {
 	if len(tools) > 0 {
 		toolDefs = buildToolDefs(tools)
 		h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
+	}
+
+	// Build agent's own system prompt.
+	systemPrompt := buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+	if systemPrompt != "" {
+		filtered := make([]inception.Message, 0, len(messages))
+		for _, m := range messages {
+			if m.Role != "system" {
+				filtered = append(filtered, m)
+			}
+		}
+		messages = append([]inception.Message{{Role: "system", Content: systemPrompt}}, filtered...)
 	}
 
 	var totalInput, totalOutput int
@@ -383,6 +398,47 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	tools := discoverTools(h.sdk)
+	c.JSON(http.StatusOK, gin.H{
+		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools),
+		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools),
+	})
+}
+
+// DiscoveredTools returns the tools this agent has discovered from tool:* plugins.
+func (h *Handler) DiscoveredTools(c *gin.Context) {
+	tools := discoverTools(h.sdk)
+
+	type toolEntry struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Endpoint    string          `json:"endpoint"`
+		Parameters  json.RawMessage `json:"parameters"`
+		PluginID    string          `json:"plugin_id"`
+	}
+
+	entries := make([]toolEntry, len(tools))
+	for i, t := range tools {
+		entries[i] = toolEntry{
+			Name:        t.PrefixedName,
+			Description: t.Description,
+			Endpoint:    t.Endpoint,
+			Parameters:  t.Parameters,
+			PluginID:    t.PluginID,
+		}
+	}
+
+	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools)
+
+	c.JSON(http.StatusOK, gin.H{
+		"tools":                    entries,
+		"system_prompt_coordinator": systemPrompt,
+		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools),
+	})
 }
 
 // Models returns available models and the current default.

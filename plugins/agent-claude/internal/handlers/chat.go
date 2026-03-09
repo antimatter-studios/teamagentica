@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,15 +18,16 @@ import (
 
 // Handler holds the plugin's configuration and exposes HTTP handlers.
 type Handler struct {
-	backend      string // "cli" or "api_key"
-	apiKey       string
-	model        string
-	debug        bool
-	sdk          *pluginsdk.Client
-	claudeCLI    *claudecli.Client
-	usage        *usage.Tracker
-	mcpConfig    string // path to MCP config file, if available
-	workspaceDir string // base directory for workspace mounts
+	backend       string // "cli" or "api_key"
+	apiKey        string
+	model         string
+	toolLoopLimit int
+	debug         bool
+	sdk           *pluginsdk.Client
+	claudeCLI     *claudecli.Client
+	usage         *usage.Tracker
+	mcpConfig     string // path to MCP config file, if available
+	workspaceDir  string // base directory for workspace mounts
 }
 
 // HandlerConfig holds the parameters for constructing a Handler.
@@ -41,12 +43,13 @@ type HandlerConfig struct {
 // NewHandler creates a new Handler from the given config.
 func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
-		backend:      cfg.Backend,
-		apiKey:       cfg.APIKey,
-		model:        cfg.Model,
-		debug:        cfg.Debug,
-		usage:        usage.NewTracker(cfg.DataPath),
-		workspaceDir: cfg.WorkspaceDir,
+		backend:       cfg.Backend,
+		apiKey:        cfg.APIKey,
+		model:         cfg.Model,
+		toolLoopLimit: 20,
+		debug:         cfg.Debug,
+		usage:         usage.NewTracker(cfg.DataPath),
+		workspaceDir:  cfg.WorkspaceDir,
 	}
 }
 
@@ -91,13 +94,15 @@ func (h *Handler) Health(c *gin.Context) {
 
 // chatRequest is the body for POST /chat.
 type chatRequest struct {
-	Message      string             `json:"message"`
-	Model        string             `json:"model,omitempty"`
-	Conversation []anthropic.Message `json:"conversation"`
-	MaxTurns     int                `json:"max_turns,omitempty"`
-	SystemPrompt string             `json:"system_prompt,omitempty"`
-	WorkspaceID  string             `json:"workspace_id,omitempty"`  // Routes to a specific work disk.
-	SessionID    string             `json:"session_id,omitempty"`    // Resumes an existing Claude session.
+	Message       string             `json:"message"`
+	Model         string             `json:"model,omitempty"`
+	Conversation  []anthropic.Message `json:"conversation"`
+	MaxTurns      int                `json:"max_turns,omitempty"`
+	SystemPrompt  string             `json:"system_prompt,omitempty"`
+	WorkspaceID   string             `json:"workspace_id,omitempty"`  // Routes to a specific work disk.
+	SessionID     string             `json:"session_id,omitempty"`    // Resumes an existing Claude session.
+	IsCoordinator bool               `json:"is_coordinator,omitempty"`
+	AgentAlias    string             `json:"agent_alias,omitempty"`
 }
 
 // Chat handles a chat completion request.
@@ -146,6 +151,18 @@ func (h *Handler) Chat(c *gin.Context) {
 			h.emitEvent("error", "CLI backend not initialised")
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CLI backend is configured but Claude CLI was not initialised."})
 			return
+		}
+
+		// Build agent's own system prompt (CLI branch has no tool discovery).
+		systemPrompt := buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, nil)
+		if systemPrompt != "" {
+			filtered := make([]anthropic.Message, 0, len(messages))
+			for _, m := range messages {
+				if m.Role != "system" {
+					filtered = append(filtered, m)
+				}
+			}
+			messages = append([]anthropic.Message{{Role: "system", Content: systemPrompt}}, filtered...)
 		}
 
 		// Build a single prompt from the conversation.
@@ -217,45 +234,146 @@ func (h *Handler) Chat(c *gin.Context) {
 			return
 		}
 
-		resp, err := anthropic.ChatCompletion(h.apiKey, model, messages, 8192)
-		if err != nil {
-			log.Printf("Anthropic error: %v", err)
-			h.emitEvent("error", fmt.Sprintf("anthropic: %v", err))
-			c.JSON(http.StatusBadGateway, gin.H{"error": "Anthropic request failed: " + err.Error()})
+		// Discover available tools from registered tool:* plugins.
+		tools := discoverTools(h.sdk)
+		var toolDefs []anthropic.ToolDef
+		if len(tools) > 0 {
+			toolDefs = buildToolDefs(tools)
+			h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
+		}
+
+		// Build agent's own system prompt.
+		systemPrompt := buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+		if systemPrompt != "" {
+			filtered := make([]anthropic.Message, 0, len(messages))
+			for _, m := range messages {
+				if m.Role != "system" {
+					filtered = append(filtered, m)
+				}
+			}
+			messages = append([]anthropic.Message{{Role: "system", Content: systemPrompt}}, filtered...)
+		}
+
+		var totalInput, totalOutput, totalCached int
+		var mediaAttachments []mediaAttachment
+
+		maxIter := h.toolLoopLimit
+		for iteration := 0; maxIter == 0 || iteration <= maxIter; iteration++ {
+			resp, err := anthropic.ChatCompletion(h.apiKey, model, messages, 8192, toolDefs...)
+			if err != nil {
+				log.Printf("Anthropic error: %v", err)
+				h.emitEvent("error", fmt.Sprintf("anthropic: %v", err))
+				c.JSON(http.StatusBadGateway, gin.H{"error": "Anthropic request failed: " + err.Error()})
+				return
+			}
+
+			totalInput += resp.Usage.InputTokens
+			totalOutput += resp.Usage.OutputTokens
+			totalCached += resp.Usage.CacheRead
+
+			// Check if the model wants to use tools.
+			toolBlocks := anthropic.GetToolUseBlocks(resp)
+			if resp.StopReason == "tool_use" && len(toolBlocks) > 0 {
+				if maxIter > 0 && iteration == maxIter {
+					h.emitEvent("tool_loop", "max iterations reached")
+					break
+				}
+
+				// Append assistant message with tool use blocks.
+				responseText := anthropic.GetResponseText(resp)
+				messages = append(messages, anthropic.Message{
+					Role:          "assistant",
+					Content:       responseText,
+					ToolUseBlocks: toolBlocks,
+				})
+
+				// Execute each tool and build results.
+				var toolResults []anthropic.ToolResult
+				for _, tb := range toolBlocks {
+					h.emitEvent("tool_call", fmt.Sprintf("tool=%s", tb.Name))
+
+					result, execErr := executeToolCall(h.sdk, tools, tb)
+					if execErr != nil {
+						log.Printf("Tool call %s failed: %v", tb.Name, execErr)
+						h.emitEvent("tool_error", fmt.Sprintf("tool=%s error=%v", tb.Name, execErr))
+						errMsg, _ := json.Marshal(map[string]string{"error": execErr.Error()})
+						result = string(errMsg)
+					} else {
+						h.emitEvent("tool_result", fmt.Sprintf("tool=%s result_len=%d", tb.Name, len(result)))
+						cleaned, att := processToolResultMedia(result)
+						if att != nil {
+							mediaAttachments = append(mediaAttachments, *att)
+							result = cleaned
+						}
+					}
+
+					toolResults = append(toolResults, anthropic.ToolResult{
+						Type:      "tool_result",
+						ToolUseID: tb.ID,
+						Content:   result,
+					})
+				}
+
+				// Append user message with tool results.
+				messages = append(messages, anthropic.Message{
+					Role:        "user",
+					ToolResults: toolResults,
+				})
+
+				continue
+			}
+
+			// Final response — no more tool calls.
+			elapsed := time.Since(start)
+			totalTokens := totalInput + totalOutput
+
+			h.usage.RecordRequest(usage.RequestRecord{
+				Model:        model,
+				InputTokens:  totalInput,
+				OutputTokens: totalOutput,
+				TotalTokens:  totalTokens,
+				CachedTokens: totalCached,
+				DurationMs:   elapsed.Milliseconds(),
+				Backend:      "api_key",
+			})
+			h.emitUsage("anthropic", model, totalInput, totalOutput, totalTokens, totalCached, elapsed.Milliseconds(), userID)
+
+			responseText := anthropic.GetResponseText(resp)
+			if h.debug {
+				h.emitEvent("chat_response", fmt.Sprintf("backend=api_key model=%s tokens=%d+%d time=%dms response=%s",
+					model, totalInput, totalOutput, elapsed.Milliseconds(), truncateStr(responseText, 200)))
+			} else {
+				h.emitEvent("chat_response", fmt.Sprintf("backend=api_key model=%s tokens=%d+%d time=%dms len=%d",
+					model, totalInput, totalOutput, elapsed.Milliseconds(), len(responseText)))
+			}
+
+			result := gin.H{
+				"response": responseText,
+				"model":    model,
+				"backend":  "api_key",
+				"usage": gin.H{
+					"prompt_tokens":     totalInput,
+					"completion_tokens": totalOutput,
+					"cached_tokens":     totalCached,
+				},
+			}
+			if len(mediaAttachments) > 0 {
+				result["attachments"] = mediaAttachments
+			}
+			c.JSON(http.StatusOK, result)
 			return
 		}
 
+		// Fallback if we exhausted iterations.
 		elapsed := time.Since(start)
-		totalTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens
-
-		h.usage.RecordRequest(usage.RequestRecord{
-			Model:        model,
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			TotalTokens:  totalTokens,
-			CachedTokens: resp.Usage.CacheRead,
-			DurationMs:   elapsed.Milliseconds(),
-			Backend:      "api_key",
-		})
-		h.emitUsage("anthropic", model, resp.Usage.InputTokens, resp.Usage.OutputTokens, totalTokens, resp.Usage.CacheRead, elapsed.Milliseconds(), userID)
-
-		responseText := anthropic.GetResponseText(resp)
-		if h.debug {
-			h.emitEvent("chat_response", fmt.Sprintf("backend=api_key model=%s tokens=%d+%d time=%dms response=%s",
-				model, resp.Usage.InputTokens, resp.Usage.OutputTokens, elapsed.Milliseconds(), truncateStr(responseText, 200)))
-		} else {
-			h.emitEvent("chat_response", fmt.Sprintf("backend=api_key model=%s tokens=%d+%d time=%dms len=%d",
-				model, resp.Usage.InputTokens, resp.Usage.OutputTokens, elapsed.Milliseconds(), len(responseText)))
-		}
-
+		h.emitUsage("anthropic", model, totalInput, totalOutput, totalInput+totalOutput, totalCached, elapsed.Milliseconds(), userID)
 		c.JSON(http.StatusOK, gin.H{
-			"response": responseText,
+			"response": "I attempted to use tools but reached the maximum number of iterations. Please try again with a simpler request.",
 			"model":    model,
 			"backend":  "api_key",
 			"usage": gin.H{
-				"prompt_tokens":     resp.Usage.InputTokens,
-				"completion_tokens": resp.Usage.OutputTokens,
-				"cached_tokens":     resp.Usage.CacheRead,
+				"prompt_tokens":     totalInput,
+				"completion_tokens": totalOutput,
 			},
 		})
 
@@ -303,6 +421,47 @@ func buildPrompt(messages []anthropic.Message) string {
 		sb.WriteString(msg.Content)
 	}
 	return sb.String()
+}
+
+// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	tools := discoverTools(h.sdk)
+	c.JSON(http.StatusOK, gin.H{
+		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools),
+		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools),
+	})
+}
+
+// DiscoveredTools returns the tools this agent has discovered from tool:* plugins.
+func (h *Handler) DiscoveredTools(c *gin.Context) {
+	tools := discoverTools(h.sdk)
+
+	type toolEntry struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Endpoint    string          `json:"endpoint"`
+		Parameters  json.RawMessage `json:"parameters"`
+		PluginID    string          `json:"plugin_id"`
+	}
+
+	entries := make([]toolEntry, len(tools))
+	for i, t := range tools {
+		entries[i] = toolEntry{
+			Name:        t.PrefixedName,
+			Description: t.Description,
+			Endpoint:    t.Endpoint,
+			Parameters:  t.Parameters,
+			PluginID:    t.PluginID,
+		}
+	}
+
+	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools)
+
+	c.JSON(http.StatusOK, gin.H{
+		"tools":                    entries,
+		"system_prompt_coordinator": systemPrompt,
+		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools),
+	})
 }
 
 // Models returns available models and the current default.
