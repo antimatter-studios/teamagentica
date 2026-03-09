@@ -145,10 +145,14 @@ Aliases map `@mention` names to specific plugins, optionally with model override
 **Routing paths in messaging bots:**
 
 1. **Direct `@alias`** — User types `@claude explain X` → fast-path directly to the agent
-2. **Coordinator delegation** — User types a generic message → coordinator agent receives all aliases in its system prompt → responds with `ROUTE:@alias\nmessage` to delegate → bot re-routes to target
-3. **Default agent** — No aliases configured → kernel discovers first `ai:chat` plugin
+2. **Coordinator delegation** — User types a generic message → coordinator agent receives `isCoordinator=true` flag → agent builds its own system prompt with available aliases → responds with `ROUTE:@alias\nmessage` to delegate → bot re-routes to target
+3. **Default agent** — No aliases configured → falls back to `DEFAULT_AGENT` plugin ID
 
 Aliases are stored in SQLite, managed via the admin UI, and hot-swapped to plugins via `kernel:alias:update` events.
+
+### Message Buffering
+
+Messaging plugins (Telegram, Discord) buffer sequential messages per-chat with a configurable debounce window (default 1000ms, configurable via `MESSAGE_BUFFER_MS`). This consolidates multi-part messages — such as a forwarded image followed by a text question — into a single agent request. The buffer merges text (newline-joined) and deduplicates media URLs. Commands (`/help`, `/clear`, etc.) bypass the buffer and are handled immediately.
 
 ## Plugin Lifecycle
 

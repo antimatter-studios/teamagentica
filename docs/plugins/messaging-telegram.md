@@ -1,10 +1,10 @@
 # messaging-telegram
 
-> Telegram bot with polling/webhook modes, alias routing, and media generation support.
+> Telegram bot with polling/webhook modes, alias routing, message buffering, and media generation support.
 
 ## Overview
 
-The Telegram plugin connects TeamAgentica to Telegram. It supports both long-polling and webhook modes, routing messages to AI agents through aliases. Handles text, photos, locations, and supports image/video generation with async polling and typing indicators.
+The Telegram plugin connects TeamAgentica to Telegram. It supports both long-polling and webhook modes, routing messages to AI agents through aliases. Handles text, photos, videos, voice, audio, documents, stickers, locations, and supports image/video generation with async polling and typing indicators. Sequential messages are buffered with a configurable debounce window to consolidate multi-part messages (e.g. forwarded image + follow-up text) into a single agent request.
 
 ## Capabilities
 
@@ -22,7 +22,8 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 | `TELEGRAM_WEBHOOK_URL` | string | no | `""` | Webhook URL (visible when mode=webhook) |
 | `TELEGRAM_ALLOWED_USERS` | string | no | `""` | Comma-separated Telegram user IDs to allow |
 | `TELEGRAM_HTTP_PORT` | int | no | `8443` | HTTP port |
-| `DEFAULT_AGENT` | string | no | `""` | Default agent alias |
+| `DEFAULT_AGENT` | select | no | `""` | Coordinator agent alias (dynamic options) |
+| `MESSAGE_BUFFER_MS` | number | no | `1000` | Debounce window in ms for consolidating sequential messages. Set to 0 to disable. |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Verbose logging |
 
 ## API Endpoints
@@ -38,7 +39,7 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 ### Subscriptions
 
 - `kernel:alias:update` — Hot-swaps alias map (debounced 2s)
-- `config:update` — Updates `DEFAULT_AGENT`
+- `config:update` — Updates `DEFAULT_AGENT`, `MESSAGE_BUFFER_MS`, `PLUGIN_DEBUG`
 - `webhook:ready` — Registers route with network-webhook-ingress
 - `webhook:plugin:url` — Transitions from polling to webhook mode
 
@@ -46,6 +47,8 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 
 - `webhook:api:update` — Addressed to network-webhook-ingress with route prefix
 - `poll_start`, `poll_stop`, `webhook`, `webhook:error` — Debug events
+- `update_skipped` — Debug: non-message update received (shows update type)
+- `forward_debug` — Debug: forwarded message details (photo/video/doc presence, media count)
 
 ## Usage
 
@@ -68,9 +71,30 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 | `/aliases` | List available aliases |
 | `/help` | Show help |
 
+Commands bypass the message buffer and are handled immediately.
+
+### Message Buffering
+
+Sequential messages from the same chat are buffered for the configured debounce window (default 1000ms). When the window expires without new messages, all buffered messages are merged and sent as a single request:
+
+- Text from multiple messages is joined with newlines
+- Media URLs are deduplicated and combined
+- This handles the common pattern of forwarding an image then typing a follow-up question
+
 ### Message Types
 
-Handles: text, photos (highest resolution downloaded), captions, locations, venues.
+Handles: text, photos (highest resolution), captions, videos, voice messages, audio files, documents (image/video/audio MIME types), stickers, locations, venues.
+
+### Forwarded Messages
+
+Forwarded messages are handled like regular messages — photos, videos, and other media are extracted normally. Debug events (`forward_debug`) log the media presence for diagnostics. Note: forwarded channel posts may have `From` as nil, which is handled safely.
+
+### Reply-to-Message Media
+
+When a user replies to a message containing media (e.g. replying to a photo with a text question), the bot extracts media from both the reply and the original message. This allows patterns like:
+1. Bot sends an AI-generated image
+2. User replies with "Can you describe what's in this image?"
+3. Bot sends both the image URL and the user's text to the agent
 
 ### Media Generation
 
@@ -79,11 +103,11 @@ Handles: text, photos (highest resolution downloaded), captions, locations, venu
 
 ### Message Splitting
 
-Telegram has a 4096-character limit. Long responses are automatically split.
+Telegram has a 4096-character limit. Long responses are automatically split at newline or space boundaries.
 
 ### Response Attribution
 
-Responses include `[@alias]` prefix to show which agent replied.
+Responses include `[@alias]` prefix to show which agent replied. This applies to coordinator responses, direct alias routing, and delegated responses.
 
 ### Typing Indicator
 

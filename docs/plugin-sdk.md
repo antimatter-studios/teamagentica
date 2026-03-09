@@ -328,6 +328,10 @@ All agent plugins follow this pattern:
 - Capabilities: `["messaging:<platform>", "messaging:send", "messaging:receive"]`
 - Subscribe to: `kernel:alias:update`, `config:update`
 - Route messages via alias parsing + coordinator delegation
+- Buffer sequential messages with configurable debounce (`MESSAGE_BUFFER_MS`, default 1000ms)
+- Chat requests include `isCoordinator` flag and `agentAlias` for agent-side system prompt construction
+- Extract media from attachments, embeds, forwarded messages, and reply-to-message chains
+- Attribute responses with `[@alias]` prefix showing which agent replied
 
 ## Related
 
