@@ -71,6 +71,8 @@ func main() {
 	router.GET("/health", h.Health)
 	router.POST("/generate", h.Generate)
 	router.GET("/status/:taskId", h.Status)
+	router.GET("/tools", h.Tools)
+	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)

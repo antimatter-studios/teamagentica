@@ -72,6 +72,7 @@ func main() {
 	router.POST("/generate", h.Generate)
 	router.POST("/chat", h.Chat)
 	router.GET("/tools", h.Tools)
+	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)

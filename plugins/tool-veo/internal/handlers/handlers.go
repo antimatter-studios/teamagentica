@@ -282,6 +282,61 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"records": records})
 }
 
+// SystemPrompt returns the system prompt this plugin would use when processing requests.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"system_prompt": buildSystemPrompt(h.model),
+	})
+}
+
+func buildSystemPrompt(model string) string {
+	return fmt.Sprintf(`You are a video generation tool powered by Google Gemini Veo.
+
+CAPABILITIES:
+- Generate videos from text prompts
+- Current model: %s
+- Asynchronous generation (returns task ID, poll for completion)
+- Configurable aspect ratio
+- Negative prompt support
+
+PARAMETERS:
+- prompt (required): Text description of the video to generate
+- aspect_ratio (optional): Video aspect ratio
+- negative_prompt (optional): What to exclude from the video
+
+OUTPUT:
+- Returns task ID immediately
+- Poll status endpoint for completion
+- Final result includes video URI
+
+GUIDELINES:
+- Video generation is asynchronous — always inform the user that generation is in progress
+- Be descriptive and specific in prompt interpretation
+- Report any generation failures clearly`, model)
+}
+
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"tools": []gin.H{
+			{
+				"name":        "generate_video",
+				"description": "Generate a video from a text prompt using Google Gemini Veo",
+				"endpoint":    "/generate",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"prompt":          gin.H{"type": "string", "description": "Text prompt describing the video to generate"},
+						"aspect_ratio":    gin.H{"type": "string", "description": "Video aspect ratio"},
+						"negative_prompt": gin.H{"type": "string", "description": "What to exclude from the video"},
+					},
+					"required": []string{"prompt"},
+				},
+			},
+		},
+	})
+}
+
 func defaultModels() []string {
 	return []string{
 		"veo-3.1-generate-preview",

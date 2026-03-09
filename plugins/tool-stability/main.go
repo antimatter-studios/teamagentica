@@ -69,6 +69,8 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
+	router.GET("/tools", h.Tools)
+	router.GET("/system-prompt", h.SystemPrompt)
 	router.POST("/generate", h.Generate)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)

@@ -180,6 +180,60 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"records": records})
 }
 
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"tools": []gin.H{
+			{
+				"name":        "generate_image",
+				"description": "Generate an image from a text prompt using Stability AI (Stable Diffusion 3)",
+				"endpoint":    "/generate",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"prompt":          gin.H{"type": "string", "description": "Text prompt describing the image to generate"},
+						"negative_prompt": gin.H{"type": "string", "description": "Text describing what to exclude from the image"},
+						"aspect_ratio":    gin.H{"type": "string", "description": "Aspect ratio (1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3)", "enum": []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}},
+						"output_format":   gin.H{"type": "string", "description": "Output image format", "enum": []string{"png", "jpeg", "webp"}},
+					},
+					"required": []string{"prompt"},
+				},
+			},
+		},
+	})
+}
+
+// SystemPrompt returns the system prompt this plugin would use when processing requests.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"system_prompt": buildSystemPrompt(h.model),
+	})
+}
+
+func buildSystemPrompt(model string) string {
+	return fmt.Sprintf(`You are an image generation tool powered by Stability AI (Stable Diffusion 3).
+
+CAPABILITIES:
+- Generate images from text prompts
+- Current model: %s
+- Supported aspect ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3
+- Supported output formats: png, jpeg, webp
+
+PARAMETERS:
+- prompt (required): Text description of the image to generate
+- negative_prompt (optional): What to exclude from the image
+- aspect_ratio (optional): Image aspect ratio (default: 1:1)
+- output_format (optional): Output format (default: png)
+
+OUTPUT:
+- Returns base64-encoded image data with MIME type and seed value
+
+GUIDELINES:
+- Use negative prompts to refine output when appropriate
+- Be descriptive and specific in prompt interpretation
+- Report any generation failures clearly`, model)
+}
+
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

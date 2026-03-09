@@ -284,6 +284,68 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"records": records})
 }
 
+// SystemPrompt returns the system prompt this plugin would use when processing requests.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"system_prompt": buildSystemPrompt(),
+	})
+}
+
+func buildSystemPrompt() string {
+	return `You are a video generation tool powered by Seedance API (seedance-2.0 model).
+
+CAPABILITIES:
+- Generate videos from text prompts
+- Asynchronous generation (returns task ID, poll for completion)
+- Optional audio generation
+- Optional reference image input
+- Configurable aspect ratio, resolution, and duration
+
+PARAMETERS:
+- prompt (required): Text description of the video to generate
+- aspect_ratio (optional): Video aspect ratio
+- resolution (optional): Output resolution
+- duration (optional): Video duration
+- generate_audio (optional): Generate audio track
+- fixed_lens (optional): Use fixed camera lens
+- image_urls (optional): Reference images for guided generation
+
+OUTPUT:
+- Returns task ID immediately
+- Poll status endpoint for completion
+- Final result includes video URL
+
+GUIDELINES:
+- Video generation is asynchronous — always inform the user that generation is in progress
+- Be descriptive and specific in prompt interpretation
+- Report any generation failures clearly`
+}
+
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"tools": []gin.H{
+			{
+				"name":        "generate_video",
+				"description": "Generate a video from a text prompt using Seedance API",
+				"endpoint":    "/generate",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"prompt":         gin.H{"type": "string", "description": "Text prompt describing the video to generate"},
+						"aspect_ratio":   gin.H{"type": "string", "description": "Video aspect ratio"},
+						"resolution":     gin.H{"type": "string", "description": "Output resolution"},
+						"duration":       gin.H{"type": "string", "description": "Video duration"},
+						"generate_audio": gin.H{"type": "boolean", "description": "Whether to generate audio"},
+						"fixed_lens":     gin.H{"type": "boolean", "description": "Use fixed camera lens"},
+					},
+					"required": []string{"prompt"},
+				},
+			},
+		},
+	})
+}
+
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

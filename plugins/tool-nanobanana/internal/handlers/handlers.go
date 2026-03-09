@@ -295,6 +295,35 @@ func (h *Handler) Tools(c *gin.Context) {
 	})
 }
 
+// SystemPrompt returns the system prompt this plugin would use when processing requests.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"system_prompt": buildSystemPrompt(h.model),
+	})
+}
+
+func buildSystemPrompt(model string) string {
+	return fmt.Sprintf(`You are an image generation tool powered by Nano Banana (Google Gemini image models).
+
+CAPABILITIES:
+- Generate images from text prompts
+- Current model: %s
+- Supported aspect ratios: 1:1, 16:9, 9:16
+
+PARAMETERS:
+- prompt (required): Text description of the image to generate
+- aspect_ratio (optional): Image aspect ratio (default: 1:1)
+
+OUTPUT:
+- Returns base64-encoded image data with MIME type
+- May include descriptive text about the generated image
+
+GUIDELINES:
+- Be descriptive and specific in prompt interpretation
+- If the request is ambiguous, generate the most likely intended image
+- Report any generation failures clearly`, model)
+}
+
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
