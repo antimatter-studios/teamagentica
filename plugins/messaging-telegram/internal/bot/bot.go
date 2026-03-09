@@ -33,6 +33,7 @@ type Bot struct {
 	debug        bool
 	aliases      *alias.AliasMap
 	defaultAgent atomic.Pointer[string] // plugin ID for coordinator brain
+	msgBuffer    *MessageBuffer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -76,7 +77,21 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		pollStopCh:   make(chan struct{}),
 		shutdownCh:   make(chan struct{}),
 	}
+
+	b.msgBuffer = NewMessageBuffer(1*time.Second, func(chatID int64, text string, mediaURLs []string) {
+		b.processBuffered(chatID, text, mediaURLs)
+	})
+
 	return b, nil
+}
+
+// SetMessageBufferMS updates the debounce duration in milliseconds.
+func (b *Bot) SetMessageBufferMS(ms int) {
+	if ms < 0 {
+		ms = 0
+	}
+	b.msgBuffer.SetDuration(time.Duration(ms) * time.Millisecond)
+	log.Printf("Message buffer duration updated: %dms", ms)
 }
 
 // SetDefaultAgent atomically updates the coordinator agent plugin ID.
@@ -193,6 +208,28 @@ func (b *Bot) StartPolling() {
 				}
 				if msg != nil {
 					b.handleMessage(msg)
+				} else if b.debug {
+					// Log what kind of update this is so we can diagnose dropped messages.
+					kind := "unknown"
+					switch {
+					case update.EditedMessage != nil:
+						kind = "edited_message"
+					case update.EditedChannelPost != nil:
+						kind = "edited_channel_post"
+					case update.CallbackQuery != nil:
+						kind = "callback_query"
+					case update.InlineQuery != nil:
+						kind = "inline_query"
+					case update.ChosenInlineResult != nil:
+						kind = "chosen_inline_result"
+					case update.MyChatMember != nil:
+						kind = "my_chat_member"
+					case update.ChatMember != nil:
+						kind = "chat_member"
+					case update.ChatJoinRequest != nil:
+						kind = "chat_join_request"
+					}
+					b.emitEvent("update_skipped", fmt.Sprintf("update_id=%d type=%s (not a message)", update.UpdateID, kind))
 				}
 			}
 		}
@@ -227,7 +264,10 @@ func (b *Bot) Stop() {
 		b.emitEvent("shutdown", "shutting down")
 		log.Println("Shutting down Telegram bot...")
 
-		// 2. Cancel context — signals all goroutines.
+		// 2. Flush pending message buffers before cancelling context.
+		b.msgBuffer.Stop()
+
+		// 3. Cancel context — signals all goroutines.
 		b.cancel()
 
 		// 3. Stop polling if active.
@@ -416,6 +456,7 @@ func (b *Bot) registerCommands() {
 }
 
 // handleMessage processes an incoming Telegram message.
+// Commands are handled immediately; all other messages are buffered per-chat.
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	// Ignore messages from bots.
 	if msg.From != nil && msg.From.IsBot {
@@ -438,85 +479,33 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	// Extract media URLs from photos, video, voice, audio, and documents.
+	// Also check ReplyToMessage so users can reply to an image with a text prompt.
 	var imageURLs []string
-	if msg.Photo != nil && len(msg.Photo) > 0 {
-		// Telegram sends multiple sizes; pick the highest resolution (last element).
-		bestPhoto := msg.Photo[len(msg.Photo)-1]
-		fileURL, err := b.api.GetFileDirectURL(bestPhoto.FileID)
-		if err != nil {
-			log.Printf("[message] failed to get photo URL: %v", err)
-			b.emitEvent("error", fmt.Sprintf("photo URL: %v", err))
-		} else {
-			imageURLs = append(imageURLs, fileURL)
-			if b.debug {
-				log.Printf("[message] extracted photo URL: %s", fileURL)
-			}
-		}
+	imageURLs = b.extractMediaURLs(imageURLs, msg)
+	if msg.ReplyToMessage != nil {
+		imageURLs = b.extractMediaURLs(imageURLs, msg.ReplyToMessage)
 	}
 
-	// Extract video file URL.
-	if msg.Video != nil {
-		fileURL, err := b.api.GetFileDirectURL(msg.Video.FileID)
-		if err != nil {
-			log.Printf("[message] failed to get video URL: %v", err)
-			b.emitEvent("error", fmt.Sprintf("video URL: %v", err))
-		} else {
-			imageURLs = append(imageURLs, fileURL)
-			if b.debug {
-				log.Printf("[message] extracted video URL: %s", fileURL)
-			}
-		}
-	}
-
-	// Extract voice message URL.
-	if msg.Voice != nil {
-		fileURL, err := b.api.GetFileDirectURL(msg.Voice.FileID)
-		if err != nil {
-			log.Printf("[message] failed to get voice URL: %v", err)
-			b.emitEvent("error", fmt.Sprintf("voice URL: %v", err))
-		} else {
-			imageURLs = append(imageURLs, fileURL)
-			if b.debug {
-				log.Printf("[message] extracted voice URL: %s", fileURL)
-			}
-		}
-	}
-
-	// Extract audio file URL.
-	if msg.Audio != nil {
-		fileURL, err := b.api.GetFileDirectURL(msg.Audio.FileID)
-		if err != nil {
-			log.Printf("[message] failed to get audio URL: %v", err)
-			b.emitEvent("error", fmt.Sprintf("audio URL: %v", err))
-		} else {
-			imageURLs = append(imageURLs, fileURL)
-			if b.debug {
-				log.Printf("[message] extracted audio URL: %s", fileURL)
-			}
-		}
-	}
-
-	// Extract document URL for media MIME types (image/*, video/*, audio/*).
-	if msg.Document != nil {
-		mime := msg.Document.MimeType
-		if strings.HasPrefix(mime, "image/") || strings.HasPrefix(mime, "video/") || strings.HasPrefix(mime, "audio/") {
-			fileURL, err := b.api.GetFileDirectURL(msg.Document.FileID)
-			if err != nil {
-				log.Printf("[message] failed to get document URL: %v", err)
-				b.emitEvent("error", fmt.Sprintf("document URL: %v", err))
-			} else {
-				imageURLs = append(imageURLs, fileURL)
-				if b.debug {
-					log.Printf("[message] extracted document media URL (%s): %s", mime, fileURL)
-				}
-			}
-		}
+	if b.debug && msg.ForwardDate != 0 {
+		hasPhoto := msg.Photo != nil && len(msg.Photo) > 0
+		hasVideo := msg.Video != nil
+		hasDoc := msg.Document != nil
+		log.Printf("[message] forwarded message: photo=%v video=%v doc=%v caption=%q text=%q media_urls=%d",
+			hasPhoto, hasVideo, hasDoc, msg.Caption, msg.Text, len(imageURLs))
+		b.emitEvent("forward_debug", fmt.Sprintf("photo=%v video=%v doc=%v caption=%q media=%d",
+			hasPhoto, hasVideo, hasDoc, truncate(msg.Caption, 50), len(imageURLs)))
 	}
 
 	// Extract message text.
 	text := msg.Text
 	if text == "" {
 		text = msg.Caption // Support photo/document captions.
+	}
+	if text == "" && msg.ReplyToMessage != nil {
+		// If replying to a message, use the replied-to caption as context.
+		if msg.ReplyToMessage.Caption != "" {
+			text = msg.ReplyToMessage.Caption
+		}
 	}
 	if text == "" && len(imageURLs) > 0 {
 		text = "What's in this media?"
@@ -534,12 +523,9 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	username := ""
-	var userID int64
 	if msg.From != nil {
 		username = msg.From.UserName
-		userID = msg.From.ID
 	}
-	log.Printf("[message] from @%s (user=%d chat=%d): %s", username, userID, msg.Chat.ID, text)
 
 	if b.debug {
 		b.emitEvent("message_received", fmt.Sprintf("from @%s: %s", username, truncate(text, 100)))
@@ -547,17 +533,34 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		b.emitEvent("message_received", fmt.Sprintf("from @%s (%d chars)", username, len(text)))
 	}
 
-	// Per-message context for cancellation.
-	msgCtx, msgCancel := context.WithCancel(b.ctx)
-	defer msgCancel()
+	// Commands bypass the buffer — handle immediately.
+	if text == "/help" || text == "/start" || text == "/clear" || text == "/reset" || text == "/aliases" {
+		b.handleCommand(msg.Chat.ID, text)
+		return
+	}
 
-	// Send typing indicator and refresh it while waiting.
+	// Start typing on first buffered message so user sees immediate feedback.
 	b.wg.Add(1)
-	go b.sendTypingLoop(msgCtx, msg.Chat.ID)
+	go func() {
+		defer b.wg.Done()
+		typing := tgbotapi.NewChatAction(msg.Chat.ID, tgbotapi.ChatTyping)
+		b.api.Send(typing)
+	}()
 
-	// Handle /help command.
-	if text == "/help" || text == "/start" {
-		msgCancel()
+	var userID int64
+	if msg.From != nil {
+		userID = msg.From.ID
+	}
+	log.Printf("[message] buffering from @%s (user=%d chat=%d): %s", username, userID, msg.Chat.ID, text)
+
+	// Buffer the message — will be flushed after debounce window.
+	b.msgBuffer.Add(msg.Chat.ID, text, imageURLs)
+}
+
+// handleCommand processes slash commands immediately without buffering.
+func (b *Bot) handleCommand(chatID int64, text string) {
+	switch text {
+	case "/help", "/start":
 		helpMsg := "Available commands:\n\n" +
 			"/clear — Clear conversation history\n" +
 			"/aliases — List configured @mention aliases\n" +
@@ -569,24 +572,31 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		} else {
 			helpMsg += "Or just send any message to chat with the AI."
 		}
-		b.sendResponse(msg.Chat.ID, helpMsg)
-		return
-	}
+		b.sendResponse(chatID, helpMsg)
 
-	// Handle /clear command to reset conversation.
-	if text == "/clear" || text == "/reset" {
-		msgCancel()
-		b.kernelClient.ClearHistory(msg.Chat.ID)
-		b.sendResponse(msg.Chat.ID, "Conversation cleared.")
-		return
-	}
+	case "/clear", "/reset":
+		b.kernelClient.ClearHistory(chatID)
+		b.sendResponse(chatID, "Conversation cleared.")
 
-	// Handle /aliases — list configured @mention aliases.
-	if text == "/aliases" {
-		msgCancel()
-		b.handleAliasesCommand(msg.Chat.ID)
-		return
+	case "/aliases":
+		b.handleAliasesCommand(chatID)
 	}
+}
+
+// processBuffered handles the merged text and media after the debounce timer fires.
+// Called from the MessageBuffer flush callback.
+func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
+	// Per-message context for cancellation.
+	msgCtx, msgCancel := context.WithCancel(b.ctx)
+	defer msgCancel()
+
+	// Send typing indicator and refresh it while waiting.
+	b.wg.Add(1)
+	go b.sendTypingLoop(msgCtx, chatID)
+
+	// Use a zero userID — the buffer merges messages so we don't track per-message user.
+	// In practice all buffered messages come from the same user in a private chat.
+	var userID int64
 
 	// Check for direct @mention routing (fast path — no coordinator needed).
 	if !b.aliases.IsEmpty() {
@@ -595,11 +605,11 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 			msgCancel()
 			switch result.Target.Type {
 			case alias.TargetAgent:
-				b.handleAliasAgent(msg.Chat.ID, userID, username, result, imageURLs)
+				b.handleAliasAgent(chatID, userID, "", result, imageURLs)
 			case alias.TargetImage:
-				b.handleImageGenerate(msg.Chat.ID, username, stripToolPrefix(result.Target.PluginID), result.Remainder)
+				b.handleImageGenerate(chatID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
 			case alias.TargetVideo:
-				b.handleVideoGenerate(msg.Chat.ID, username, stripToolPrefix(result.Target.PluginID), result.Remainder)
+				b.handleVideoGenerate(chatID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
 			}
 			return
 		}
@@ -609,56 +619,49 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	coordinator := b.resolveDefaultAgent()
 	if coordinator == nil {
 		msgCancel()
-		log.Printf("No coordinator agent configured — rejecting message from @%s", username)
+		log.Printf("No coordinator agent configured — rejecting buffered message")
 		b.emitEvent("error", "no coordinator agent configured")
-		b.sendResponse(msg.Chat.ID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
+		b.sendResponse(chatID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
 		return
 	}
 
-	systemPrompt := b.aliases.SystemPromptBlock()
-	var response string
-	var err error
-	if systemPrompt != "" {
-		response, err = b.kernelClient.ChatWithAgentDirect(msgCtx, msg.Chat.ID, userID, coordinator.PluginID, coordinator.Model, text, imageURLs, systemPrompt)
-	} else {
-		response, err = b.kernelClient.ChatWithAgentDirect(msgCtx, msg.Chat.ID, userID, coordinator.PluginID, coordinator.Model, text, imageURLs, "")
-	}
+	response, err := b.kernelClient.ChatWithAgentDirect(msgCtx, chatID, userID, coordinator.PluginID, coordinator.Model, text, imageURLs, true, "")
 	msgCancel()
 
 	if err != nil {
 		log.Printf("Agent error: %v", err)
 		b.emitEvent("error", fmt.Sprintf("agent error: %v", err))
-		b.sendResponse(msg.Chat.ID, "Sorry, I encountered an error processing your message.")
+		b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
 		return
-	} else {
-		b.emitEvent("agent_response", fmt.Sprintf("response length=%d chars", len(response)))
+	}
 
-		// Check if coordinator delegated to another alias.
-		if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
-			if target := b.aliases.Resolve(delegatedAlias); target != nil {
-				b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
-				// Re-route to the delegated target.
-				delegCtx, delegCancel := context.WithCancel(b.ctx)
-				switch target.Type {
-				case alias.TargetAgent:
-					delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
-						delegCtx, msg.Chat.ID, userID, target.PluginID, target.Model, delegatedMsg, nil, "")
-					if delegErr != nil {
-						response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
-					} else {
-						response = formatAttributedResponse(delegatedAlias, delegatedResp)
-					}
-				case alias.TargetImage:
-					delegCancel()
-					b.handleImageGenerate(msg.Chat.ID, username, stripToolPrefix(target.PluginID), delegatedMsg)
-					return
-				case alias.TargetVideo:
-					delegCancel()
-					b.handleVideoGenerate(msg.Chat.ID, username, stripToolPrefix(target.PluginID), delegatedMsg)
-					return
+	b.emitEvent("agent_response", fmt.Sprintf("response length=%d chars", len(response)))
+
+	// Check if coordinator delegated to another alias.
+	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
+		if target := b.aliases.Resolve(delegatedAlias); target != nil {
+			b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
+			// Re-route to the delegated target.
+			delegCtx, delegCancel := context.WithCancel(b.ctx)
+			switch target.Type {
+			case alias.TargetAgent:
+				delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
+					delegCtx, chatID, userID, target.PluginID, target.Model, delegatedMsg, nil, false, delegatedAlias)
+				if delegErr != nil {
+					response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
+				} else {
+					response = formatAttributedResponse(delegatedAlias, delegatedResp)
 				}
+			case alias.TargetImage:
 				delegCancel()
+				b.handleImageGenerate(chatID, "", stripToolPrefix(target.PluginID), delegatedMsg)
+				return
+			case alias.TargetVideo:
+				delegCancel()
+				b.handleVideoGenerate(chatID, "", stripToolPrefix(target.PluginID), delegatedMsg)
+				return
 			}
+			delegCancel()
 		}
 	}
 
@@ -672,15 +675,11 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	// Send the response, splitting if necessary.
-	if err := b.sendResponse(msg.Chat.ID, response); err != nil {
+	if err := b.sendResponse(chatID, response); err != nil {
 		log.Printf("Error sending response: %v", err)
 		b.emitEvent("error", fmt.Sprintf("send error: %v", err))
 	} else {
-		if b.debug {
-			b.emitEvent("message_sent", fmt.Sprintf("to @%s: %s", username, truncate(response, 100)))
-		} else {
-			b.emitEvent("message_sent", fmt.Sprintf("to @%s (%d chars)", username, len(response)))
-		}
+		b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(response)))
 	}
 }
 
@@ -885,7 +884,7 @@ func (b *Bot) handleAliasAgent(chatID int64, userID int64, username string, resu
 	b.wg.Add(1)
 	go b.sendTypingLoop(reqCtx, chatID)
 
-	response, err := b.kernelClient.ChatWithAgentDirect(reqCtx, chatID, userID, target.PluginID, target.Model, message, imageURLs, "")
+	response, err := b.kernelClient.ChatWithAgentDirect(reqCtx, chatID, userID, target.PluginID, target.Model, message, imageURLs, false, result.Alias)
 	reqCancel()
 
 	if err != nil {
@@ -961,6 +960,63 @@ func (b *Bot) resolveDefaultAgent() *resolvedAgent {
 	}
 	// If it doesn't resolve as an alias, treat it as a raw plugin ID.
 	return &resolvedAgent{PluginID: da}
+}
+
+// extractMediaURLs extracts photo, video, voice, audio, and document media
+// URLs from a Telegram message and appends them to the provided slice.
+func (b *Bot) extractMediaURLs(urls []string, msg *tgbotapi.Message) []string {
+	if msg.Photo != nil && len(msg.Photo) > 0 {
+		bestPhoto := msg.Photo[len(msg.Photo)-1]
+		if fileURL, err := b.api.GetFileDirectURL(bestPhoto.FileID); err != nil {
+			log.Printf("[message] failed to get photo URL: %v", err)
+			b.emitEvent("error", fmt.Sprintf("photo URL: %v", err))
+		} else {
+			urls = append(urls, fileURL)
+			if b.debug {
+				log.Printf("[message] extracted photo URL: %s", fileURL)
+			}
+		}
+	}
+	if msg.Video != nil {
+		if fileURL, err := b.api.GetFileDirectURL(msg.Video.FileID); err != nil {
+			log.Printf("[message] failed to get video URL: %v", err)
+		} else {
+			urls = append(urls, fileURL)
+		}
+	}
+	if msg.Voice != nil {
+		if fileURL, err := b.api.GetFileDirectURL(msg.Voice.FileID); err != nil {
+			log.Printf("[message] failed to get voice URL: %v", err)
+		} else {
+			urls = append(urls, fileURL)
+		}
+	}
+	if msg.Audio != nil {
+		if fileURL, err := b.api.GetFileDirectURL(msg.Audio.FileID); err != nil {
+			log.Printf("[message] failed to get audio URL: %v", err)
+		} else {
+			urls = append(urls, fileURL)
+		}
+	}
+	if msg.Document != nil {
+		mime := msg.Document.MimeType
+		if strings.HasPrefix(mime, "image/") || strings.HasPrefix(mime, "video/") || strings.HasPrefix(mime, "audio/") {
+			if fileURL, err := b.api.GetFileDirectURL(msg.Document.FileID); err != nil {
+				log.Printf("[message] failed to get document URL: %v", err)
+			} else {
+				urls = append(urls, fileURL)
+			}
+		}
+	}
+	// Stickers contain an image file.
+	if msg.Sticker != nil {
+		if fileURL, err := b.api.GetFileDirectURL(msg.Sticker.FileID); err != nil {
+			log.Printf("[message] failed to get sticker URL: %v", err)
+		} else {
+			urls = append(urls, fileURL)
+		}
+	}
+	return urls
 }
 
 // stripToolPrefix removes the "tool-" prefix from a plugin ID for use as a
