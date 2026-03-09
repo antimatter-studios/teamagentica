@@ -27,6 +27,7 @@ type Bot struct {
 	defaultAgent atomic.Pointer[string]
 	debug        atomic.Bool
 	sdk          *pluginsdk.Client
+	msgBuffer    *MessageBuffer
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -50,7 +51,21 @@ func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*B
 		kernelClient: kernelClient,
 		aliases:      aliases,
 	}
+
+	b.msgBuffer = NewMessageBuffer(1*time.Second, func(channelID string, text string, mediaURLs []string) {
+		b.processBuffered(channelID, text, mediaURLs)
+	})
+
 	return b, nil
+}
+
+// SetMessageBufferMS updates the debounce duration in milliseconds.
+func (b *Bot) SetMessageBufferMS(ms int) {
+	if ms < 0 {
+		ms = 0
+	}
+	b.msgBuffer.SetDuration(time.Duration(ms) * time.Millisecond)
+	log.Printf("Message buffer duration updated: %dms", ms)
 }
 
 // SetSDK attaches the plugin SDK client for event reporting.
@@ -101,6 +116,7 @@ func (b *Bot) Start() error {
 // Stop gracefully closes the Discord connection.
 func (b *Bot) Stop() error {
 	log.Println("Shutting down Discord bot...")
+	b.msgBuffer.Stop()
 	return b.session.Close()
 }
 
@@ -111,6 +127,7 @@ func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 }
 
 // onMessageCreate handles incoming messages.
+// Commands are processed immediately; all other messages are buffered per-channel.
 func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Ignore messages from bots (including ourselves)
 	if m.Author.Bot {
@@ -129,13 +146,53 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	content := b.stripBotMention(m.Content)
 	content = strings.TrimSpace(content)
 
-	// Extract media URLs from attachments
+	// Extract media URLs from attachments, embeds, and forwarded message snapshots.
 	var mediaURLs []string
-	for _, att := range m.Attachments {
-		if strings.HasPrefix(att.ContentType, "image/") ||
-			strings.HasPrefix(att.ContentType, "video/") ||
-			strings.HasPrefix(att.ContentType, "audio/") {
-			mediaURLs = append(mediaURLs, att.URL)
+	mediaURLs = appendAttachmentURLs(mediaURLs, m.Attachments)
+	mediaURLs = appendEmbedImageURLs(mediaURLs, m.Embeds)
+	for _, snap := range m.MessageSnapshots {
+		if snap.Message != nil {
+			mediaURLs = appendAttachmentURLs(mediaURLs, snap.Message.Attachments)
+			mediaURLs = appendEmbedImageURLs(mediaURLs, snap.Message.Embeds)
+			// Use forwarded message text if the outer message is empty.
+			if content == "" && snap.Message.Content != "" {
+				content = snap.Message.Content
+			}
+			if b.debug.Load() {
+				log.Printf("[message] snapshot: content=%q attachments=%d embeds=%d",
+					truncate(snap.Message.Content, 100), len(snap.Message.Attachments), len(snap.Message.Embeds))
+				for i, att := range snap.Message.Attachments {
+					log.Printf("[message] snapshot attachment[%d]: filename=%q content_type=%q url=%q",
+						i, att.Filename, att.ContentType, truncate(att.URL, 100))
+				}
+			}
+		}
+	}
+
+	// If a forwarded message (MessageReference) has no extracted media,
+	// try fetching the original message's attachments directly via API.
+	if len(mediaURLs) == 0 && m.MessageReference != nil && m.MessageReference.MessageID != "" {
+		if b.debug.Load() {
+			log.Printf("[message] forwarded message ref: channel=%s message=%s type=%d",
+				m.MessageReference.ChannelID, m.MessageReference.MessageID, m.MessageReference.Type)
+		}
+		chID := m.MessageReference.ChannelID
+		if chID == "" {
+			chID = m.ChannelID
+		}
+		origMsg, err := s.ChannelMessage(chID, m.MessageReference.MessageID)
+		if err != nil {
+			log.Printf("[message] failed to fetch referenced message: %v", err)
+		} else {
+			mediaURLs = appendAttachmentURLs(mediaURLs, origMsg.Attachments)
+			mediaURLs = appendEmbedImageURLs(mediaURLs, origMsg.Embeds)
+			if content == "" && origMsg.Content != "" {
+				content = origMsg.Content
+			}
+			if b.debug.Load() {
+				log.Printf("[message] fetched original message: content=%q attachments=%d embeds=%d media_extracted=%d",
+					truncate(origMsg.Content, 100), len(origMsg.Attachments), len(origMsg.Embeds), len(mediaURLs))
+			}
 		}
 	}
 
@@ -156,26 +213,37 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		b.emitEvent("message_received", fmt.Sprintf("from %s (%d chars)", m.Author.Username, len(content)))
 	}
 
-	// Show typing indicator
+	// Show typing indicator on first message so user sees immediate feedback.
 	s.ChannelTyping(m.ChannelID)
+
+	// Buffer the message — will be flushed after debounce window.
+	b.msgBuffer.Add(m.ChannelID, content, mediaURLs)
+}
+
+// processBuffered handles the merged text and media after the debounce timer fires.
+func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string) {
+	s := b.session
+
+	// Show typing indicator.
+	s.ChannelTyping(channelID)
 
 	// Check for direct @mention routing (fast path).
 	if !b.aliases.IsEmpty() {
-		result := b.aliases.Parse(content)
+		result := b.aliases.Parse(text)
 		if result.Target != nil {
 			switch result.Target.Type {
 			case alias.TargetAgent:
 				if result.Remainder == "" {
-					s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
+					s.ChannelMessageSend(channelID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
 					return
 				}
-				b.emitEvent("alias_route", fmt.Sprintf("@%s → %s from %s", result.Alias, result.Target.PluginID, m.Author.Username))
+				b.emitEvent("alias_route", fmt.Sprintf("@%s → %s", result.Alias, result.Target.PluginID))
 				response, err := b.kernelClient.ChatWithAgentDirect(
-					result.Target.PluginID, result.Target.Model, result.Remainder, mediaURLs, "")
+					result.Target.PluginID, result.Target.Model, result.Remainder, mediaURLs, false, result.Alias)
 				if err != nil {
 					log.Printf("Alias route error (@%s): %v", result.Alias, err)
 					b.emitEvent("alias_error", fmt.Sprintf("@%s: %v", result.Alias, err))
-					s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
+					s.ChannelMessageSend(channelID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
 					return
 				}
 				if b.debug.Load() {
@@ -183,11 +251,11 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 				} else {
 					b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", result.Alias, len(response)))
 				}
-				b.sendResponse(s, m.ChannelID, response)
+				b.sendResponse(s, channelID, formatAttributedResponse(result.Alias, response))
 			case alias.TargetImage:
-				b.handleImageGenerate(s, m.ChannelID, m.Author.Username, stripToolPrefix(result.Target.PluginID), result.Remainder)
+				b.handleImageGenerate(s, channelID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
 			case alias.TargetVideo:
-				b.handleVideoGenerate(s, m.ChannelID, m.Author.Username, stripToolPrefix(result.Target.PluginID), result.Remainder)
+				b.handleVideoGenerate(s, channelID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
 			}
 			return
 		}
@@ -196,19 +264,18 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	// Route to coordinator agent — requires DEFAULT_AGENT to be set in plugin config.
 	coordinator := b.resolveDefaultAgent()
 	if coordinator == nil {
-		log.Printf("No coordinator agent configured — rejecting message from %s", m.Author.Username)
+		log.Printf("No coordinator agent configured — rejecting buffered message")
 		b.emitEvent("error", "no coordinator agent configured")
-		s.ChannelMessageSend(m.ChannelID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
+		s.ChannelMessageSend(channelID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
 		return
 	}
 
-	systemPrompt := b.aliases.SystemPromptBlock()
-	response, err := b.kernelClient.ChatWithAgentDirect(coordinator.PluginID, coordinator.Model, content, mediaURLs, systemPrompt)
+	response, err := b.kernelClient.ChatWithAgentDirect(coordinator.PluginID, coordinator.Model, text, mediaURLs, true, "")
 
 	if err != nil {
 		log.Printf("Error calling kernel: %v", err)
 		b.emitEvent("error", fmt.Sprintf("agent error: %v", err))
-		s.ChannelMessageSend(m.ChannelID, "Sorry, I encountered an error processing your message.")
+		s.ChannelMessageSend(channelID, "Sorry, I encountered an error processing your message.")
 		return
 	}
 
@@ -225,28 +292,37 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 			switch target.Type {
 			case alias.TargetAgent:
 				delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
-					target.PluginID, target.Model, delegatedMsg, nil, "")
+					target.PluginID, target.Model, delegatedMsg, nil, false, delegatedAlias)
 				if delegErr != nil {
 					response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
 				} else {
-					response = delegatedResp
+					response = formatAttributedResponse(delegatedAlias, delegatedResp)
 				}
 			case alias.TargetImage:
-				b.handleImageGenerate(s, m.ChannelID, m.Author.Username, stripToolPrefix(target.PluginID), delegatedMsg)
+				b.handleImageGenerate(s, channelID, "", stripToolPrefix(target.PluginID), delegatedMsg)
 				return
 			case alias.TargetVideo:
-				b.handleVideoGenerate(s, m.ChannelID, m.Author.Username, stripToolPrefix(target.PluginID), delegatedMsg)
+				b.handleVideoGenerate(s, channelID, "", stripToolPrefix(target.PluginID), delegatedMsg)
 				return
 			}
 		}
 	}
 
+	// Attribute the response to the coordinator's alias (or plugin ID).
+	if coordinator != nil && !strings.HasPrefix(response, "[@") {
+		responderName := b.aliases.FindAliasByPluginID(coordinator.PluginID)
+		if responderName == "" {
+			responderName = coordinator.PluginID
+		}
+		response = formatAttributedResponse(responderName, response)
+	}
+
 	// Send the response, splitting if necessary
-	if err := b.sendResponse(s, m.ChannelID, response); err != nil {
+	if err := b.sendResponse(s, channelID, response); err != nil {
 		log.Printf("Error sending response: %v", err)
 		b.emitEvent("error", fmt.Sprintf("send error: %v", err))
 	} else {
-		b.emitEvent("message_sent", fmt.Sprintf("to %s (%d chars)", m.Author.Username, len(response)))
+		b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(response)))
 	}
 }
 
@@ -289,6 +365,15 @@ func (b *Bot) resolveDefaultAgent() *resolvedAgent {
 		return &resolvedAgent{PluginID: target.PluginID, Model: target.Model}
 	}
 	return &resolvedAgent{PluginID: da}
+}
+
+// formatAttributedResponse prefixes a response with the responder's name
+// so users can see who authored the message.
+func formatAttributedResponse(name, response string) string {
+	if name == "" {
+		return response
+	}
+	return fmt.Sprintf("[@%s]\n%s", name, response)
 }
 
 // truncate shortens a string to maxLen, appending "..." if truncated.
@@ -454,6 +539,47 @@ func (b *Bot) pollVideoStatus(s *discordgo.Session, channelID, username, provide
 			interval = laterInterval
 		}
 	}
+}
+
+// appendAttachmentURLs extracts media URLs from Discord message attachments.
+// Falls back to filename extension when ContentType is empty (e.g. in message snapshots).
+func appendAttachmentURLs(urls []string, attachments []*discordgo.MessageAttachment) []string {
+	for _, att := range attachments {
+		if att.URL == "" {
+			continue
+		}
+		if strings.HasPrefix(att.ContentType, "image/") ||
+			strings.HasPrefix(att.ContentType, "video/") ||
+			strings.HasPrefix(att.ContentType, "audio/") {
+			urls = append(urls, att.URL)
+			continue
+		}
+		// Fallback: check filename extension when ContentType is empty or unrecognised.
+		if att.ContentType == "" {
+			lower := strings.ToLower(att.Filename)
+			for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+				".mp4", ".webm", ".mov", ".avi", ".mp3", ".ogg", ".wav"} {
+				if strings.HasSuffix(lower, ext) {
+					urls = append(urls, att.URL)
+					break
+				}
+			}
+		}
+	}
+	return urls
+}
+
+// appendEmbedImageURLs extracts image URLs from Discord message embeds.
+func appendEmbedImageURLs(urls []string, embeds []*discordgo.MessageEmbed) []string {
+	for _, embed := range embeds {
+		if embed.Image != nil && embed.Image.URL != "" {
+			urls = append(urls, embed.Image.URL)
+		}
+		if embed.Thumbnail != nil && embed.Thumbnail.URL != "" {
+			urls = append(urls, embed.Thumbnail.URL)
+		}
+	}
+	return urls
 }
 
 // splitMessage splits text into chunks of at most maxLen characters,
