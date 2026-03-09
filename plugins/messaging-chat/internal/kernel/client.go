@@ -18,10 +18,12 @@ type Client struct {
 }
 
 type ChatRequest struct {
-	Message      string            `json:"message"`
-	Model        string            `json:"model,omitempty"`
-	ImageURLs    []string          `json:"image_urls,omitempty"`
-	Conversation []ConversationMsg `json:"conversation"`
+	Message       string            `json:"message"`
+	Model         string            `json:"model,omitempty"`
+	ImageURLs     []string          `json:"image_urls,omitempty"`
+	Conversation  []ConversationMsg `json:"conversation"`
+	IsCoordinator bool              `json:"is_coordinator,omitempty"`
+	AgentAlias    string            `json:"agent_alias,omitempty"`
 }
 
 type ConversationMsg struct {
@@ -60,20 +62,19 @@ func NewClient(baseURL, serviceToken string, debug bool) *Client {
 }
 
 // ChatWithAgent sends a chat request to a specific plugin via kernel proxy.
-// If systemPrompt is non-empty, a system message is prepended to the conversation.
-func (c *Client) ChatWithAgent(userID uint, pluginID, model, message string, imageURLs []string, history []ConversationMsg, systemPrompt string) (*ChatResponse, error) {
+// Pass isCoordinator=true for coordinator calls, and agentAlias for the target agent's alias.
+func (c *Client) ChatWithAgent(userID uint, pluginID, model, message string, imageURLs []string, history []ConversationMsg, isCoordinator bool, agentAlias string) (*ChatResponse, error) {
 	var conv []ConversationMsg
-	if systemPrompt != "" {
-		conv = append(conv, ConversationMsg{Role: "system", Content: systemPrompt})
-	}
 	conv = append(conv, history...)
 	conv = append(conv, ConversationMsg{Role: "user", Content: message})
 
 	reqBody := ChatRequest{
-		Message:      message,
-		Model:        model,
-		ImageURLs:    imageURLs,
-		Conversation: conv,
+		Message:       message,
+		Model:         model,
+		ImageURLs:     imageURLs,
+		Conversation:  conv,
+		IsCoordinator: isCoordinator,
+		AgentAlias:    agentAlias,
 	}
 
 	body, err := json.Marshal(reqBody)

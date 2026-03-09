@@ -169,14 +169,7 @@ func (b *Bot) handleMessage(msg waClient.Message, senderName string) {
 		return
 	}
 
-	systemPrompt := b.aliases.SystemPromptBlock()
-	var response string
-	var err error
-	if systemPrompt != "" {
-		response, err = b.kernelClient.ChatWithAgentDirect(chatID, coordinator.PluginID, coordinator.Model, text, imageURLs, systemPrompt)
-	} else {
-		response, err = b.kernelClient.ChatWithAgentDirect(chatID, coordinator.PluginID, coordinator.Model, text, imageURLs, "")
-	}
+	response, err := b.kernelClient.ChatWithAgentDirect(chatID, coordinator.PluginID, coordinator.Model, text, imageURLs, true, "")
 
 	if err != nil {
 		log.Printf("[message] Agent error: %v", err)
@@ -191,7 +184,7 @@ func (b *Bot) handleMessage(msg waClient.Message, senderName string) {
 			if target := b.aliases.Resolve(delegatedAlias); target != nil {
 				b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
 				delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
-					chatID, target.PluginID, target.Model, delegatedMsg, nil, "")
+					chatID, target.PluginID, target.Model, delegatedMsg, nil, false, delegatedAlias)
 				if delegErr != nil {
 					response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
 				} else {
@@ -319,7 +312,7 @@ func (b *Bot) handleAliasRoute(chatID, senderName string, result alias.ParseResu
 
 	b.emitEvent("alias_route", fmt.Sprintf("@%s → %s from %s", result.Alias, target.PluginID, senderName))
 
-	response, err := b.kernelClient.ChatWithAgentDirect(chatID, target.PluginID, target.Model, message, imageURLs, "")
+	response, err := b.kernelClient.ChatWithAgentDirect(chatID, target.PluginID, target.Model, message, imageURLs, false, result.Alias)
 	if err != nil {
 		log.Printf("[alias] error @%s → %s: %v", result.Alias, target.PluginID, err)
 		b.wa.SendText(chatID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))

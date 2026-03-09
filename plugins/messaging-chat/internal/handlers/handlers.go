@@ -330,7 +330,6 @@ func (h *Handler) SendMessage(c *gin.Context) {
 	// --- Phase 1: @alias prefix → direct route, strip prefix ---
 	messageText := req.Content
 	var agentAlias string
-	var systemPrompt string
 	useCoordinator := false
 
 	if strings.HasPrefix(messageText, "@") {
@@ -355,7 +354,6 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		coordAlias := h.DefaultAgent()
 		if coordAlias != "" {
 			agentAlias = coordAlias
-			systemPrompt = h.aliases.SystemPromptBlock()
 			useCoordinator = true
 		}
 	}
@@ -435,14 +433,9 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		})
 	}
 
-	// Inject agent identity for direct @alias routes (non-coordinator).
-	if systemPrompt == "" && !useCoordinator {
-		systemPrompt = fmt.Sprintf("You are @%s (%s). You are one of several AI agents in a collaborative platform.", agentAlias, target.PluginID)
-	}
-
 	// Send to agent via kernel.
 	start := time.Now()
-	agentResp, err := h.kernel.ChatWithAgent(userID, target.PluginID, target.Model, messageText, imageURLs, convMsgs, systemPrompt)
+	agentResp, err := h.kernel.ChatWithAgent(userID, target.PluginID, target.Model, messageText, imageURLs, convMsgs, useCoordinator, agentAlias)
 	elapsed := time.Since(start)
 	if err != nil {
 		log.Printf("[chat] agent error: %v", err)
@@ -462,9 +455,8 @@ func (h *Handler) SendMessage(c *gin.Context) {
 					delegateMsg = messageText
 				}
 				log.Printf("[chat] coordinator delegated to @%s", delegateAlias)
-				delegateIdentity := fmt.Sprintf("You are @%s (%s). You are one of several AI agents in a collaborative platform.", delegateAlias, delegateTarget.PluginID)
 				dStart := time.Now()
-				delegateResp, dErr := h.kernel.ChatWithAgent(userID, delegateTarget.PluginID, delegateTarget.Model, delegateMsg, imageURLs, convMsgs, delegateIdentity)
+				delegateResp, dErr := h.kernel.ChatWithAgent(userID, delegateTarget.PluginID, delegateTarget.Model, delegateMsg, imageURLs, convMsgs, false, delegateAlias)
 				dElapsed := time.Since(dStart)
 				if dErr == nil {
 					agentResp = delegateResp
