@@ -1,7 +1,11 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,15 +17,24 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
+// randomID generates an 8-character hex string for use as a workspace identifier.
+func randomID() string {
+	b := make([]byte, 4) // 8 hex chars
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 type Handler struct {
 	workspaceDir string
+	baseDomain   string
 	debug        bool
 	sdk          *pluginsdk.Client
 }
 
-func NewHandler(workspaceDir string, debug bool) *Handler {
+func NewHandler(workspaceDir, baseDomain string, debug bool) *Handler {
 	return &Handler{
 		workspaceDir: workspaceDir,
+		baseDomain:   baseDomain,
 		debug:        debug,
 	}
 }
@@ -44,56 +57,90 @@ func (h *Handler) Health(c *gin.Context) {
 	})
 }
 
-type workspaceInfo struct {
-	ID         string `json:"id"`
-	GitBranch  string `json:"git_branch,omitempty"`
-	GitDirty   bool   `json:"git_dirty"`
-	HasSession bool   `json:"has_session"`
-	SizeBytes  int64  `json:"size_bytes"`
+// --- Environment discovery ---
+
+type environmentInfo struct {
+	PluginID    string `json:"plugin_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Image       string `json:"image"`
+	Port        int    `json:"port"`
 }
 
-func (h *Handler) ListWorkspaces(c *gin.Context) {
-	entries, err := os.ReadDir(h.workspaceDir)
+// ListEnvironments returns all installed workspace plugins.
+func (h *Handler) ListEnvironments(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	plugins, err := h.sdk.SearchPlugins("workspace:environment")
 	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, gin.H{"workspaces": []workspaceInfo{}})
-			return
+		log.Printf("failed to search workspace plugins: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to discover environments"})
+		return
+	}
+
+	var envs []environmentInfo
+	for _, p := range plugins {
+		ws := h.fetchWorkspaceSchema(p.ID)
+		if ws == nil {
+			continue
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		envs = append(envs, environmentInfo{
+			PluginID:    p.ID,
+			Name:        ws.DisplayName,
+			Description: ws.Description,
+			Image:       ws.Image,
+			Port:        ws.Port,
+		})
+	}
+
+	if envs == nil {
+		envs = []environmentInfo{}
+	}
+	c.JSON(http.StatusOK, gin.H{"environments": envs})
+}
+
+// --- Workspace CRUD ---
+
+type workspaceInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Environment string `json:"environment"`
+	Status      string `json:"status"`
+	Subdomain   string `json:"subdomain"`
+	URL         string `json:"url,omitempty"`
+	VolumeName  string `json:"volume_name"`
+}
+
+// ListWorkspaces returns all managed containers owned by this plugin.
+func (h *Handler) ListWorkspaces(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		log.Printf("failed to list managed containers: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list workspaces"})
 		return
 	}
 
 	var workspaces []workspaceInfo
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+	for _, mc := range containers {
+		ws := workspaceInfo{
+			ID:         mc.ID,
+			Name:       mc.Name,
+			Status:     mc.Status,
+			Subdomain:  mc.Subdomain,
+			VolumeName: mc.VolumeName,
 		}
-		wsPath := filepath.Join(h.workspaceDir, e.Name())
-		info := workspaceInfo{ID: e.Name()}
-
-		// Git branch.
-		if _, err := os.Stat(filepath.Join(wsPath, ".git")); err == nil {
-			cmd := exec.Command("git", "branch", "--show-current")
-			cmd.Dir = wsPath
-			if out, err := cmd.Output(); err == nil {
-				info.GitBranch = strings.TrimSpace(string(out))
-			}
-			cmd2 := exec.Command("git", "status", "--porcelain")
-			cmd2.Dir = wsPath
-			if out, err := cmd2.Output(); err == nil {
-				info.GitDirty = strings.TrimSpace(string(out)) != ""
-			}
+		if mc.Subdomain != "" && h.baseDomain != "" {
+			ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
 		}
-
-		// Session state.
-		if _, err := os.Stat(filepath.Join(wsPath, ".claude-config")); err == nil {
-			info.HasSession = true
-		}
-
-		// Size.
-		info.SizeBytes = dirSize(wsPath)
-
-		workspaces = append(workspaces, info)
+		workspaces = append(workspaces, ws)
 	}
 
 	if workspaces == nil {
@@ -102,145 +149,364 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"workspaces": workspaces})
 }
 
+// CreateWorkspace launches a new workspace container.
 func (h *Handler) CreateWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
 	var req struct {
-		ID      string `json:"id"`
-		GitRepo string `json:"git_repo,omitempty"`
-		GitRef  string `json:"git_ref,omitempty"`
+		Name          string `json:"name" binding:"required"`
+		EnvironmentID string `json:"environment_id" binding:"required"`
+		GitRepo       string `json:"git_repo,omitempty"`
+		GitRef        string `json:"git_ref,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if req.ID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace id is required"})
+	displayName := strings.TrimSpace(req.Name)
+	if displayName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
-	if !isValidWorkspaceID(req.ID) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workspace id: must be alphanumeric, hyphens, or underscores, max 128 chars"})
-		return
-	}
-
-	wsPath := filepath.Join(h.workspaceDir, req.ID)
-	if _, err := os.Stat(wsPath); err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "workspace already exists"})
+	wsKey := slugify(displayName)
+	if wsKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name must contain at least one alphanumeric character"})
 		return
 	}
 
-	if err := os.MkdirAll(wsPath, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create workspace: " + err.Error()})
+	// Look up the workspace plugin to get its schema.
+	plugins, err := h.sdk.SearchPlugins("workspace:environment")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to discover environments"})
 		return
 	}
 
-	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s"}`, req.ID))
+	var ws *workspaceSchemaData
+	found := false
+	for _, p := range plugins {
+		if p.ID == req.EnvironmentID {
+			ws = h.fetchWorkspaceSchema(p.ID)
+			found = true
+			break
+		}
+	}
+	if !found {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown environment: " + req.EnvironmentID})
+		return
+	}
+	if ws == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown environment: " + req.EnvironmentID})
+		return
+	}
 
-	if req.GitRepo != "" {
-		args := []string{"clone", req.GitRepo, "."}
-		cmd := exec.CommandContext(c.Request.Context(), "git", args...)
-		cmd.Dir = wsPath
+	// Generate an 8-char random ID for subdomain (permanent) and volume prefix.
+	// Check for collisions against existing workspaces.
+	var wsID string
+	existingContainers, _ := h.sdk.ListManagedContainers()
+	for attempts := 0; attempts < 10; attempts++ {
+		candidate := randomID()
+		subdCandidate := "ws-" + candidate
+		collision := false
+		for _, mc := range existingContainers {
+			if mc.Subdomain == subdCandidate {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			wsID = candidate
+			break
+		}
+	}
+	if wsID == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate unique workspace ID"})
+		return
+	}
 
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			os.RemoveAll(wsPath)
-			c.JSON(http.StatusBadGateway, gin.H{"error": "git clone failed: " + string(output)})
+	// Create the volume directory for workspace storage.
+	volumeName := fmt.Sprintf("ws-%s-%s", wsID, wsKey)
+	volumePath := filepath.Join(h.workspaceDir, "volumes", volumeName)
+	if err := os.MkdirAll(volumePath, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create volume: " + err.Error()})
+		return
+	}
+	volumeExisted := false // fresh volume
+
+	// Git clone into volume if requested (skip if reusing existing volume).
+	if req.GitRepo != "" && !volumeExisted {
+		cmd := exec.CommandContext(c.Request.Context(), "git", "clone", req.GitRepo, ".")
+		cmd.Dir = volumePath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			os.RemoveAll(volumePath)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "git clone failed: " + string(out)})
 			return
 		}
-
 		if req.GitRef != "" {
 			checkout := exec.CommandContext(c.Request.Context(), "git", "checkout", req.GitRef)
-			checkout.Dir = wsPath
+			checkout.Dir = volumePath
 			checkout.CombinedOutput()
 		}
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"id":   req.ID,
-		"path": wsPath,
-	})
-}
+	// Build env from workspace schema defaults.
+	env := make(map[string]string)
+	for k, v := range ws.EnvDefaults {
+		env[k] = v
+	}
 
-func (h *Handler) WorkspaceStatus(c *gin.Context) {
-	id := c.Param("id")
-	if !isValidWorkspaceID(id) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workspace id"})
+	// Launch managed container via kernel.
+	// Subdomain uses only the random ID — permanent, never changes on rename.
+	subdomain := "ws-" + wsID
+	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
+		Name:       displayName,
+		Image:      ws.Image,
+		Port:       ws.Port,
+		Subdomain:  subdomain,
+		VolumeName: volumeName,
+		Env:        env,
+		Cmd:        ws.Cmd,
+		DockerUser: ws.DockerUser,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch workspace: " + err.Error()})
 		return
 	}
 
-	wsPath := filepath.Join(h.workspaceDir, id)
-	info, err := os.Stat(wsPath)
-	if os.IsNotExist(err) {
+	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s","environment":"%s","key":"%s"}`, mc.ID, req.EnvironmentID, wsKey))
+
+	result := workspaceInfo{
+		ID:         mc.ID,
+		Name:       mc.Name,
+		Status:     mc.Status,
+		Subdomain:  mc.Subdomain,
+		VolumeName: mc.VolumeName,
+	}
+	if mc.Subdomain != "" && h.baseDomain != "" {
+		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
+	}
+
+	c.JSON(http.StatusCreated, result)
+}
+
+// GetWorkspace returns details for a single workspace.
+func (h *Handler) GetWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	id := c.Param("id")
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
+		return
+	}
+
+	for _, mc := range containers {
+		if mc.ID == id {
+			ws := workspaceInfo{
+				ID:         mc.ID,
+				Name:       mc.Name,
+				Status:     mc.Status,
+				Subdomain:  mc.Subdomain,
+				VolumeName: mc.VolumeName,
+			}
+			if mc.Subdomain != "" && h.baseDomain != "" {
+				ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
+			}
+			c.JSON(http.StatusOK, ws)
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+}
+
+// RenameWorkspace updates display name and volume directory slug.
+// Subdomain is permanent (based on random ID) — never changes.
+func (h *Handler) RenameWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	id := c.Param("id")
+
+	var req struct {
+		Name string `json:"name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	newDisplayName := strings.TrimSpace(req.Name)
+	if newDisplayName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	newSlug := slugify(newDisplayName)
+	if newSlug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name must contain at least one alphanumeric character"})
+		return
+	}
+
+	// Find the workspace to get current volume name.
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
+		return
+	}
+
+	var found *pluginsdk.ManagedContainerInfo
+	for _, mc := range containers {
+		if mc.ID == id {
+			found = &mc
+			break
+		}
+	}
+	if found == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
 		return
 	}
 
-	result := gin.H{
-		"id":         id,
-		"path":       wsPath,
-		"created_at": info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
-	}
+	// Extract the random ID prefix from the current volume name (ws-{id}-{slug}).
+	// Volume format: "ws-{6hex}-{slug}"
+	wsPrefix := extractVolumePrefix(found.VolumeName)
+	newVolumeName := wsPrefix + newSlug
 
-	if _, err := os.Stat(filepath.Join(wsPath, ".git")); err == nil {
-		cmd := exec.Command("git", "log", "--oneline", "-5")
-		cmd.Dir = wsPath
-		if out, err := cmd.Output(); err == nil {
-			result["git_log"] = strings.TrimSpace(string(out))
+	// Only rename volume dir if the slug actually changed.
+	if newVolumeName != found.VolumeName {
+		oldPath := filepath.Join(h.workspaceDir, "volumes", found.VolumeName)
+		newPath := filepath.Join(h.workspaceDir, "volumes", newVolumeName)
+
+		// Check no volume with new name exists.
+		if _, err := os.Stat(newPath); err == nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "a volume with that name already exists"})
+			return
 		}
-		cmd2 := exec.Command("git", "branch", "--show-current")
-		cmd2.Dir = wsPath
-		if out, err := cmd2.Output(); err == nil {
-			result["git_branch"] = strings.TrimSpace(string(out))
-		}
-		cmd3 := exec.Command("git", "status", "--porcelain")
-		cmd3.Dir = wsPath
-		if out, err := cmd3.Output(); err == nil {
-			changes := strings.TrimSpace(string(out))
-			result["git_dirty"] = changes != ""
-			if changes != "" {
-				result["git_changes"] = changes
+
+		if _, err := os.Stat(oldPath); err == nil {
+			if err := os.Rename(oldPath, newPath); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename volume: " + err.Error()})
+				return
 			}
 		}
-	}
 
-	// Session dirs.
-	var sessions []string
-	entries, _ := os.ReadDir(wsPath)
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), ".claude-config") {
-			sessions = append(sessions, e.Name())
+		_, err = h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
+			Name:       &newDisplayName,
+			VolumeName: &newVolumeName,
+		})
+		if err != nil {
+			// Rollback volume rename.
+			os.Rename(
+				filepath.Join(h.workspaceDir, "volumes", newVolumeName),
+				filepath.Join(h.workspaceDir, "volumes", found.VolumeName),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace: " + err.Error()})
+			return
+		}
+	} else {
+		// Slug unchanged, just update display name.
+		_, err = h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
+			Name: &newDisplayName,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename workspace: " + err.Error()})
+			return
 		}
 	}
-	result["sessions"] = sessions
 
-	c.JSON(http.StatusOK, result)
+	h.emitEvent("workspace:renamed", fmt.Sprintf(`{"id":"%s","name":"%s"}`, id, newDisplayName))
+	c.JSON(http.StatusOK, gin.H{"status": "renamed"})
 }
 
+// extractVolumePrefix returns the "ws-{id}-" prefix from a volume name like "ws-a1b2c3d4-my-project".
+// Falls back to returning the full name + "-" if format doesn't match.
+func extractVolumePrefix(volumeName string) string {
+	// Expected format: ws-{8hex}-{slug}
+	if strings.HasPrefix(volumeName, "ws-") && len(volumeName) > 12 {
+		// "ws-" (3) + 8 hex chars + "-" = index 12
+		if volumeName[11] == '-' {
+			return volumeName[:12] // "ws-a1b2c3d4-"
+		}
+	}
+	// Legacy format without random ID — use whole name as prefix.
+	return volumeName + "-"
+}
+
+// DeleteWorkspace stops the container and optionally removes the volume.
 func (h *Handler) DeleteWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
 	id := c.Param("id")
-	if !isValidWorkspaceID(id) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workspace id"})
+	removeVolume := c.Query("remove_volume") == "true"
+
+	// Find the container to get volume name before deleting.
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
 		return
 	}
 
-	wsPath := filepath.Join(h.workspaceDir, id)
-	if _, err := os.Stat(wsPath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+	var volumeName string
+	for _, mc := range containers {
+		if mc.ID == id {
+			volumeName = mc.VolumeName
+			break
+		}
+	}
+
+	if err := h.sdk.DeleteManagedContainer(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop workspace: " + err.Error()})
 		return
 	}
 
-	if err := os.RemoveAll(wsPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete workspace: " + err.Error()})
-		return
+	if removeVolume && volumeName != "" {
+		volumePath := filepath.Join(h.workspaceDir, "volumes", volumeName)
+		if err := os.RemoveAll(volumePath); err != nil {
+			log.Printf("warning: failed to remove volume %s: %v", volumePath, err)
+		}
 	}
 
 	h.emitEvent("workspace:deleted", fmt.Sprintf(`{"id":"%s"}`, id))
-	c.JSON(http.StatusOK, gin.H{"message": "workspace deleted", "id": id})
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
 }
+
+// --- Git persistence (operates on the volume directly) ---
 
 func (h *Handler) PersistWorkspace(c *gin.Context) {
 	id := c.Param("id")
-	if !isValidWorkspaceID(id) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workspace id"})
+
+	// Find the workspace to get volume name.
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
+		return
+	}
+
+	var volumeName string
+	for _, mc := range containers {
+		if mc.ID == id {
+			volumeName = mc.VolumeName
+			break
+		}
+	}
+	if volumeName == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		return
+	}
+
+	wsPath := filepath.Join(h.workspaceDir, "volumes", volumeName)
+	if _, err := os.Stat(filepath.Join(wsPath, ".git")); os.IsNotExist(err) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace is not a git repository"})
 		return
 	}
 
@@ -250,12 +516,6 @@ func (h *Handler) PersistWorkspace(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	wsPath := filepath.Join(h.workspaceDir, id)
-	if _, err := os.Stat(filepath.Join(wsPath, ".git")); os.IsNotExist(err) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace is not a git repository"})
 		return
 	}
 
@@ -311,6 +571,47 @@ func (h *Handler) PersistWorkspace(c *gin.Context) {
 	})
 }
 
+// --- helpers ---
+
+// fetchWorkspaceSchema queries the plugin's live schema via the kernel proxy
+// and extracts the "workspace" section.
+func (h *Handler) fetchWorkspaceSchema(pluginID string) *workspaceSchemaData {
+	schema, err := h.sdk.GetPluginSchema(pluginID)
+	if err != nil {
+		log.Printf("fetchWorkspaceSchema(%s): %v", pluginID, err)
+		return nil
+	}
+
+	wsRaw, ok := schema["workspace"]
+	if !ok {
+		return nil
+	}
+
+	// Re-marshal and unmarshal through JSON to convert map[string]interface{} properly.
+	b, err := json.Marshal(wsRaw)
+	if err != nil {
+		return nil
+	}
+	var ws workspaceSchemaData
+	if err := json.Unmarshal(b, &ws); err != nil {
+		return nil
+	}
+	if ws.Image == "" || ws.Port == 0 {
+		return nil
+	}
+	return &ws
+}
+
+type workspaceSchemaData struct {
+	DisplayName string            `json:"display_name"`
+	Description string            `json:"description"`
+	Image       string            `json:"image"`
+	Port        int               `json:"port"`
+	Cmd         []string          `json:"cmd"`
+	DockerUser  string            `json:"docker_user"`
+	EnvDefaults map[string]string `json:"env_defaults"`
+}
+
 func dirSize(path string) int64 {
 	var size int64
 	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
@@ -321,4 +622,110 @@ func dirSize(path string) int64 {
 		return nil
 	})
 	return size
+}
+
+// volumeExists checks if a volume directory exists under the workspace dir.
+func (h *Handler) volumeExists(volumeName string) bool {
+	_, err := os.Stat(filepath.Join(h.workspaceDir, "volumes", volumeName))
+	return err == nil
+}
+
+// ListVolumes returns volume directories with status flags.
+// Each volume includes whether it has an active workspace and whether it's empty.
+func (h *Handler) ListVolumes(c *gin.Context) {
+	volumesDir := filepath.Join(h.workspaceDir, "volumes")
+	entries, err := os.ReadDir(volumesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusOK, gin.H{"volumes": []gin.H{}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Build set of volume names with active workspaces.
+	activeVolumes := make(map[string]bool)
+	if h.sdk != nil {
+		if containers, err := h.sdk.ListManagedContainers(); err == nil {
+			for _, mc := range containers {
+				if mc.VolumeName != "" {
+					activeVolumes[mc.VolumeName] = true
+				}
+			}
+		}
+	}
+
+	var volumes []gin.H
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		volPath := filepath.Join(volumesDir, e.Name())
+		size := dirSize(volPath)
+		info, _ := e.Info()
+
+		tagInfo := DetectVolumeTags(volPath)
+
+		vol := gin.H{
+			"name":          e.Name(),
+			"size_bytes":    size,
+			"is_empty":      size == 0,
+			"has_workspace": activeVolumes[e.Name()],
+			"tags":          tagInfo.Tags,
+			"git_remote":    tagInfo.GitRemote,
+			"extensions":    tagInfo.Extensions,
+		}
+		if tagInfo.Tags == nil {
+			vol["tags"] = []string{}
+		}
+		if tagInfo.Extensions == nil {
+			vol["extensions"] = []string{}
+		}
+		if info != nil {
+			vol["created_at"] = info.ModTime().UTC().Format("2006-01-02T15:04:05Z")
+		}
+		volumes = append(volumes, vol)
+	}
+
+	if volumes == nil {
+		volumes = []gin.H{}
+	}
+	c.JSON(http.StatusOK, gin.H{"volumes": volumes})
+}
+
+// DeleteVolume removes a volume directory if it has no active workspace.
+func (h *Handler) DeleteVolume(c *gin.Context) {
+	name := c.Param("name")
+
+	if !isValidWorkspaceID(name) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid volume name"})
+		return
+	}
+
+	// Check no active workspace is using this volume.
+	if h.sdk != nil {
+		if containers, err := h.sdk.ListManagedContainers(); err == nil {
+			for _, mc := range containers {
+				if mc.VolumeName == name {
+					c.JSON(http.StatusConflict, gin.H{"error": "volume has an active workspace"})
+					return
+				}
+			}
+		}
+	}
+
+	volumePath := filepath.Join(h.workspaceDir, "volumes", name)
+	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		return
+	}
+
+	if err := os.RemoveAll(volumePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete volume: " + err.Error()})
+		return
+	}
+
+	h.emitEvent("volume:deleted", fmt.Sprintf(`{"name":"%s"}`, name))
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "name": name})
 }

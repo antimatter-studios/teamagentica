@@ -17,7 +17,6 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
@@ -36,7 +35,6 @@ func main() {
 		Version:      "1.0.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"WORKSPACE_MANAGER_PORT": {Type: "number", Label: "Listen Port", Default: "8091", HelpText: "Port the workspace manager listens on"},
-			"WORKSPACE_DIR":          {Type: "string", Label: "Workspace Directory", Default: "/workspaces", HelpText: "Base directory for workspaces"},
 			"PLUGIN_DEBUG":           {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed operations", Order: 99},
 		},
 	})
@@ -44,7 +42,6 @@ func main() {
 	ctx := context.Background()
 	sdkClient.Start(ctx)
 
-	// Fetch plugin config from kernel API.
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
 		log.Fatalf("Failed to fetch plugin config: %v", err)
@@ -57,32 +54,42 @@ func main() {
 		}
 	}
 
-	workspaceDir := pluginConfig["WORKSPACE_DIR"]
-	if workspaceDir == "" {
-		workspaceDir = "/workspaces"
-	}
-
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 	if debug {
 		log.Println("Debug mode enabled")
 	}
 
-	// Ensure workspace directory exists.
-	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
-		log.Fatalf("failed to create workspace dir %s: %v", workspaceDir, err)
+	// Base domain for constructing workspace URLs.
+	baseDomain := os.Getenv("TEAMAGENTICA_BASE_DOMAIN")
+
+	// Workspace directory — contains volumes/ subdirectory for workspace data.
+	workspaceDir := "/workspaces"
+	if err := os.MkdirAll(workspaceDir+"/volumes", 0755); err != nil {
+		log.Fatalf("failed to create workspace volumes dir: %v", err)
 	}
 
 	router := gin.Default()
-	h := handlers.NewHandler(workspaceDir, debug)
+	h := handlers.NewHandler(workspaceDir, baseDomain, debug)
+	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
+
+	// Environment discovery — what workspace types are available.
+	router.GET("/environments", h.ListEnvironments)
+
+	// Workspace lifecycle — create, list, get, delete.
 	router.GET("/workspaces", h.ListWorkspaces)
 	router.POST("/workspaces", h.CreateWorkspace)
-	router.GET("/workspaces/:id", h.WorkspaceStatus)
+	router.GET("/workspaces/:id", h.GetWorkspace)
+	router.PATCH("/workspaces/:id", h.RenameWorkspace)
 	router.DELETE("/workspaces/:id", h.DeleteWorkspace)
+
+	// Git persistence.
 	router.POST("/workspaces/:id/persist", h.PersistWorkspace)
 
-	h.SetSDK(sdkClient)
+	// Volume management.
+	router.GET("/volumes", h.ListVolumes)
+	router.DELETE("/volumes/:name", h.DeleteVolume)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
