@@ -49,7 +49,9 @@ type Registration struct {
 	EventPort    int                          `json:"event_port,omitempty"`
 	Capabilities []string                     `json:"capabilities"`
 	Version      string                       `json:"version"`
-	ConfigSchema map[string]ConfigSchemaField  `json:"config_schema,omitempty"`
+	Schema          map[string]interface{}       `json:"schema,omitempty"`
+	ConfigSchema    map[string]ConfigSchemaField `json:"config_schema,omitempty"`
+	WorkspaceSchema map[string]interface{}       `json:"workspace_schema,omitempty"`
 }
 
 // EventCallback is the payload delivered by the kernel for subscribed events.
@@ -151,23 +153,16 @@ func (c *Client) kernelURL() string {
 }
 
 // Start registers with the kernel and begins the heartbeat loop.
-// If event handlers were registered via OnEvent(), starts an internal event server
-// on an ephemeral port first, includes EventPort in registration, and subscribes
-// to the kernel for each event type after successful registration.
+// Always starts an internal server on an ephemeral port to serve /schema and
+// event callbacks. Includes EventPort in registration for kernel proxying.
 // Retries registration with exponential backoff (1s, 2s, 4s, 8s, max 30s).
 // This is non-blocking.
 func (c *Client) Start(ctx context.Context) {
-	// Start event server if handlers are registered.
-	c.eventMu.RLock()
-	hasHandlers := len(c.eventDebouncers) > 0
-	c.eventMu.RUnlock()
-
-	if hasHandlers {
-		if err := c.startEventServer(); err != nil {
-			log.Printf("pluginsdk: WARNING: failed to start event server: %v — event callbacks will not work", err)
-		} else {
-			c.registration.EventPort = c.eventPort
-		}
+	// Always start internal server (serves /schema + event callbacks).
+	if err := c.startInternalServer(); err != nil {
+		log.Printf("pluginsdk: WARNING: failed to start internal server: %v", err)
+	} else {
+		c.registration.EventPort = c.eventPort
 	}
 
 	go func() {
@@ -429,10 +424,28 @@ func (c *Client) OnEvent(eventType string, debouncer Debouncer) {
 	c.eventDebouncers[eventType] = debouncer
 }
 
-// startEventServer starts an internal HTTP server on an ephemeral port
-// for receiving kernel event callbacks. Used by plugins that don't serve HTTP
-// (e.g. Discord) or need a dedicated callback port.
-func (c *Client) startEventServer() error {
+// buildSchemaJSON returns the schema map to serve on GET /schema.
+// Uses Schema if set, otherwise builds from legacy ConfigSchema/WorkspaceSchema.
+func (c *Client) buildSchemaJSON() map[string]interface{} {
+	if c.registration.Schema != nil {
+		return c.registration.Schema
+	}
+	schema := map[string]interface{}{}
+	if c.registration.ConfigSchema != nil {
+		schema["config"] = c.registration.ConfigSchema
+	}
+	if c.registration.WorkspaceSchema != nil {
+		schema["workspace"] = c.registration.WorkspaceSchema
+	}
+	if len(schema) == 0 {
+		return nil
+	}
+	return schema
+}
+
+// startInternalServer starts an internal HTTP server on an ephemeral port.
+// Serves GET /schema (live plugin schema) and POST /events (kernel callbacks).
+func (c *Client) startInternalServer() error {
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return fmt.Errorf("listen ephemeral port: %w", err)
@@ -440,16 +453,32 @@ func (c *Client) startEventServer() error {
 	c.eventPort = ln.Addr().(*net.TCPAddr).Port
 
 	mux := http.NewServeMux()
+
+	// Always serve schema.
+	schemaData := c.buildSchemaJSON()
+	if schemaData != nil {
+		schemaBytes, err := json.Marshal(schemaData)
+		if err != nil {
+			log.Printf("pluginsdk: WARNING: failed to marshal schema: %v", err)
+		} else {
+			mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(schemaBytes)
+			})
+		}
+	}
+
+	// Event callback handler.
 	mux.HandleFunc("POST /events", c.handleEventCallback)
 
 	c.eventServer = &http.Server{Handler: mux}
 	go func() {
 		if err := c.eventServer.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("pluginsdk: event server error: %v", err)
+			log.Printf("pluginsdk: internal server error: %v", err)
 		}
 	}()
 
-	log.Printf("pluginsdk: event server listening on :%d", c.eventPort)
+	log.Printf("pluginsdk: internal server listening on :%d (schema + events)", c.eventPort)
 	return nil
 }
 
@@ -538,6 +567,139 @@ func (c *Client) FetchConfig() (map[string]string, error) {
 	}
 
 	return result.Config, nil
+}
+
+// ManagedContainerInfo represents a managed container tracked by the kernel.
+type ManagedContainerInfo struct {
+	ID         string `json:"id"`
+	PluginID   string `json:"plugin_id"`
+	Name       string `json:"name"`
+	Image      string `json:"image"`
+	Status     string `json:"status"`
+	Port       int    `json:"port"`
+	Subdomain  string `json:"subdomain"`
+	VolumeName string `json:"volume_name"`
+}
+
+// CreateManagedContainerRequest is the body for creating a managed container.
+type CreateManagedContainerRequest struct {
+	Name       string            `json:"name"`
+	Image      string            `json:"image"`
+	Port       int               `json:"port"`
+	Subdomain  string            `json:"subdomain"`
+	VolumeName string            `json:"volume_name,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Cmd        []string          `json:"cmd,omitempty"`
+	DockerUser string            `json:"docker_user,omitempty"`
+}
+
+// CreateManagedContainer asks the kernel to launch a managed container.
+func (c *Client) CreateManagedContainer(req CreateManagedContainerRequest) (*ManagedContainerInfo, error) {
+	body, _ := json.Marshal(req)
+	httpReq, err := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/containers", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var mc ManagedContainerInfo
+	if err := json.NewDecoder(resp.Body).Decode(&mc); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &mc, nil
+}
+
+// ListManagedContainers returns all managed containers owned by this plugin.
+func (c *Client) ListManagedContainers() ([]ManagedContainerInfo, error) {
+	req, err := http.NewRequest(http.MethodGet, c.kernelURL()+"/api/plugins/containers", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("kernel returned status %d", resp.StatusCode)
+	}
+
+	var containers []ManagedContainerInfo
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return containers, nil
+}
+
+// DeleteManagedContainer stops and removes a managed container.
+func (c *Client) DeleteManagedContainer(containerID string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.kernelURL()+"/api/plugins/containers/"+containerID, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// UpdateManagedContainerRequest is the body for patching a managed container.
+type UpdateManagedContainerRequest struct {
+	Name       *string `json:"name,omitempty"`
+	Subdomain  *string `json:"subdomain,omitempty"`
+	VolumeName *string `json:"volume_name,omitempty"`
+}
+
+// UpdateManagedContainer patches a managed container's metadata.
+func (c *Client) UpdateManagedContainer(containerID string, req UpdateManagedContainerRequest) (*ManagedContainerInfo, error) {
+	body, _ := json.Marshal(req)
+	httpReq, err := http.NewRequest(http.MethodPatch, c.kernelURL()+"/api/plugins/containers/"+containerID, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var mc ManagedContainerInfo
+	if err := json.NewDecoder(resp.Body).Decode(&mc); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &mc, nil
 }
 
 // --- Storage helpers (route through kernel to storage:api plugin) ---
@@ -739,10 +901,15 @@ func (c *Client) StorageList(ctx context.Context, prefix string) (*StorageListRe
 
 // --- Plugin discovery and routing helpers ---
 
-// PluginInfo holds basic plugin metadata returned by SearchPlugins.
+// PluginInfo holds plugin metadata returned by SearchPlugins.
 type PluginInfo struct {
-	ID           string   `json:"id"`
-	Capabilities []string `json:"capabilities"`
+	ID              string                 `json:"id"`
+	Name            string                 `json:"name"`
+	Version         string                 `json:"version"`
+	Image           string                 `json:"image"`
+	Status          string                 `json:"status"`
+	Capabilities    []string               `json:"capabilities"`
+	WorkspaceSchema map[string]interface{} `json:"workspace_schema,omitempty"`
 }
 
 // SearchPlugins queries the kernel for plugins whose capabilities match the given prefix.
@@ -770,6 +937,33 @@ func (c *Client) SearchPlugins(capabilityPrefix string) ([]PluginInfo, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return result.Plugins, nil
+}
+
+// GetPluginSchema fetches the live schema from a plugin via the kernel proxy.
+// Returns the full schema map with sections like "config", "workspace", etc.
+func (c *Client) GetPluginSchema(pluginID string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/api/plugins/%s/schema", c.kernelURL(), pluginID)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("kernel returned status %d", resp.StatusCode)
+	}
+
+	var schema map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&schema); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return schema, nil
 }
 
 // RouteToPlugin proxies a request through the kernel to a specific plugin.

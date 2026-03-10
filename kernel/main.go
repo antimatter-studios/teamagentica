@@ -170,6 +170,8 @@ func main() {
 		pluginsGroup.POST("/:id/enable", middleware.RequireCapability("plugins:manage"), pluginHandler.EnablePlugin)
 		pluginsGroup.POST("/:id/disable", middleware.RequireCapability("plugins:manage"), pluginHandler.DisablePlugin)
 		pluginsGroup.POST("/:id/restart", middleware.RequireCapability("plugins:manage"), pluginHandler.RestartPlugin)
+		pluginsGroup.GET("/:id/schema", middleware.RequireCapability("plugins:search"), pluginHandler.GetPluginSchema)
+		pluginsGroup.GET("/:id/schema/:section", middleware.RequireCapability("plugins:search"), pluginHandler.GetPluginSchemaSection)
 		pluginsGroup.GET("/:id/logs", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginLogs)
 		pluginsGroup.GET("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginConfig)
 		pluginsGroup.PUT("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.UpdatePluginConfig)
@@ -213,6 +215,22 @@ func main() {
 		pluginRegGroup.POST("/unsubscribe", pluginHandler.UnsubscribeEvent)
 		pluginRegGroup.POST("/pricing", pluginHandler.UpdatePricing)
 		pluginRegGroup.GET("/:id/self-config", pluginHandler.GetSelfConfig)
+
+		// Managed container routes (plugin-callable).
+		pluginRegGroup.POST("/containers", pluginHandler.CreateManagedContainer)
+		pluginRegGroup.GET("/containers", pluginHandler.ListManagedContainers)
+		pluginRegGroup.GET("/containers/:cid", pluginHandler.GetManagedContainer)
+		pluginRegGroup.PATCH("/containers/:cid", pluginHandler.UpdateManagedContainer)
+		pluginRegGroup.DELETE("/containers/:cid", pluginHandler.DeleteManagedContainer)
+		pluginRegGroup.GET("/containers/:cid/logs", pluginHandler.GetManagedContainerLogs)
+	}
+
+	// Admin managed-container routes.
+	mcAdminGroup := r.Group("/api/managed-containers")
+	mcAdminGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("plugins:manage"))
+	{
+		mcAdminGroup.GET("", pluginHandler.ListAllManagedContainers)
+		mcAdminGroup.DELETE("/:id", pluginHandler.ForceDeleteManagedContainer)
 	}
 
 	// Plugin routing/proxy (user authenticated, kernel proxies to plugin).
@@ -248,8 +266,7 @@ func main() {
 		if err := orch.StartEnabledPlugins(orchCtx); err != nil {
 			log.Printf("orchestrator: boot error: %v", err)
 		}
-		// In dev mode, sync the catalog so new plugins appear without manual install.
-		orch.DevSyncCatalog()
+		orch.RecoverManagedContainers(orchCtx)
 	}()
 
 	addr := cfg.Host + ":" + cfg.Port

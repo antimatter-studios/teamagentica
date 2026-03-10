@@ -310,6 +310,101 @@ func (d *DockerRuntime) StopPlugin(ctx context.Context, containerID string) erro
 	return nil
 }
 
+// StartManagedContainer creates and starts a container on behalf of a plugin.
+// Unlike StartPlugin, managed containers have no mTLS, no SDK env vars, no
+// dev-mode source mounts — just a single volume mounted at /workspace and
+// docker-proxy labels for subdomain routing.
+func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string) (string, error) {
+	containerName := "teamagentica-mc-" + mc.ID
+
+	// Pull image if not available locally.
+	if err := d.PullImage(ctx, mc.Image); err != nil {
+		log.Printf("managed container: image pull for %s failed (may be local): %v", mc.Image, err)
+	}
+
+	// Remove any stale container with the same name.
+	d.client.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
+
+	// Build env slice from the stored env map.
+	env := mc.GetEnv()
+	var envSlice []string
+	for k, v := range env {
+		envSlice = append(envSlice, k+"="+v)
+	}
+
+	// Docker-proxy labels for subdomain routing.
+	var labels map[string]string
+	if mc.Subdomain != "" && baseDomain != "" {
+		proxyName := "teamagentica-mc-" + mc.ID
+		labels = map[string]string{
+			"docker-proxy." + proxyName + ".host": mc.Subdomain + "." + baseDomain,
+			"docker-proxy." + proxyName + ".port": fmt.Sprintf("%d", mc.Port),
+		}
+	}
+
+	cfg := &container.Config{
+		Image:    mc.Image,
+		Hostname: containerName,
+		Env:      envSlice,
+		Labels:   labels,
+	}
+	if cmd := mc.GetCmd(); len(cmd) > 0 {
+		cfg.Cmd = cmd
+	}
+	if mc.DockerUser != "" {
+		cfg.User = mc.DockerUser
+	}
+
+	// Single volume mount: storage-volume's volumes/{name} → /workspace.
+	var mounts []mount.Mount
+	if mc.VolumeName != "" {
+		projectRoot := d.projectRoot()
+		if d.devMode && projectRoot != "" {
+			hostVolume := filepath.Join(projectRoot, "data", "storage-volume", "volumes", mc.VolumeName)
+			if err := os.MkdirAll(hostVolume, 0o755); err != nil {
+				return "", fmt.Errorf("create volume dir: %w", err)
+			}
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: hostVolume,
+				Target: "/workspace",
+			})
+		} else {
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeVolume,
+				Source: "teamagentica-data-storage-volume",
+				Target: "/workspace",
+				VolumeOptions: &mount.VolumeOptions{
+					Subpath: filepath.Join("volumes", mc.VolumeName),
+				},
+			})
+		}
+	}
+
+	hostCfg := &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{Name: "no"},
+		Mounts:        mounts,
+	}
+
+	netCfg := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			d.network: {},
+		},
+	}
+
+	resp, err := d.client.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, containerName)
+	if err != nil {
+		return "", fmt.Errorf("create managed container %s: %w", containerName, err)
+	}
+
+	if err := d.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return "", fmt.Errorf("start managed container %s: %w", containerName, err)
+	}
+
+	log.Printf("started managed container %s (image=%s, volume=%s, subdomain=%s)", mc.ID, mc.Image, mc.VolumeName, mc.Subdomain)
+	return resp.ID, nil
+}
+
 // HealthCheck returns true if the container is in the "running" state.
 func (d *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bool, error) {
 	info, err := d.client.ContainerInspect(ctx, containerID)
