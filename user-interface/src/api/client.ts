@@ -45,6 +45,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers,
+    credentials: "include",
     body: JSON.stringify(body),
   });
 
@@ -61,6 +62,7 @@ export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "GET",
     headers,
+    credentials: "include",
   });
 
   return handleResponse<T>(res);
@@ -78,6 +80,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "PUT",
     headers,
+    credentials: "include",
     body: JSON.stringify(body),
   });
 
@@ -96,6 +99,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "PATCH",
     headers,
+    credentials: "include",
     body: JSON.stringify(body),
   });
 
@@ -112,6 +116,7 @@ export async function apiDelete<T = void>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "DELETE",
     headers,
+    credentials: "include",
   });
 
   return handleResponse<T>(res);
@@ -127,6 +132,7 @@ export async function apiGetText(path: string): Promise<string> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "GET",
     headers,
+    credentials: "include",
   });
 
   if (res.status === 401) {

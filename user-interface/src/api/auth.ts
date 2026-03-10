@@ -36,6 +36,8 @@ export async function login(
     password,
   });
   storeToken(res.token);
+  // Create session cookie for same-origin iframe auth (workspace proxy).
+  await createSession();
   return res;
 }
 
@@ -50,7 +52,16 @@ export async function register(
     display_name: displayName,
   });
   storeToken(res.token);
+  await createSession();
   return res;
+}
+
+async function createSession(): Promise<void> {
+  try {
+    await apiPost("/api/auth/session", {});
+  } catch {
+    // Non-fatal — session cookie is a convenience for iframe auth.
+  }
 }
 
 export async function getMe(): Promise<User> {

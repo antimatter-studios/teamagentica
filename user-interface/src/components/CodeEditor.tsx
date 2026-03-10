@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, apiPost, apiPatch, apiDelete } from "../api/client";
-import { getStoredToken } from "../api/auth";
-
-const apiHost =
-  import.meta.env.VITE_TEAMAGENTICA_KERNEL_HOST || "api.teamagentica.localhost";
-const baseDomain = apiHost.replace(/^[^.]+\./, "");
+import { API_BASE, apiGet, apiPost, apiPatch, apiDelete } from "../api/client";
 
 const ROUTE = "/api/route/infra-workspace-manager";
 
@@ -59,7 +54,6 @@ export default function CodeEditor() {
   const [newEnvId, setNewEnvId] = useState("");
   const [newGitRepo, setNewGitRepo] = useState("");
 
-  const token = getStoredToken();
   const pollRef = useRef<ReturnType<typeof setInterval>>();
 
   const fetchAll = useCallback(async () => {
@@ -142,8 +136,8 @@ export default function CodeEditor() {
   };
 
   const iframeSrc = (ws: Workspace) => {
-    const host = `//${ws.subdomain}.${baseDomain}`;
-    return token ? `${host}/?tkn=${encodeURIComponent(token)}` : `${host}/`;
+    // Path-based routing through kernel — auth via session cookie (same-origin).
+    return `${API_BASE}/ws/${ws.id}/`;
   };
 
   const handleLaunchVolume = async (volumeName: string, envId: string) => {
@@ -399,7 +393,7 @@ export default function CodeEditor() {
                         <>
                           <span className="ws-list-name">{ws.name}</span>
                           <span className="ws-list-meta">
-                            {ws.subdomain}.{baseDomain}
+                            /ws/{ws.id}
                           </span>
                         </>
                       )}
