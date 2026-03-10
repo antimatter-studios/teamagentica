@@ -252,11 +252,25 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		}
 	}
 
+	// Provision code-server Machine settings in the workspace volume.
+	// Enables extensions.supportNodeGlobalNavigator for extensions (e.g. Claude Code)
+	// that access the Node.js navigator global (required since code-server 4.110+).
+	// With XDG_DATA_HOME=/workspace/.code-server, code-server stores data at
+	// /workspace/.code-server/code-server/ including Machine/settings.json.
+	csSettingsDir := filepath.Join(volumePath, ".code-server", "code-server", "Machine")
+	if err := os.MkdirAll(csSettingsDir, 0755); err == nil {
+		_ = os.WriteFile(filepath.Join(csSettingsDir, "settings.json"),
+			[]byte(`{"extensions.supportNodeGlobalNavigator":true}`+"\n"), 0644)
+	}
+
 	// Build env from workspace schema defaults.
 	env := make(map[string]string)
 	for k, v := range ws.EnvDefaults {
 		env[k] = v
 	}
+	// Point code-server's data dir to the workspace volume so Machine settings
+	// and other state persist across container restarts.
+	env["XDG_DATA_HOME"] = "/workspace/.code-server"
 
 	// Launch managed container via kernel.
 	// Subdomain uses only the random ID — permanent, never changes on rename.
