@@ -16,6 +16,7 @@ The kernel is the central authority. It is intentionally minimal.
 - Plugin registry (SQLite-backed via GORM)
 - Plugin lifecycle management (install, enable, disable, restart, uninstall)
 - Docker container runtime for launching plugin containers
+- Managed container tracking (plugin-spawned containers for workspaces, services, etc.)
 - REST API surface for all operations
 - Event hub for inter-plugin pub/sub communication
 - Traffic routing proxy to plugins
@@ -47,6 +48,12 @@ A standalone web application. It is just another API client.
 - **Marketplace** — Browse and install plugins from providers
 - **Cost Dashboard** — AI usage and cost analytics
 - **Debug Console** — Real-time SSE event stream
+
+**Theme System:**
+- 6 built-in themes using CSS custom properties (`--bg-primary`, `--text-primary`, etc.)
+- Theme selection persisted in `localStorage`
+- Themes: Soft Dark, Midnight Blue, Slate, Dracula, High Contrast, Light
+- All components reference CSS variables — no hardcoded colors
 
 ### Plugins
 
@@ -150,6 +157,22 @@ Aliases map `@mention` names to specific plugins, optionally with model override
 
 Aliases are stored in SQLite, managed via the admin UI, and hot-swapped to plugins via `kernel:alias:update` events.
 
+### Managed Containers
+
+Plugins can spawn and track additional Docker containers through the kernel's managed container API. This enables plugins like `workspace-manager` to create long-running services (e.g., VS Code instances) with persistent volumes. The kernel tracks these containers in the `managed_containers` table, scoped per-plugin, and handles cleanup on plugin removal.
+
+### Workspace System
+
+The `workspace-manager` plugin uses managed containers to provide cloud development environments:
+
+1. Plugin receives a workspace creation request
+2. Creates a Docker volume for persistent project storage
+3. Spawns a VS Code Server container (code-server) via `CreateManagedContainer`
+4. Kernel assigns a subdomain and proxies traffic to the container
+5. User accesses the IDE via `https://<subdomain>.<domain>`
+
+Workspaces survive plugin restarts — the kernel tracks the container and volume independently.
+
 ### Message Buffering
 
 Messaging plugins (Telegram, Discord) buffer sequential messages per-chat with a configurable debounce window (default 1000ms, configurable via `MESSAGE_BUFFER_MS`). This consolidates multi-part messages — such as a forwarded image followed by a text question — into a single agent request. The buffer merges text (newline-joined) and deduplicates media URLs. Commands (`/help`, `/clear`, etc.) bypass the buffer and are handled immediately.
@@ -209,6 +232,11 @@ Messaging plugins (Telegram, Discord) buffer sequential messages per-chat with a
 | `POST /api/plugins/event` | Emit event |
 | `POST /api/plugins/subscribe` | Subscribe to event type |
 | `GET /api/aliases` | Fetch alias configuration |
+| `GET /api/managed-containers` | List own managed containers |
+| `POST /api/managed-containers` | Create managed container |
+| `GET /api/managed-containers/:id` | Get managed container |
+| `DELETE /api/managed-containers/:id` | Delete managed container |
+| `PATCH /api/managed-containers/:id` | Update container metadata |
 
 ## Database
 
@@ -227,6 +255,7 @@ Messaging plugins (Telegram, Discord) buffer sequential messages per-chat with a
 | `model_prices` | LLM pricing data with time-effective rates |
 | `event_deliveries` | Event queue for async plugin notification |
 | `event_logs` | Historical event audit |
+| `managed_containers` | Plugin-spawned containers (workspaces, services) |
 
 **Migrations** are versioned Go functions in `kernel/internal/migrate/`, executed in order on startup.
 
@@ -289,4 +318,5 @@ The `pkg/pluginsdk` Go package provides:
 - `ReportAddressedEvent(type, detail, target)` — Send to specific plugin
 - `FetchAliases()` — Get current alias configuration
 - `alias.AliasMap` — Thread-safe alias routing with hot-swap via `atomic.Pointer`
+- `CreateManagedContainer()` / `ListManagedContainers()` / `GetManagedContainer()` / `DeleteManagedContainer()` / `UpdateManagedContainer()` — Manage plugin-spawned containers
 - `ConfigSchemaField` — Declare config UI (string, select, number, boolean, text, oauth, aliases)

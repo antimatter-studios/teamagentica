@@ -1,249 +1,116 @@
 # TeamAgentica
 
-A self-hosted, modular AI-orchestrated automation control platform.
+A modular automation control platform with plugin-based AI agents, messaging integrations, cloud workspaces, and a web control panel.
 
-## What Is This?
+## Features
 
-TeamAgentica is a governance-first control plane that coordinates AI agents and plugins while maintaining strict security boundaries. The kernel is minimal and boring — all capabilities come from plugins. AI agents are external clients, not trusted controllers.
-
-The platform enforces authentication, RBAC, audit logging, and policy enforcement across all operations.
+- **Multi-Agent AI** — Connect Claude, GPT, Gemini, Kimi, and custom models as chat agents with configurable routing via @aliases
+- **Messaging Integrations** — Telegram, Discord, WhatsApp bots with message buffering and coordinator delegation
+- **Cloud Workspaces** — Browser-based VS Code environments with persistent volumes, project detection, and multi-tab management
+- **Plugin Marketplace** — Browse, install, and configure plugins from a catalog
+- **Tool Plugins** — Image generation (Stability AI, Seedance, NanoBanana), video generation (Veo)
+- **Cost Tracking** — Per-model usage analytics with time-windowed pricing
+- **Theme System** — 6 switchable themes (Soft Dark, Midnight Blue, Slate, Dracula, High Contrast, Light)
+- **Event System** — Real-time inter-plugin pub/sub with broadcast and addressed delivery
+- **Security** — JWT auth, RBAC, optional mTLS, audit logging, encrypted secrets
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   Frontend                      │
-│              (React / TypeScript)               │
-│        Dashboard · Chat · Marketplace · Debug   │
-│                JWT authentication               │
-└────────────────────┬────────────────────────────┘
-                     │ REST API (HTTP/JSON)
-┌────────────────────▼────────────────────────────┐
-│                    Kernel                       │
-│                    (Go/Gin)                     │
-│  ┌──────────┬──────────┬───────────┬──────────┐ │
-│  │ JWT Auth │   RBAC   │ Plugin    │  Event   │ │
-│  │          │          │ Registry  │  Hub     │ │
-│  ├──────────┼──────────┼───────────┼──────────┤ │
-│  │ REST API │  Audit   │ Lifecycle │  Route   │ │
-│  │          │  Logger  │ Manager   │  Proxy   │ │
-│  └──────────┴──────────┴───────────┴──────────┘ │
-│            SQLite (GORM) · Docker Runtime       │
-└────────────────────┬────────────────────────────┘
-                     │ HTTP/REST + Service Tokens
-        ┌────────────┼────────────────┐
-        ▼            ▼                ▼
-   ┌──────────┐ ┌──────────┐   ┌──────────┐
-   │  Agent   │ │ Messaging│   │  Tool    │
-   │  Plugins │ │  Plugins │   │  Plugins │
-   │(AI chat) │ │(Telegram)│   │ (image/  │
-   │          │ │(Discord) │   │  video)  │
-   └──────────┘ └──────────┘   └──────────┘
+┌──────────────┐     ┌──────────┐     ┌──────────────────┐
+│   Frontend   │────▶│  Kernel  │────▶│    Plugins (N)    │
+│  React/TS    │     │  Go/Gin  │     │  Docker containers│
+└──────────────┘     └──────────┘     └──────────────────┘
+                          │
+                     ┌────┴────┐
+                     │ SQLite  │
+                     │  + WAL  │
+                     └─────────┘
 ```
 
-## Core Principles
-
-1. The kernel is small, stable, and boring
-2. All capabilities are implemented as plugins
-3. AI agents are external clients, not trusted controllers
-4. No component can grant itself additional authority
-5. All actions are authenticated, authorized, and audited
-
-## Plugins
-
-TeamAgentica ships with 20+ plugins across seven categories. See [Kernel Documentation](docs/kernel.md) for API reference and [Plugin SDK](docs/plugin-sdk.md) to build your own.
-
-### `agent-*` — AI Model Backends
-
-- [`agent-openai`](docs/plugins/agent-openai.md) — OpenAI GPT-4o, o1 via API key or Codex subscription
-- [`agent-claude`](docs/plugins/agent-claude.md) — Anthropic Claude with tool use
-- [`agent-gemini`](docs/plugins/agent-gemini.md) — Google Gemini with vision support
-- [`agent-kimi`](docs/plugins/agent-kimi.md) — Moonshot Kimi models
-- [`agent-openrouter`](docs/plugins/agent-openrouter.md) — OpenRouter multi-model access
-- [`agent-requesty`](docs/plugins/agent-requesty.md) — Requesty multi-model router
-- [`agent-inception`](docs/plugins/agent-inception.md) — Inception Labs Mercury diffusion LLM
-
-### `messaging-*` — User-Facing Messaging Interfaces
-
-- [`messaging-telegram`](docs/plugins/messaging-telegram.md) — Telegram bot (polling/webhook, media generation)
-- [`messaging-discord`](docs/plugins/messaging-discord.md) — Discord bot with alias routing
-- [`messaging-whatsapp`](docs/plugins/messaging-whatsapp.md) — WhatsApp Business API bot
-- [`messaging-chat`](docs/plugins/messaging-chat.md) — Built-in web chat with conversation history
-
-### `tool-*` — AI Content Generation Tools
-
-- [`tool-stability`](docs/plugins/tool-stability.md) — Stability AI image generation
-- [`tool-seedance`](docs/plugins/tool-seedance.md) — Seedance video generation
-- [`tool-nanobanana`](docs/plugins/tool-nanobanana.md) — Gemini-powered image generation
-- [`tool-veo`](docs/plugins/tool-veo.md) — Google Veo video generation
-
-### `infra-*` — Platform Infrastructure
-
-- [`infra-cost-explorer`](docs/plugins/infra-cost-explorer.md) — AI usage tracking and cost analytics
-- [`infra-mcp-server`](docs/plugins/infra-mcp-server.md) — Model Context Protocol server
-- [`infra-cron-scheduler`](docs/plugins/infra-cron-scheduler.md) — Cron-style scheduled event system
-
-### `network-*` — Request Routing & Tunneling
-
-- [`network-webhook-ingress`](docs/plugins/network-webhook-ingress.md) — Routes external webhooks to plugins
-- [`network-ngrok`](docs/plugins/network-ngrok.md) — Creates public tunnel URLs for webhooks
-
-### `storage-*` — Persistent File Storage
-
-- [`storage-sss3`](docs/plugins/storage-sss3.md) — S3-compatible object storage
-- [`storage-volume`](docs/plugins/storage-volume.md) — Local Docker volume storage with tool interface
-
-### `builtin-*` — Required System Plugins
-
-- [`builtin-provider`](docs/plugins/builtin-provider.md) — Default plugin catalog (marketplace)
-
-## Project Structure
-
-```
-teamagentica/
-├── kernel/              # Go — core API, auth, RBAC, plugin management
-├── user-interface/      # React/TS — web dashboard, chat, marketplace
-├── plugins/             # 20 plugin implementations (Go)
-│   ├── agent-openai/    #   AI agent plugins
-│   ├── agent-gemini/
-│   ├── messaging-telegram/  #   Messaging plugins
-│   ├── discord/
-│   ├── messaging-chat/      #   System plugins
-│   ├── infra-cost-explorer/
-│   └── ...
-├── pkg/pluginsdk/       # Shared Go SDK for building plugins
-├── docs/                # Architecture docs and planning
-├── data/                # Runtime data (database, certs, plugin volumes)
-├── docker-compose.yml   # Production deployment
-├── docker-compose.dev.yml # Development with hot reload
-├── Taskfile.yml         # Build/deploy tasks
-└── .env.example         # Configuration template
-```
+- **Kernel** — Minimal control plane: auth, plugin lifecycle, routing, events
+- **Plugins** — Each runs in its own Docker container, communicates via REST
+- **Frontend** — React SPA, just another API client
 
 ## Quick Start
 
 ```bash
-# 1. Copy and configure environment
-cp .env.example .env
-# Edit .env — at minimum set TEAMAGENTICA_JWT_SECRET
-# Generate a secret: openssl rand -hex 32
-
-# 2. Start the platform
-task prod:start
-# Or for development with hot reload:
+# Development (hot reload)
 task dev:start
+
+# Production
+task prod:start
 ```
 
-- **Frontend:** http://localhost:3000
-- **Kernel API:** http://localhost:9741
+First visit: register at the web UI — first user becomes admin.
 
-On first launch, register a user account. The first user gets admin privileges.
+## Plugins
+
+### AI Agents
+| Plugin | Provider | Capabilities |
+|--------|----------|-------------|
+| agent-claude | Anthropic | ai:chat |
+| agent-openai | OpenAI | ai:chat |
+| agent-gemini | Google | ai:chat |
+| agent-kimi | Moonshot | ai:chat |
+| agent-inception | Meta-router | ai:chat |
+| agent-openrouter | OpenRouter | ai:chat |
+| agent-requesty | Requesty | ai:chat |
+
+### Messaging
+| Plugin | Platform | Capabilities |
+|--------|----------|-------------|
+| messaging-chat | Web UI | system:chat |
+| messaging-telegram | Telegram | messaging:telegram |
+| messaging-discord | Discord | messaging:discord |
+| messaging-whatsapp | WhatsApp | messaging:whatsapp |
+
+### Tools
+| Plugin | Type | Capabilities |
+|--------|------|-------------|
+| tool-stability | Image gen | tool:image |
+| tool-seedance | Image gen | tool:image |
+| tool-nanobanana | Image gen | tool:image |
+| tool-veo | Video gen | tool:video |
+
+### Infrastructure
+| Plugin | Purpose | Capabilities |
+|--------|---------|-------------|
+| infra-workspace-manager | Cloud IDE management | workspace:manager |
+| infra-cost-explorer | Usage analytics | system:cost-explorer |
+| infra-cron-scheduler | Scheduled tasks | system:cron |
+| infra-mcp-server | MCP protocol | system:mcp |
+| network-ngrok | Tunnel | network:tunnel |
+| network-webhook-ingress | Webhooks | network:webhook |
+
+### Storage & Workspaces
+| Plugin | Purpose | Capabilities |
+|--------|---------|-------------|
+| storage-sss3 | S3-compatible storage | storage:api, storage:object |
+| storage-volume | Block storage | storage:volume |
+| user-vscode-server | VS Code environment | workspace:environment |
+| builtin-provider | Plugin catalog | marketplace:provider |
+
+## Documentation
+
+- [Architecture](docs/architecture.md) — System design and component overview
+- [Kernel](docs/kernel.md) — API reference and configuration
+- [Plugin SDK](docs/plugin-sdk.md) — Building plugins
+- [Plugin docs](docs/) — Individual plugin documentation
 
 ## Development
 
-### Kernel (Go)
-
 ```bash
-cd kernel
-go run .
-```
-
-Uses [Air](https://github.com/air-verse/air) for hot reload in dev mode.
-
-### Frontend (React)
-
-```bash
-cd user-interface
-npm install
-npm run dev
-```
-
-Vite dev server with HMR at http://localhost:5173.
-
-### Building Plugin Images
-
-```bash
+# Build all plugin images
 task build:images
+
+# Run kernel with hot reload
+cd kernel && air
+
+# Run frontend with HMR
+cd user-interface && npm run dev
 ```
-
-Each plugin has its own Dockerfile. The kernel launches plugin containers via the Docker API.
-
-## Configuration
-
-### Required
-
-| Variable | Description |
-|----------|-------------|
-| `TEAMAGENTICA_JWT_SECRET` | JWT signing secret (generate with `openssl rand -hex 32`) |
-
-### Optional
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TEAMAGENTICA_KERNEL_HOST` | `0.0.0.0` | Kernel bind address |
-| `TEAMAGENTICA_KERNEL_PORT` | `8080` | Kernel port |
-| `TEAMAGENTICA_KERNEL_ADVERTISE_HOST` | `kernel` | Address plugins use to reach kernel |
-| `TEAMAGENTICA_DB_PATH` | `./database.db` | SQLite database path |
-| `TEAMAGENTICA_DATA_DIR` | `./data` | Data directory (backups, certs) |
-| `TEAMAGENTICA_DOCKER_NETWORK` | `teamagentica_default` | Docker network for plugins |
-| `TEAMAGENTICA_MTLS_ENABLED` | `true` | Enable mTLS for plugin communication |
-| `APP_NAME` | `TeamAgentica` | Brand name |
-
-### Frontend (build-time)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VITE_APP_NAME` | `TeamAgentica` | Brand name in UI |
-| `VITE_TEAMAGENTICA_KERNEL_HOST` | `localhost` | Kernel hostname for API calls |
-| `VITE_TEAMAGENTICA_KERNEL_PORT` | `9741` | Kernel port for API calls |
-
-## Key Features
-
-### Alias Routing
-Configure `@mention` aliases to route messages to specific agents or tools. Messaging bots (Telegram, Discord) use aliases for direct agent selection (`@claude write me a poem`) or coordinator-based delegation where a coordinator agent decides which agent should handle the request.
-
-### Message Buffering
-Messaging plugins (Telegram, Discord) buffer rapid sequential messages with a configurable debounce window (default 1000ms). This consolidates multi-part messages (e.g. a forwarded image followed by a text question) into a single agent request. The buffer duration is configurable per-plugin via `MESSAGE_BUFFER_MS` in plugin settings.
-
-### Event System
-Plugins communicate through a pub/sub event system. Plugins subscribe to event types and receive HTTP callbacks. Events can be broadcast to all subscribers or addressed to specific plugins.
-
-### Cost Tracking
-The infra-cost-explorer plugin aggregates AI usage across all agent plugins. View costs per hour/day/week/month with per-model breakdown. Pricing supports time-effective rates.
-
-### Debug Console
-Real-time SSE event stream in the web UI shows all plugin events, errors, and routing decisions as they happen.
-
-### Marketplace
-Browse and install plugins from catalog providers. The built-in provider ships a catalog of all available plugins. Plugins declare configuration schemas that generate UI forms automatically.
-
-## Security Model
-
-- **JWT authentication** with capability-encoded tokens
-- **RBAC** with admin/user roles and fine-grained capabilities
-- **mTLS** (optional) between kernel and plugins with auto-generated CA
-- **Service tokens** for plugin-to-kernel authentication
-- **Audit logging** of all actions with actor, resource, timestamp, IP
-- **Plugin isolation** via Docker containers with dedicated volumes
-
-## Plugin SDK
-
-Build new plugins using the Go SDK:
-
-```go
-import "github.com/teamagentica/pkg/pluginsdk"
-
-client := pluginsdk.NewClient(cfg, pluginsdk.Registration{
-    PluginID:     "my-plugin",
-    Capabilities: []string{"custom:capability"},
-    ConfigSchema: []pluginsdk.ConfigSchemaField{...},
-})
-client.Start(ctx)
-defer client.Stop()
-```
-
-The SDK handles registration, heartbeats, event subscriptions, alias fetching, and graceful shutdown.
 
 ## License
 
-TBD
+Proprietary — Antimatter Studios

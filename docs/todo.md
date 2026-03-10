@@ -75,6 +75,15 @@
 - [x] SQLite database backups
 - [x] Database corruption watchdog
 
+## Phase 6b: Workspaces & UI — COMPLETE
+
+- [x] Managed container system (kernel-managed Docker lifecycle for workspace environments)
+- [x] Workspace volumes with random ID naming (persistent block storage per workspace)
+- [x] Volume tag detection (project type, git repo, installed extensions)
+- [x] Multi-tab workspace UI (open multiple workspaces in browser tabs)
+- [x] Theme system (6 themes: Soft Dark, Midnight Blue, Slate, Dracula, High Contrast, Light — CSS variables)
+- [x] VS Code extension persistence (extensions survive container restarts via volume mounts)
+
 ## Phase 7: Production Readiness
 
 - [ ] Kubernetes manifests / Helm chart

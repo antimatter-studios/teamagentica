@@ -80,6 +80,7 @@ type Registration struct {
     Capabilities []string                           `json:"capabilities"`
     Version      string                             `json:"version"`
     ConfigSchema map[string]ConfigSchemaField        `json:"config_schema,omitempty"`
+    Schema       map[string]any                      `json:"schema,omitempty"` // arbitrary plugin metadata schema
 }
 ```
 
@@ -225,6 +226,50 @@ Waits for a quiet period before firing with the latest event. Resets the timer o
 pluginsdk.NewTimedDebouncer(2*time.Second, handler)
 ```
 
+## Managed Containers
+
+Plugins can create and manage Docker containers through the kernel. Containers are scoped per-plugin — a plugin can only see and manage its own containers.
+
+```go
+// Create a managed container
+resp, err := client.CreateManagedContainer(pluginsdk.CreateContainerRequest{
+    Name:       "ws-a1b2c3d4",
+    Image:      "codercom/code-server:latest",
+    Port:       8080,
+    Subdomain:  "ws-a1b2c3d4",
+    VolumeName: "ws-a1b2c3d4-my-project",
+    Cmd:        []string{"--auth", "none"},
+})
+
+// List all containers owned by this plugin
+containers, err := client.ListManagedContainers()
+
+// Get a specific container
+container, err := client.GetManagedContainer(id)
+
+// Delete a container (stops it and removes the record)
+err := client.DeleteManagedContainer(id)
+
+// Update container metadata
+err := client.UpdateManagedContainer(id, pluginsdk.UpdateContainerRequest{
+    Name:       strPtr("new-name"),
+    VolumeName: strPtr("new-volume-name"),
+})
+```
+
+### CreateContainerRequest
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Name` | `string` | Container display name |
+| `Image` | `string` | Docker image reference |
+| `Port` | `int` | Container port to expose |
+| `Subdomain` | `string` | Subdomain for kernel proxy routing |
+| `VolumeName` | `string` | Docker volume for persistent data |
+| `Cmd` | `[]string` | Container command override |
+| `Labels` | `map[string]string` | Docker labels |
+| `Env` | `map[string]string` | Environment variables |
+
 ## Plugin Discovery & Routing
 
 ```go
@@ -322,6 +367,28 @@ All agent plugins follow this pattern:
 - Capabilities: `["tool:image", "tool:image:<provider>"]` or `["tool:video", ...]`
 - Endpoints: `/health`, `/generate`, `/pricing`, `/usage`
 - Sync tools return result immediately; async tools return `task_id` with a `/status/:taskId` poll endpoint
+
+### Workspace Environment Plugin
+
+Plugins that manage development environments using managed containers:
+- Capabilities: `["workspace:manager"]`
+- Endpoints: `/health`, `/workspaces` (CRUD), `/workspaces/:id/status`
+- Uses `CreateManagedContainer` to spawn VS Code Server (code-server) instances
+- Each workspace gets a persistent Docker volume for project files
+- Kernel assigns subdomains and proxies traffic to workspace containers
+- Workspaces survive plugin restarts — kernel tracks containers independently
+
+```go
+// Create a workspace
+resp, err := client.CreateManagedContainer(pluginsdk.CreateContainerRequest{
+    Name:       "ws-" + shortID,
+    Image:      "codercom/code-server:latest",
+    Port:       8080,
+    Subdomain:  "ws-" + shortID,
+    VolumeName: "ws-" + shortID + "-" + projectSlug,
+    Cmd:        []string{"--auth", "none"},
+})
+```
 
 ### Messaging Plugin
 

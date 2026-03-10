@@ -100,6 +100,11 @@ Built with Go/Gin, SQLite (GORM), and the Docker API.
 | `POST` | `/api/plugins/subscribe` | Subscribe to event type |
 | `POST` | `/api/plugins/unsubscribe` | Unsubscribe from event type |
 | `POST` | `/api/plugins/pricing` | Push model pricing data |
+| `GET` | `/api/managed-containers` | List own managed containers |
+| `POST` | `/api/managed-containers` | Create managed container |
+| `GET` | `/api/managed-containers/:id` | Get managed container by ID |
+| `DELETE` | `/api/managed-containers/:id` | Delete managed container + stop container |
+| `PATCH` | `/api/managed-containers/:id` | Update container metadata (name, volume) |
 
 ## Authentication & RBAC
 
@@ -146,6 +151,7 @@ SQLite with WAL mode, busy timeout 5000ms, synchronous=NORMAL.
 | `aliases` | `@mention` routing aliases (admin-owned or plugin-owned) |
 | `external_users` | External platform user mappings (Telegram ID, Discord ID, etc.) |
 | `event_log` | Persistent inter-plugin event history |
+| `managed_containers` | Plugin-spawned containers (id, plugin_id, container_id, name, subdomain, image, status, port, volume_name, cmd JSON, labels JSON, env JSON) |
 
 ### Database Resilience
 
