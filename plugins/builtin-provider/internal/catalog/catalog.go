@@ -28,6 +28,7 @@ const (
 	GroupStorage        = "storage"
 	GroupInfrastructure = "infrastructure"
 	GroupNetwork        = "network"
+	GroupUser           = "user"
 )
 
 // GroupMeta holds display metadata for a plugin group.
@@ -46,6 +47,7 @@ var Groups = []GroupMeta{
 	{ID: GroupStorage, Name: "Storage", Description: "File and data storage backends", Order: 4},
 	{ID: GroupNetwork, Name: "Network", Description: "Tunnels, webhooks, and external connectivity", Order: 5},
 	{ID: GroupInfrastructure, Name: "Infrastructure", Description: "Platform internals and system services", Order: 6},
+	{ID: GroupUser, Name: "User Tools", Description: "Workspace environments and developer tools", Order: 7},
 }
 
 // Entry represents a plugin available in the catalog.
@@ -57,9 +59,9 @@ type Entry struct {
 	Version        string           `json:"version" yaml:"version"`
 	Image          string           `json:"image" yaml:"image"`
 	Author         string           `json:"author" yaml:"author"`
-	Tags           []string         `json:"tags" yaml:"tags"`
+	Tags           []string       `json:"tags" yaml:"tags"`
 	ConfigSchema   map[string]Field `json:"config_schema,omitempty" yaml:"config_schema,omitempty"`
-	DefaultPricing []PricingEntry   `json:"default_pricing,omitempty" yaml:"default_pricing,omitempty"`
+	DefaultPricing []PricingEntry `json:"default_pricing,omitempty" yaml:"default_pricing,omitempty"`
 }
 
 // GroupedCatalog holds entries organized by group.
@@ -88,8 +90,8 @@ type Field struct {
 	Order       int          `json:"order,omitempty" yaml:"order,omitempty"`
 }
 
-// catalog holds the loaded plugin entries.
-var catalog []Entry
+// OfficialCatalog holds the loaded plugin entries.
+var OfficialCatalog []Entry
 
 // LoadFile reads a combined catalog YAML file (array of entries).
 func LoadFile(path string) error {
@@ -103,15 +105,15 @@ func LoadFile(path string) error {
 		return err
 	}
 
-	catalog = entries
-	log.Printf("catalog: loaded %d plugin(s) from %s", len(catalog), path)
+	OfficialCatalog = entries
+	log.Printf("catalog: loaded %d plugin(s) from %s", len(OfficialCatalog), path)
 	return nil
 }
 
 // ByGroup returns the catalog organized by group in display order.
 func ByGroup() []GroupedCatalog {
 	grouped := make(map[string][]Entry)
-	for _, e := range catalog {
+	for _, e := range OfficialCatalog {
 		g := e.Group
 		if g == "" {
 			g = GroupInfrastructure
@@ -137,12 +139,12 @@ func ByGroup() []GroupedCatalog {
 // Search filters the catalog by query string (matches against ID, name, description, tags).
 func Search(q string) []Entry {
 	if q == "" {
-		return catalog
+		return OfficialCatalog
 	}
 
 	q = strings.ToLower(q)
 	var results []Entry
-	for _, e := range catalog {
+	for _, e := range OfficialCatalog {
 		if matches(e, q) {
 			results = append(results, e)
 		}

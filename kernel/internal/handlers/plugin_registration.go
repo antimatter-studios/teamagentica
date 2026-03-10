@@ -50,7 +50,8 @@ type pluginSelfRegisterRequest struct {
 	EventPort    int                    `json:"event_port,omitempty"`
 	Capabilities []string               `json:"capabilities"`
 	Version      string                 `json:"version"`
-	ConfigSchema map[string]interface{} `json:"config_schema,omitempty"`
+	ConfigSchema    map[string]interface{} `json:"config_schema,omitempty"`
+	WorkspaceSchema map[string]interface{} `json:"workspace_schema,omitempty"`
 }
 
 type pluginHeartbeatRequest struct {
@@ -100,12 +101,8 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		updates["capabilities"] = plugin.Capabilities
 	}
 
-	if req.ConfigSchema != nil {
-		schemaJSON, err := json.Marshal(req.ConfigSchema)
-		if err == nil {
-			updates["config_schema"] = models.JSONRawString(schemaJSON)
-		}
-	}
+	// Schema is NOT stored in the DB — it's served live by the plugin on GET /schema.
+	// The kernel proxies schema requests to the running plugin at runtime.
 
 	h.db.Model(&plugin).Updates(updates)
 

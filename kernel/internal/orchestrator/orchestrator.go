@@ -60,6 +60,12 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 		return nil
 	}
 
+	// Auto-enable metadata-only plugins that aren't enabled yet.
+	// These have no container to start — they exist purely as discoverable config.
+	o.db.Model(&models.Plugin{}).
+		Where("image = ? AND enabled = ?", "", false).
+		Updates(map[string]interface{}{"enabled": true, "status": "enabled"})
+
 	var plugins []models.Plugin
 	if err := o.db.Where("enabled = ?", true).Find(&plugins).Error; err != nil {
 		log.Printf("orchestrator: failed to query enabled plugins: %v", err)
@@ -92,6 +98,16 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 
 // startPlugin handles the full lifecycle of starting a single plugin container.
 func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
+	// Metadata-only plugins have no runtime image — just mark enabled.
+	if plugin.IsMetadataOnly() {
+		o.db.Model(plugin).Updates(map[string]interface{}{
+			"status":  "enabled",
+			"enabled": true,
+		})
+		log.Printf("orchestrator: plugin %s is metadata-only, marked enabled", plugin.ID)
+		return
+	}
+
 	// Look up service token for this plugin.
 	var serviceToken models.ServiceToken
 	if err := o.db.Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
@@ -220,7 +236,40 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	return nil
 }
 
-// StopAllPlugins stops all running plugins (used on kernel shutdown).
+// RecoverManagedContainers recreates managed containers that were running
+// before the kernel restarted. Docker containers don't survive host restart,
+// so we recreate them from the stored config.
+func (o *Orchestrator) RecoverManagedContainers(ctx context.Context) {
+	if o.runtime == nil {
+		return
+	}
+
+	var containers []models.ManagedContainer
+	if err := o.db.Where("status = ?", "running").Find(&containers).Error; err != nil {
+		log.Printf("orchestrator: failed to query managed containers: %v", err)
+		return
+	}
+
+	if len(containers) == 0 {
+		return
+	}
+
+	log.Printf("orchestrator: recovering %d managed container(s)", len(containers))
+
+	for i := range containers {
+		mc := &containers[i]
+		containerID, err := o.runtime.StartManagedContainer(ctx, mc, o.config.BaseDomain)
+		if err != nil {
+			log.Printf("orchestrator: failed to recover managed container %s: %v", mc.ID, err)
+			o.db.Model(mc).Update("status", "stopped")
+			continue
+		}
+		o.db.Model(mc).Update("container_id", containerID)
+		log.Printf("orchestrator: recovered managed container %s (%s)", mc.ID, mc.Name)
+	}
+}
+
+// StopAllPlugins stops all running plugins and managed containers (used on kernel shutdown).
 func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 	if o.runtime == nil {
 		return nil
@@ -259,6 +308,22 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 
 		log.Printf("orchestrator: stopped plugin %s", plugin.ID)
 		o.emit("stop", plugin.ID, "stopped")
+	}
+
+	// Stop managed containers.
+	var mcList []models.ManagedContainer
+	if err := o.db.Where("status = ? AND container_id != ?", "running", "").Find(&mcList).Error; err == nil {
+		for i := range mcList {
+			mc := &mcList[i]
+			_ = o.runtime.StopPlugin(ctx, mc.ContainerID)
+			o.db.Model(mc).Updates(map[string]interface{}{
+				"container_id": "",
+				"status":       "stopped",
+			})
+		}
+		if len(mcList) > 0 {
+			log.Printf("orchestrator: stopped %d managed container(s)", len(mcList))
+		}
 	}
 
 	return nil

@@ -19,7 +19,6 @@ use (
 	./plugins/infra-cron-scheduler
 	./plugins/storage-sss3
 	./plugins/storage-volume
-	./plugins/user-vscode-server
 	./plugins/infra-workspace-manager
 	./plugins/messaging-telegram
 	./plugins/tool-nanobanana
@@ -28,4 +27,5 @@ use (
 	./plugins/tool-veo
 	./plugins/network-webhook-ingress
 	./plugins/messaging-whatsapp
+	./plugins/user-vscode-server
 )

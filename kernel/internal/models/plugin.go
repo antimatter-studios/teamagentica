@@ -9,7 +9,7 @@ type Plugin struct {
 	ID           string    `json:"id" gorm:"primaryKey"`
 	Name         string    `json:"name" gorm:"not null"`
 	Version      string    `json:"version" gorm:"not null"`
-	Image        string    `json:"image" gorm:"not null"`
+	Image        string    `json:"image"`
 	ContainerID  string    `json:"-"`
 	Status       string    `json:"status" gorm:"not null;default:'stopped'"`
 	Host         string    `json:"host"`
@@ -25,6 +25,11 @@ type Plugin struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 
+	// WorkspaceSchema defines how to launch a workspace environment.
+	// Only present on plugins with the workspace:environment capability.
+	// Stored as JSON; see WorkspaceSchemaData for the typed structure.
+	WorkspaceSchema JSONRawString `json:"workspace_schema,omitempty" gorm:"type:json"`
+
 	// ConfigSchema is a JSON string mapping env var names to ConfigSchemaField objects.
 	// Example:
 	//   {
@@ -34,6 +39,13 @@ type Plugin struct {
 	// The kernel uses this schema to (a) present config UI and (b) inject default values
 	// as env vars when starting the plugin container.
 	ConfigSchema JSONRawString `json:"config_schema" gorm:"type:json"`
+}
+
+// IsMetadataOnly returns true when the plugin has no runtime image and should
+// not be started as a container. Such plugins exist purely as discoverable
+// metadata (e.g. workspace environment definitions).
+func (p *Plugin) IsMetadataOnly() bool {
+	return p.Image == ""
 }
 
 // VisibleWhen describes a condition under which a field should be visible.
@@ -75,6 +87,39 @@ func (p *Plugin) SetConfigSchema(schema map[string]ConfigSchemaField) error {
 		return err
 	}
 	p.ConfigSchema = JSONRawString(data)
+	return nil
+}
+
+// WorkspaceSchemaData describes how to launch a workspace environment.
+type WorkspaceSchemaData struct {
+	DisplayName  string            `json:"display_name" yaml:"display_name"`
+	Description  string            `json:"description" yaml:"description"`
+	Image        string            `json:"image" yaml:"image"`
+	Port         int               `json:"port" yaml:"port"`
+	Cmd          []string          `json:"cmd,omitempty" yaml:"cmd,omitempty"`
+	EnvDefaults  map[string]string `json:"env_defaults,omitempty" yaml:"env_defaults,omitempty"`
+	DockerUser   string            `json:"docker_user,omitempty" yaml:"docker_user,omitempty"`
+}
+
+// GetWorkspaceSchema parses the stored JSON into a typed struct.
+func (p *Plugin) GetWorkspaceSchema() *WorkspaceSchemaData {
+	if len(p.WorkspaceSchema) == 0 {
+		return nil
+	}
+	var ws WorkspaceSchemaData
+	if err := json.Unmarshal([]byte(p.WorkspaceSchema), &ws); err != nil {
+		return nil
+	}
+	return &ws
+}
+
+// SetWorkspaceSchema serializes the workspace schema to JSON and stores it.
+func (p *Plugin) SetWorkspaceSchema(ws *WorkspaceSchemaData) error {
+	data, err := json.Marshal(ws)
+	if err != nil {
+		return err
+	}
+	p.WorkspaceSchema = JSONRawString(data)
 	return nil
 }
 

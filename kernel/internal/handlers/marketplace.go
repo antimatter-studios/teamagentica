@@ -63,7 +63,7 @@ type CatalogEntry struct {
 	Author         string                 `json:"author"`
 	Tags           []string               `json:"tags"`
 	ConfigSchema   map[string]interface{} `json:"config_schema,omitempty"`
-	DefaultPricing []CatalogPricingEntry  `json:"default_pricing,omitempty"`
+	DefaultPricing []CatalogPricingEntry `json:"default_pricing,omitempty"`
 	Provider       string                 `json:"provider,omitempty"`
 }
 
@@ -297,6 +297,14 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	if entry.ConfigSchema != nil {
 		schemaJSON, _ := json.Marshal(entry.ConfigSchema)
 		plugin.ConfigSchema = models.JSONRawString(schemaJSON)
+	}
+	// workspace_schema is NOT stored at install time — it comes from
+	// the plugin's live registration on every boot.
+
+	// Metadata-only plugins auto-enable — no container to start.
+	if plugin.IsMetadataOnly() {
+		plugin.Enabled = true
+		plugin.Status = "enabled"
 	}
 
 	if err := h.db.Create(&plugin).Error; err != nil {

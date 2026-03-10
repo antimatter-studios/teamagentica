@@ -562,16 +562,14 @@
         label: Debug Mode
         order: 99
         type: boolean
-  description: Workspace lifecycle management - create, list, delete, and persist git-backed workspaces for AI coding agents
+  description: Orchestrates workspace environments — discovers workspace plugins, manages container lifecycle, and creates isolated volumes
   group: infrastructure
   id: infra-workspace-manager
   image: teamagentica-infra-workspace-manager:latest
   name: Workspace Manager
   tags:
-    - workspace
-    - git
+    - workspace:manager
     - infrastructure
-    - coding
   version: 1.0.0
 - author: teamagentica
   config_schema:
@@ -775,6 +773,11 @@
   version: 1.0.0
 - author: teamagentica
   config_schema:
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin.
+        label: Aliases
+        order: 90
+        type: aliases
     PLUGIN_DEBUG:
         default: "false"
         help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
@@ -812,11 +815,6 @@
         required: true
         secret: true
         type: string
-    PLUGIN_ALIASES:
-        help_text: Define routing aliases for this plugin.
-        label: Aliases
-        order: 90
-        type: aliases
   description: S3-compatible object storage powered by stupid-simple-s3
   group: storage
   id: storage-sss3
@@ -842,18 +840,25 @@
         label: Debug Mode
         order: 99
         type: boolean
-  description: Managed disk volumes for isolated task storage. Provides persistent disks that other plugins (e.g. workspace-manager) use to create isolated work areas.
+    STORAGE_VOLUMES_PATH:
+        default: /data/volumes
+        help_text: Path for namespace-isolated block storage volumes. Each volume is a subdirectory.
+        label: Volumes Path
+        order: 1
+        type: string
+  description: Namespace-isolated block storage volumes. Provides persistent, mountable volumes with metadata and type labels (auth, storage). Other plugins discover it via the storage:block capability.
   group: storage
   id: storage-volume
   image: teamagentica-storage-volume:latest
-  name: Disk Storage
+  name: Block Storage
   tags:
     - storage
     - volume
+    - block
     - disk
     - infrastructure
     - tool
-  version: 1.0.0
+  version: 1.1.0
 - author: teamagentica
   config_schema:
     GEMINI_API_KEY:
@@ -912,6 +917,11 @@
   version: 1.0.0
 - author: teamagentica
   config_schema:
+    PLUGIN_ALIASES:
+        help_text: Define routing aliases for this plugin.
+        label: Aliases
+        order: 90
+        type: aliases
     PLUGIN_DEBUG:
         default: "false"
         help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
@@ -933,9 +943,9 @@
   default_pricing:
     - currency: USD
       model: seedance-2.0
-      per_request: 0.03
+      per_request: 0.14
       provider: seedance
-  description: AI video generation tool powered by ByteDance Seedance
+  description: AI video generation tool powered by Seedance 2.0 API
   group: tools
   id: tool-seedance
   image: teamagentica-tool-seedance:latest
@@ -945,8 +955,7 @@
     - ai
     - tool
     - seedance
-    - bytedance
-  version: 1.0.0
+  version: 2.0.0
 - author: teamagentica
   config_schema:
     PLUGIN_ALIASES:
@@ -1041,27 +1050,13 @@
     - gemini
   version: 1.0.0
 - author: teamagentica
-  config_schema:
-    CODE_SERVER_THEME:
-        default: dark
-        label: Color Theme
-        options:
-            - dark
-            - light
-        order: 1
-        type: select
-    PLUGIN_DEBUG:
-        default: "false"
-        label: Debug Mode
-        order: 99
-        type: boolean
   description: VS Code in the browser — edit workspace files with a full IDE including terminal, extensions, and git
   group: user
   id: user-vscode-server
   image: teamagentica-user-vscode-server:latest
   name: VS Code Server
   tags:
-    - workspace
+    - workspace:environment
     - editor
     - ide
     - vscode

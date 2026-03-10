@@ -72,6 +72,11 @@ func (m *Monitor) Start(ctx context.Context) {
 }
 
 func (m *Monitor) checkAll(ctx context.Context) {
+	m.checkPlugins(ctx)
+	m.checkManagedContainers(ctx)
+}
+
+func (m *Monitor) checkPlugins(ctx context.Context) {
 	var plugins []models.Plugin
 	if err := m.db.Where("enabled = ?", true).Find(&plugins).Error; err != nil {
 		log.Printf("health monitor: query plugins: %v", err)
@@ -82,6 +87,11 @@ func (m *Monitor) checkAll(ctx context.Context) {
 
 	for i := range plugins {
 		p := &plugins[i]
+
+		// Metadata-only plugins have no container — skip health checks entirely.
+		if p.IsMetadataOnly() {
+			continue
+		}
 
 		// Case 1: Plugin has no container at all (never started, or previous start failed).
 		// Attempt to start it if we have a restarter.
@@ -204,5 +214,29 @@ func (m *Monitor) setStatus(p *models.Plugin, status string) {
 	}
 	if err := m.db.Model(p).Update("status", status).Error; err != nil {
 		log.Printf("health monitor: update status for %s: %v", p.ID, err)
+	}
+}
+
+// checkManagedContainers verifies Docker state for running managed containers.
+// No auto-restart — the owning plugin decides whether to recreate.
+func (m *Monitor) checkManagedContainers(ctx context.Context) {
+	var containers []models.ManagedContainer
+	if err := m.db.Where("status = ?", "running").Find(&containers).Error; err != nil {
+		log.Printf("health monitor: query managed containers: %v", err)
+		return
+	}
+
+	for i := range containers {
+		mc := &containers[i]
+		if mc.ContainerID == "" {
+			continue
+		}
+
+		running, err := m.runtime.HealthCheck(ctx, mc.ContainerID)
+		if err != nil || !running {
+			log.Printf("health monitor: managed container %s (%s) no longer running", mc.ID, mc.Name)
+			m.db.Model(mc).Update("status", "stopped")
+			m.emitEvent(mc.PluginID, "warning", "managed container "+mc.Name+" stopped")
+		}
 	}
 }

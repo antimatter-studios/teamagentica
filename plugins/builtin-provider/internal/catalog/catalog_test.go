@@ -1,8 +1,16 @@
 package catalog
 
 import (
+	"os"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	if err := LoadFile("../../catalog.yaml"); err != nil {
+		panic("failed to load catalog.yaml: " + err.Error())
+	}
+	os.Exit(m.Run())
+}
 
 func TestSearch_EmptyQuery(t *testing.T) {
 	results := Search("")
