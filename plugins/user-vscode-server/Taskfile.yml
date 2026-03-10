@@ -9,16 +9,11 @@ tasks:
     cmds:
       - task --list
 
-  dev:
-    desc: Run in dev mode with hot reload
-    cmds:
-      - air
-
   build:
     desc: Build production binary
     cmds:
       - mkdir -p {{.BUILD_DIR}}
-      - CGO_ENABLED=0 go build -ldflags="-s -w" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
+      - CGO_ENABLED=1 go build -ldflags="-s -w" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
     sources:
       - "**/*.go"
       - go.mod

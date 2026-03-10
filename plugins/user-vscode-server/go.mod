@@ -1,10 +1,10 @@
 module github.com/antimatter-studios/teamagentica/plugins/user-vscode-server
 
-go 1.24
+go 1.24.3
 
 require (
 	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v0.0.0
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 )
 
 require (

@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "build"
 
 [build]
-  bin = "./build/user-vscode-server"
-  cmd = "go build -o ./build/user-vscode-server ."
+  bin = "./build/air-vscode-server"
+  cmd = "CGO_ENABLED=1 go build -o ./build/air-vscode-server ."
   delay = 1000
   exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []
