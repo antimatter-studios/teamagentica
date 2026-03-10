@@ -12,6 +12,7 @@ import CodeEditor from "./components/CodeEditor";
 import { useAuthStore } from "./stores/authStore";
 import { searchPlugins } from "./api/plugins";
 import { useEventStore } from "./stores/eventStore";
+import { useTheme } from "./hooks/useTheme";
 
 type Page = "dashboard" | "chat" | "code" | "files" | "marketplace" | "plugins" | "costs" | "console";
 
@@ -38,7 +39,7 @@ export default function App() {
     searchPlugins("system:chat")
       .then((p) => setHasChat(p.length > 0))
       .catch(() => {});
-    searchPlugins("workspace:editor")
+    searchPlugins("workspace:manager")
       .then((p) => setHasEditor(p.length > 0))
       .catch(() => {});
   }, []);
@@ -79,6 +80,7 @@ export default function App() {
   }, [hasChat, hasEditor, page]);
 
   const canAccessPlugins = user?.role === "admin";
+  const { theme, setTheme, themes } = useTheme();
 
   if (!authenticated) {
     return <LoginForm />;
@@ -157,6 +159,15 @@ export default function App() {
         </nav>
 
         <div className="header-right">
+          <select
+            className="theme-select"
+            value={theme}
+            onChange={(e) => setTheme(e.target.value as typeof theme)}
+          >
+            {themes.map((t) => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </select>
           <div className="header-user">
             <span className="user-email">{user?.email}</span>
             <span className={`user-role role-${user?.role}`}>
