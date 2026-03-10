@@ -52,8 +52,13 @@ Scans workspace root directory and detects:
 
 Also detects installed VS Code extensions from `.code-server/extensions/`.
 
+## Code-Server Settings Provisioning
+
+On workspace creation, the manager provisions Machine settings in the volume at `.code-server/code-server/Machine/settings.json`. Currently enables `extensions.supportNodeGlobalNavigator` for extensions (e.g. Claude Code) that access the Node.js `navigator` global (required since code-server 4.110+ / Node v22). The `XDG_DATA_HOME` env var is set to `/workspace/.code-server` so code-server picks up these settings.
+
 ## Architecture
 - Discovers workspace environments by searching plugins with `workspace:environment` capability
 - Creates containers via kernel's managed container API
 - Volumes stored at `/workspaces/volumes/{volume_name}/`
-- Each workspace gets a unique subdomain for browser access via Docker proxy labels
+- Workspaces accessible via path-based routing at `/ws/{container_id}/` through the kernel proxy
+- Subdomain routing via Docker proxy labels also works for local development

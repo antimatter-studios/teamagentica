@@ -39,6 +39,7 @@ Built with Go/Gin, SQLite (GORM), and the Docker API.
 | `POST` | `/api/auth/register` | Register user (first user becomes admin; subsequent require admin JWT) |
 | `POST` | `/api/auth/login` | Login — returns JWT + user object |
 | `ANY` | `/api/webhook/:plugin_id/*path` | Webhook ingress proxy — forwards to plugin without auth |
+| `ANY` | `/ws/:container_id/*path` | Reverse proxy to managed container (path-based workspace access) |
 
 ### User (valid JWT required)
 
@@ -105,6 +106,19 @@ Built with Go/Gin, SQLite (GORM), and the Docker API.
 | `GET` | `/api/managed-containers/:id` | Get managed container by ID |
 | `DELETE` | `/api/managed-containers/:id` | Delete managed container + stop container |
 | `PATCH` | `/api/managed-containers/:id` | Update container metadata (name, volume) |
+
+## Workspace Proxy
+
+Path-based routing at `/ws/:container_id/*path` proxies requests to managed containers without requiring wildcard subdomain DNS. This enables workspace access through any single-origin gateway (ngrok, cloudflare tunnel, production load balancer).
+
+- Uses `httputil.ReverseProxy` for HTTP and WebSocket support
+- Preserves the original Host header so code-server's `ensureOrigin` check passes on WebSocket upgrades
+- Strips the `/ws/:container_id` prefix before forwarding
+- Auth via session cookie (same-origin, automatic) — no token in URL
+- Container hostname is deterministic: `teamagentica-mc-{id}`
+- The kernel appends `--abs-proxy-base-path=/ws/{id}` to container cmd at launch
+
+Subdomain routing via docker-proxy labels still works in parallel for local development.
 
 ## Authentication & RBAC
 
