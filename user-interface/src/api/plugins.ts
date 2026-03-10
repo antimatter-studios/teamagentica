@@ -90,6 +90,24 @@ export async function getPlugin(id: string): Promise<Plugin> {
   return res.plugin;
 }
 
+/** Fetch the live schema from a running plugin (proxied through kernel). */
+export async function getPluginSchema(id: string): Promise<Record<string, unknown>> {
+  return apiGet<Record<string, unknown>>(`/api/plugins/${id}/schema`);
+}
+
+/** Fetch the live config schema section from a running plugin. */
+export async function getPluginConfigSchema(id: string): Promise<Record<string, ConfigSchemaField>> {
+  try {
+    const raw = await apiGet<Record<string, ConfigSchemaField>>(`/api/plugins/${id}/schema/config`);
+    const sorted = Object.entries(raw).sort(
+      ([, a], [, b]) => (a.order ?? 50) - (b.order ?? 50)
+    );
+    return Object.fromEntries(sorted);
+  } catch {
+    return {};
+  }
+}
+
 export async function installPlugin(plugin: Partial<Plugin>): Promise<Plugin> {
   return apiPost<Plugin>("/api/plugins", plugin);
 }

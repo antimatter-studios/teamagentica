@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { parseCapabilities, parseConfigSchema, type Plugin } from "../api/plugins";
+import { parseCapabilities, getPluginConfigSchema, type Plugin, type ConfigSchemaField } from "../api/plugins";
 import { apiGet } from "../api/client";
 import { usePluginStore } from "../stores/pluginStore";
 import PluginConfigForm from "./PluginConfigForm";
@@ -100,12 +100,17 @@ export default function PluginSettings() {
   const selected = plugins.find((p) => p.id === selectedId) || null;
   const groups = useMemo(() => groupedPlugins(plugins), [plugins]);
 
-  // Check if selected plugin has an aliases field in its schema.
-  const hasAliases = (() => {
-    if (!selected) return false;
-    const schema = parseConfigSchema(selected);
-    return Object.values(schema).some((f) => f.type === "aliases");
-  })();
+  // Fetch live config schema to check for aliases field.
+  const [liveSchema, setLiveSchema] = useState<Record<string, ConfigSchemaField>>({});
+  useEffect(() => {
+    if (!selected || selected.status !== "running") {
+      setLiveSchema({});
+      return;
+    }
+    getPluginConfigSchema(selected.id).then(setLiveSchema).catch(() => setLiveSchema({}));
+  }, [selected?.id, selected?.status]);
+
+  const hasAliases = Object.values(liveSchema).some((f) => f.type === "aliases");
 
   // Probe pricing endpoint when selected plugin changes.
   const probePricing = useCallback(async (pluginId: string, status: string) => {
@@ -184,7 +189,8 @@ export default function PluginSettings() {
 
   function statusClass(status: string): string {
     switch (status) {
-      case "running": return "status-running";
+      case "running":
+      case "enabled": return "status-running";
       case "starting": return "status-starting";
       case "error":
       case "unhealthy": return "status-error";
@@ -283,9 +289,11 @@ export default function PluginSettings() {
                 </span>
               </div>
 
-              <div className="plugin-detail-meta">
-                <span className="plugin-image">{selected.image}</span>
-              </div>
+              {selected.image && (
+                <div className="plugin-detail-meta">
+                  <span className="plugin-image">{selected.image}</span>
+                </div>
+              )}
 
               {parseCapabilities(selected).length > 0 && (
                 <div className="plugin-capabilities">
@@ -324,7 +332,7 @@ export default function PluginSettings() {
                   UNINSTALL
                 </button>
 
-                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), ...(hasSystemPrompt ? ["system-prompt"] : []), "logs"] as DetailTab[]).map((tab) => (
+                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), ...(hasSystemPrompt ? ["system-prompt"] : []), ...(!selected.image ? [] : ["logs"])] as DetailTab[]).map((tab) => (
                   <button
                     key={tab}
                     className={`plugin-action-btn${detailTab === tab ? " btn-active" : ""}`}

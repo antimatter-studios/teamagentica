@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   type Plugin,
-  parseConfigSchema,
+  getPluginConfigSchema,
   getFieldOptions,
   getPluginConfig,
   updatePluginConfig,
@@ -33,8 +33,8 @@ function modelToTarget(model: string, pluginId: string): string {
   return `${pluginId}:${model}`;
 }
 
-function findModelFieldKey(plugin: Plugin): string | null {
-  const schema = parseConfigSchema(plugin);
+async function findModelFieldKey(plugin: Plugin): Promise<string | null> {
+  const schema = await getPluginConfigSchema(plugin.id);
   for (const [key, field] of Object.entries(schema)) {
     if (field.type === "select" && field.dynamic) return key;
   }
@@ -48,6 +48,7 @@ interface Props {
 
 export default function PluginAliasPanel({ plugin, onSaved }: Props) {
   const [entries, setEntries] = useState<AliasEntry[]>([]);
+  const [modelFieldKey, setModelFieldKey] = useState<string | null>(null);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
@@ -73,13 +74,17 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
     load();
   }, [plugin.id]);
 
+  // Resolve model field key from live schema.
+  useEffect(() => {
+    findModelFieldKey(plugin).then(setModelFieldKey).catch(() => setModelFieldKey(null));
+  }, [plugin.id, plugin.status]);
+
   const fetchModels = () => {
-    const modelKey = findModelFieldKey(plugin);
-    if (!modelKey || plugin.status !== "running") return;
+    if (!modelFieldKey || plugin.status !== "running") return;
 
     setModelsLoading(true);
     setModelsError("");
-    getFieldOptions(plugin.id, modelKey)
+    getFieldOptions(plugin.id, modelFieldKey)
       .then((res) => setModelOptions(res.options || []))
       .catch((err) => {
         setModelsError(err instanceof Error ? err.message : "Failed to fetch models");
@@ -90,7 +95,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
   // Fetch available models from the plugin's dynamic model field.
   useEffect(() => {
     fetchModels();
-  }, [plugin.id, plugin.status, plugin.config_schema]);
+  }, [plugin.id, plugin.status, modelFieldKey]);
 
   const updateEntry = (i: number, field: "name" | "model", val: string) => {
     setEntries((prev) =>
@@ -137,7 +142,6 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
     }
   };
 
-  const modelFieldKey = findModelFieldKey(plugin);
   const supportsModels = modelFieldKey !== null;
   const hasModels = modelOptions.length > 0;
 

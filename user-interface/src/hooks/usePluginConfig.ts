@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import {
   getPluginConfig,
   updatePluginConfig,
+  getPluginConfigSchema,
   parseConfigSchema,
   getFieldOptions,
   getOAuthStatus,
@@ -175,7 +176,10 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     async function load() {
       try {
         const entries: PluginConfigEntry[] = await getPluginConfig(plugin.id);
-        const schema = parseConfigSchema(plugin);
+        // Fetch live schema from running plugin; fall back to DB-cached schema.
+        const schema = plugin.status === "running"
+          ? await getPluginConfigSchema(plugin.id)
+          : parseConfigSchema(plugin);
         const entryMap = new Map(entries.map((e) => [e.key, e]));
 
         const configFields: ConfigField[] = Object.entries(schema).map(
@@ -238,7 +242,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
       }
     }
     load();
-  }, [plugin.id, plugin.config_schema, plugin.status]);
+  }, [plugin.id, plugin.status]);
 
   function updateField(index: number, value: string) {
     setDirty(true);
