@@ -22,14 +22,15 @@ import (
 // --- request types ---
 
 type createManagedContainerRequest struct {
-	Name       string            `json:"name" binding:"required"`
-	Image      string            `json:"image" binding:"required"`
-	Port       int               `json:"port" binding:"required"`
-	Subdomain  string            `json:"subdomain" binding:"required"`
-	VolumeName string            `json:"volume_name"`
-	Env        map[string]string `json:"env"`
-	Cmd        []string          `json:"cmd"`
-	DockerUser string            `json:"docker_user"`
+	Name        string              `json:"name" binding:"required"`
+	Image       string              `json:"image" binding:"required"`
+	Port        int                 `json:"port" binding:"required"`
+	Subdomain   string              `json:"subdomain" binding:"required"`
+	VolumeName  string              `json:"volume_name"`
+	ExtraMounts []models.ExtraMount `json:"extra_mounts"`
+	Env         map[string]string   `json:"env"`
+	Cmd         []string            `json:"cmd"`
+	DockerUser  string              `json:"docker_user"`
 }
 
 // --- helpers ---
@@ -88,6 +89,7 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 	}
 	mc.SetEnv(req.Env)
 	mc.SetCmd(req.Cmd)
+	mc.SetExtraMounts(req.ExtraMounts)
 
 	if err := h.db.Create(&mc).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save container record"})

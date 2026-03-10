@@ -383,6 +383,38 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		}
 	}
 
+	// Extra mounts: additional volumes requested by the plugin (e.g. shared
+	// extension directories). Same convention as the primary volume — names
+	// resolve relative to the storage-volume volumes dir.
+	for _, em := range mc.GetExtraMounts() {
+		if em.VolumeName == "" || em.Target == "" {
+			continue
+		}
+		projectRoot := d.projectRoot()
+		if d.devMode && projectRoot != "" {
+			hostPath := filepath.Join(projectRoot, "data", "storage-volume", "volumes", em.VolumeName)
+			if err := os.MkdirAll(hostPath, 0o755); err != nil {
+				return "", fmt.Errorf("create extra mount dir %s: %w", em.VolumeName, err)
+			}
+			mounts = append(mounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   hostPath,
+				Target:   em.Target,
+				ReadOnly: em.ReadOnly,
+			})
+		} else {
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeVolume,
+				Source: "teamagentica-data-storage-volume",
+				Target: em.Target,
+				VolumeOptions: &mount.VolumeOptions{
+					Subpath: filepath.Join("volumes", em.VolumeName),
+				},
+				ReadOnly: em.ReadOnly,
+			})
+		}
+	}
+
 	hostCfg := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: "no"},
 		Mounts:        mounts,
