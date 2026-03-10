@@ -181,13 +181,23 @@ export default function App() {
       </header>
 
       {page === "dashboard" && <Dashboard />}
-      {page === "chat" && hasChat && <Chat />}
-      {page === "code" && hasEditor && <CodeEditor />}
       {page === "files" && <FileBrowser />}
       {page === "marketplace" && <Marketplace />}
       {page === "plugins" && <PluginSettings />}
       {page === "costs" && <CostDashboard />}
       {page === "console" && <DebugConsole />}
+
+      {/* Chat and Code stay mounted (hidden) to preserve iframe/websocket state */}
+      {hasChat && (
+        <div style={{ display: page === "chat" ? "contents" : "none" }}>
+          <Chat />
+        </div>
+      )}
+      {hasEditor && (
+        <div style={{ display: page === "code" ? "contents" : "none" }}>
+          <CodeEditor />
+        </div>
+      )}
     </div>
   );
 }
