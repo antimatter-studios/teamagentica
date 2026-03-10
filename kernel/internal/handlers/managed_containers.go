@@ -1,15 +1,21 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
@@ -264,6 +270,82 @@ func (h *PluginHandler) ForceDeleteManagedContainer(c *gin.Context) {
 
 	h.db.Delete(&mc)
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+// ProxyToManagedContainer handles ANY /ws/:container_id/*path — proxies requests
+// through the kernel to the target managed container. Uses httputil.ReverseProxy
+// to support both regular HTTP and WebSocket connections transparently.
+func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
+	containerID := c.Param("container_id")
+	path := c.Param("path")
+	start := time.Now()
+
+	var mc models.ManagedContainer
+	if err := h.db.First(&mc, "id = ?", containerID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		return
+	}
+
+	if mc.Status != "running" || mc.ContainerID == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "container not running"})
+		return
+	}
+
+	// Container hostname is deterministic: "teamagentica-mc-{id}" (set in docker.go).
+	target, _ := url.Parse(fmt.Sprintf("http://teamagentica-mc-%s:%d", mc.ID, mc.Port))
+	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	// Rewrite the request path to strip the /ws/:container_id prefix.
+	// Preserve the original Host header so code-server's ensureOrigin check
+	// (Origin == Host) passes for WebSocket upgrades. Without this,
+	// Origin="api.teamagentica.localhost" mismatches Host="teamagentica-mc-xxx:8080" → 403.
+	originalHost := c.Request.Host
+	defaultDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		defaultDirector(req)
+		req.URL.Path = path
+		req.Host = originalHost
+	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		// Remove any upstream CSP that restricts framing — the UI embeds
+		// workspaces in iframes from a different origin (ui.* vs api.*).
+		resp.Header.Del("Content-Security-Policy")
+
+		var detail string
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			detail = string(body)
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		h.Events.Emit(events.DebugEvent{
+			Type:     "ws-proxy",
+			PluginID: mc.PluginID,
+			Method:   c.Request.Method,
+			Path:     path,
+			Status:   resp.StatusCode,
+			Duration: time.Since(start).Milliseconds(),
+			Detail:   detail,
+		})
+		return nil
+	}
+
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		h.Events.Emit(events.DebugEvent{
+			Type:     "ws-proxy",
+			PluginID: mc.PluginID,
+			Method:   c.Request.Method,
+			Path:     path,
+			Status:   502,
+			Duration: time.Since(start).Milliseconds(),
+			Detail:   err.Error(),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, `{"error":"Workspace container is not reachable — it may have stopped or is still starting up"}`)
+	}
+
+	proxy.ServeHTTP(c.Writer, c.Request)
 }
 
 // StopManagedContainersByPlugin stops and deletes all managed containers

@@ -240,6 +240,15 @@ func main() {
 		routeGroup.Any("/:plugin_id/*path", pluginHandler.RouteToPlugin)
 	}
 
+	// Workspace proxy — path-based routing to managed containers.
+	// Enables single-origin access (no subdomain dependency), works behind any gateway.
+	// No auth required — matches existing subdomain routing (docker-proxy goes directly
+	// to containers without kernel auth). Workspace IDs are random and unguessable.
+	wsGroup := r.Group("/ws")
+	{
+		wsGroup.Any("/:container_id/*path", pluginHandler.ProxyToManagedContainer)
+	}
+
 	// Public webhook ingress — no auth required.
 	// External services (Telegram, Discord, etc.) POST here via ngrok tunnel.
 	webhookGroup := r.Group("/api/webhook")

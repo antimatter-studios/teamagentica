@@ -349,7 +349,9 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		Labels:   labels,
 	}
 	if cmd := mc.GetCmd(); len(cmd) > 0 {
-		cfg.Cmd = cmd
+		// Append path-based proxy base path so the workspace is accessible
+		// via /ws/{id}/ through the kernel proxy (no subdomain required).
+		cfg.Cmd = append(cmd, "--abs-proxy-base-path=/ws/"+mc.ID)
 	}
 	if mc.DockerUser != "" {
 		cfg.User = mc.DockerUser
