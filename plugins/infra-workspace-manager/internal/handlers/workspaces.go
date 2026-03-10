@@ -252,11 +252,14 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		}
 	}
 
-	// Provision code-server Machine settings in the workspace volume.
-	// Enables extensions.supportNodeGlobalNavigator for extensions (e.g. Claude Code)
-	// that access the Node.js navigator global (required since code-server 4.110+).
-	// With XDG_DATA_HOME=/workspace/.code-server, code-server stores data at
-	// /workspace/.code-server/code-server/ including Machine/settings.json.
+	// Shared extensions volume: installed extensions are shared across all
+	// workspaces so you install once, available everywhere. Runtime state
+	// (logs, DBs) stays per-workspace via XDG_DATA_HOME.
+	sharedExtDir := filepath.Join(h.workspaceDir, "volumes", "code-server-shared", "extensions")
+	os.MkdirAll(sharedExtDir, 0755)
+
+	// Provision code-server Machine settings per-workspace for navigator support.
+	// Settings are small and per-workspace keeps runtime state isolated.
 	csSettingsDir := filepath.Join(volumePath, ".code-server", "code-server", "Machine")
 	if err := os.MkdirAll(csSettingsDir, 0755); err == nil {
 		_ = os.WriteFile(filepath.Join(csSettingsDir, "settings.json"),
@@ -268,8 +271,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	for k, v := range ws.EnvDefaults {
 		env[k] = v
 	}
-	// Point code-server's data dir to the workspace volume so Machine settings
-	// and other state persist across container restarts.
+	// Per-workspace data dir for code-server runtime state (logs, DBs, settings).
 	env["XDG_DATA_HOME"] = "/workspace/.code-server"
 
 	// Launch managed container via kernel.
@@ -281,8 +283,14 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		Port:       ws.Port,
 		Subdomain:  subdomain,
 		VolumeName: volumeName,
+		ExtraMounts: []pluginsdk.ExtraMount{
+			{
+				VolumeName: "code-server-shared/extensions",
+				Target:     "/mnt/shared-extensions",
+			},
+		},
 		Env:        env,
-		Cmd:        ws.Cmd,
+		Cmd:        append(ws.Cmd, "--extensions-dir", "/mnt/shared-extensions"),
 		DockerUser: ws.DockerUser,
 	})
 	if err != nil {
