@@ -1062,6 +1062,30 @@
     - ai
   version: 1.0.0
 - author: teamagentica
+  description: Web terminal with OpenAI Codex CLI — AI-powered coding assistant in the browser
+  group: user
+  id: user-codex-terminal
+  image: teamagentica-user-codex-terminal:latest
+  name: Codex Terminal
+  tags:
+    - workspace:environment
+    - terminal
+    - codex
+    - ai
+  version: 1.0.0
+- author: teamagentica
+  description: Web terminal with OpenCode CLI — AI-powered coding assistant in the browser
+  group: user
+  id: user-opencode-terminal
+  image: teamagentica-user-opencode-terminal:latest
+  name: OpenCode Terminal
+  tags:
+    - workspace:environment
+    - terminal
+    - opencode
+    - ai
+  version: 1.0.0
+- author: teamagentica
   description: VS Code in the browser — edit workspace files with a full IDE including terminal, extensions, and git
   group: user
   id: user-vscode-server
