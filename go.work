@@ -29,4 +29,6 @@ use (
 	./plugins/messaging-whatsapp
 	./plugins/user-vscode-server
 	./plugins/user-claude-terminal
+	./plugins/user-codex-terminal
+	./plugins/user-opencode-terminal
 )

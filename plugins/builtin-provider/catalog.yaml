@@ -1072,6 +1072,7 @@
     - terminal
     - codex
     - ai
+    - openai
   version: 1.0.0
 - author: teamagentica
   description: Web terminal with OpenCode CLI — AI-powered coding assistant in the browser

@@ -85,6 +85,12 @@ includes:
   infra-mcp-server:
     taskfile: ./plugins/infra-mcp-server/Taskfile.yml
     dir: ./plugins/infra-mcp-server
+  user-codex-terminal:
+    taskfile: ./plugins/user-codex-terminal/Taskfile.yml
+    dir: ./plugins/user-codex-terminal
+  user-opencode-terminal:
+    taskfile: ./plugins/user-opencode-terminal/Taskfile.yml
+    dir: ./plugins/user-opencode-terminal
 
 tasks:
   default:
@@ -116,6 +122,8 @@ tasks:
       - task: messaging-whatsapp:test
       - task: user-vscode-server:test
       - task: user-claude-terminal:test
+      - task: user-codex-terminal:test
+      - task: user-opencode-terminal:test
 
   build:catalog:
     desc: Rebuild the plugin catalog from plugin.yaml manifests
@@ -200,6 +208,8 @@ tasks:
       - messaging-whatsapp:build
       - user-vscode-server:build
       - user-claude-terminal:build
+      - user-codex-terminal:build
+      - user-opencode-terminal:build
 
   build:images:
     desc: Build all plugin Docker images (sequential)
@@ -230,6 +240,8 @@ tasks:
       - task: tool-veo:docker:prod
       - task: user-vscode-server:docker:prod
       - task: user-claude-terminal:docker:prod
+      - task: user-codex-terminal:docker:prod
+      - task: user-opencode-terminal:docker:prod
       - echo "All plugin images built successfully"
       - task: restart:running
 
@@ -262,6 +274,8 @@ tasks:
       - task: tool-veo:docker:dev
       - task: user-vscode-server:docker:dev
       - task: user-claude-terminal:docker:dev
+      - task: user-codex-terminal:docker:dev
+      - task: user-opencode-terminal:docker:dev
       - echo "All dev plugin images built successfully"
       - task: restart:running
 
@@ -315,3 +329,5 @@ tasks:
       - messaging-whatsapp:clean
       - user-vscode-server:clean
       - user-claude-terminal:clean
+      - user-codex-terminal:clean
+      - user-opencode-terminal:clean
