@@ -13,7 +13,11 @@ func TestHub_EmitSetsTimestamp(t *testing.T) {
 	if len(history) != 1 {
 		t.Fatalf("expected 1 event in history, got %d", len(history))
 	}
-	if history[0].Timestamp.IsZero() {
+	evt, ok := history[0].Data.(DebugEvent)
+	if !ok {
+		t.Fatalf("expected DebugEvent in history, got %T", history[0].Data)
+	}
+	if evt.Timestamp.IsZero() {
 		t.Fatal("expected non-zero timestamp")
 	}
 }
@@ -24,8 +28,12 @@ func TestHub_EmitPreservesTimestamp(t *testing.T) {
 	hub.Emit(DebugEvent{Type: "test", PluginID: "p1", Timestamp: ts})
 
 	history := hub.History(0)
-	if !history[0].Timestamp.Equal(ts) {
-		t.Fatalf("expected timestamp %v, got %v", ts, history[0].Timestamp)
+	evt, ok := history[0].Data.(DebugEvent)
+	if !ok {
+		t.Fatalf("expected DebugEvent in history, got %T", history[0].Data)
+	}
+	if !evt.Timestamp.Equal(ts) {
+		t.Fatalf("expected timestamp %v, got %v", ts, evt.Timestamp)
 	}
 }
 
@@ -37,7 +45,14 @@ func TestHub_SubscribeReceivesEvents(t *testing.T) {
 	hub.Emit(DebugEvent{Type: "test", PluginID: "p1", Detail: "hello"})
 
 	select {
-	case evt := <-ch:
+	case msg := <-ch:
+		if msg.Channel != "audit" {
+			t.Fatalf("expected channel 'audit', got %q", msg.Channel)
+		}
+		evt, ok := msg.Data.(DebugEvent)
+		if !ok {
+			t.Fatalf("expected DebugEvent in message, got %T", msg.Data)
+		}
 		if evt.Type != "test" || evt.Detail != "hello" {
 			t.Fatalf("unexpected event: %+v", evt)
 		}
@@ -55,9 +70,16 @@ func TestHub_MultipleSubscribers(t *testing.T) {
 
 	hub.Emit(DebugEvent{Type: "test"})
 
-	for i, ch := range []chan DebugEvent{ch1, ch2} {
+	for i, ch := range []chan SSEMessage{ch1, ch2} {
 		select {
-		case evt := <-ch:
+		case msg := <-ch:
+			if msg.Channel != "audit" {
+				t.Fatalf("subscriber %d: expected channel 'audit', got %q", i, msg.Channel)
+			}
+			evt, ok := msg.Data.(DebugEvent)
+			if !ok {
+				t.Fatalf("subscriber %d: expected DebugEvent in message, got %T", i, msg.Data)
+			}
 			if evt.Type != "test" {
 				t.Fatalf("subscriber %d: unexpected type %s", i, evt.Type)
 			}
@@ -102,8 +124,12 @@ func TestHub_HistoryLimit(t *testing.T) {
 		t.Fatalf("expected 3 events, got %d", len(limited))
 	}
 	// Should be the most recent 3.
-	if limited[0].Detail != string(rune('0'+7)) {
-		t.Fatalf("expected detail '7', got %s", limited[0].Detail)
+	evt, ok := limited[0].Data.(DebugEvent)
+	if !ok {
+		t.Fatalf("expected DebugEvent in history, got %T", limited[0].Data)
+	}
+	if evt.Detail != string(rune('0'+7)) {
+		t.Fatalf("expected detail '7', got %s", evt.Detail)
 	}
 }
 
@@ -119,14 +145,18 @@ func TestHub_HistoryRingBuffer(t *testing.T) {
 		t.Fatalf("expected %d events, got %d", maxHistory, len(all))
 	}
 	// First event in history should be event #10 (0-indexed).
-	if all[0].Status != 10 {
-		t.Fatalf("expected oldest event status=10, got %d", all[0].Status)
+	evt, ok := all[0].Data.(DebugEvent)
+	if !ok {
+		t.Fatalf("expected DebugEvent in history, got %T", all[0].Data)
+	}
+	if evt.Status != 10 {
+		t.Fatalf("expected oldest event status=10, got %d", evt.Status)
 	}
 }
 
-func TestMarshalEvent(t *testing.T) {
-	evt := DebugEvent{Type: "test", PluginID: "p1", Detail: "hello"}
-	data, err := MarshalEvent(evt)
+func TestMarshalSSEMessage(t *testing.T) {
+	msg := SSEMessage{Channel: "audit", Data: DebugEvent{Type: "test", PluginID: "p1", Detail: "hello"}}
+	data, err := MarshalSSEMessage(msg)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

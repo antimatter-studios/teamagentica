@@ -1050,6 +1050,18 @@
     - gemini
   version: 1.0.0
 - author: teamagentica
+  description: Web terminal with Claude Code CLI — AI-powered coding assistant in the browser
+  group: user
+  id: user-claude-terminal
+  image: teamagentica-user-claude-terminal:latest
+  name: Claude Terminal
+  tags:
+    - workspace:environment
+    - terminal
+    - claude
+    - ai
+  version: 1.0.0
+- author: teamagentica
   description: VS Code in the browser — edit workspace files with a full IDE including terminal, extensions, and git
   group: user
   id: user-vscode-server

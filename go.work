@@ -28,4 +28,5 @@ use (
 	./plugins/network-webhook-ingress
 	./plugins/messaging-whatsapp
 	./plugins/user-vscode-server
+	./plugins/user-claude-terminal
 )
