@@ -30,8 +30,8 @@ type ManagedContainer struct {
 	VolumeName  string    `json:"volume_name"`
 	ExtraMounts string    `json:"-" gorm:"type:text"` // JSON array of ExtraMount
 	Env         string    `json:"-" gorm:"type:text"`
-	Cmd         string    `json:"-" gorm:"type:text"` // JSON array of command args
-	DockerUser  string    `json:"-" gorm:"column:docker_user"`
+	Cmd        string `json:"-" gorm:"type:text"` // JSON array of command args
+	DockerUser string `json:"-" gorm:"column:docker_user"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

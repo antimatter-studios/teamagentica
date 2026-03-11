@@ -159,6 +159,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	var req struct {
 		Name          string `json:"name" binding:"required"`
 		EnvironmentID string `json:"environment_id" binding:"required"`
+		VolumeName    string `json:"volume_name,omitempty"` // reuse existing volume
 		GitRepo       string `json:"git_repo,omitempty"`
 		GitRef        string `json:"git_ref,omitempty"`
 	}
@@ -227,14 +228,29 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Create the volume directory for workspace storage.
-	volumeName := fmt.Sprintf("ws-%s-%s", wsID, wsKey)
-	volumePath := filepath.Join(h.workspaceDir, "volumes", volumeName)
-	if err := os.MkdirAll(volumePath, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create volume: " + err.Error()})
-		return
+	// Reuse existing volume or create a new one.
+	var volumeName string
+	var volumeExisted bool
+	if req.VolumeName != "" {
+		volumeName = req.VolumeName
+		volumePath := filepath.Join(h.workspaceDir, "volumes", volumeName)
+		if info, err := os.Stat(volumePath); err == nil && info.IsDir() {
+			volumeExisted = true
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "volume not found: " + req.VolumeName})
+			return
+		}
+	} else {
+		volumeName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
+		volumeExisted = false
 	}
-	volumeExisted := false // fresh volume
+	volumePath := filepath.Join(h.workspaceDir, "volumes", volumeName)
+	if !volumeExisted {
+		if err := os.MkdirAll(volumePath, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create volume: " + err.Error()})
+			return
+		}
+	}
 
 	// Git clone into volume if requested (skip if reusing existing volume).
 	if req.GitRepo != "" && !volumeExisted {
@@ -252,18 +268,24 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		}
 	}
 
-	// Shared extensions volume: installed extensions are shared across all
-	// workspaces so you install once, available everywhere. Runtime state
-	// (logs, DBs) stays per-workspace via XDG_DATA_HOME.
-	sharedExtDir := filepath.Join(h.workspaceDir, "volumes", "code-server-shared", "extensions")
-	os.MkdirAll(sharedExtDir, 0755)
+	// Ensure shared mount directories exist on the host volume.
+	for _, sm := range ws.SharedMounts {
+		if sm.VolumeName != "" {
+			os.MkdirAll(filepath.Join(h.workspaceDir, "volumes", sm.VolumeName), 0755)
+		}
+	}
 
-	// Provision code-server Machine settings per-workspace for navigator support.
-	// Settings are small and per-workspace keeps runtime state isolated.
-	csSettingsDir := filepath.Join(volumePath, ".code-server", "code-server", "Machine")
-	if err := os.MkdirAll(csSettingsDir, 0755); err == nil {
-		_ = os.WriteFile(filepath.Join(csSettingsDir, "settings.json"),
-			[]byte(`{"extensions.supportNodeGlobalNavigator":true}`+"\n"), 0644)
+	// Run workspace-type-specific setup scripts declared in the schema.
+	for _, script := range ws.SetupScripts {
+		switch script {
+		case "code-server-navigator":
+			// Provision Machine settings per-workspace for navigator support.
+			csSettingsDir := filepath.Join(volumePath, ".code-server", "code-server", "Machine")
+			if err := os.MkdirAll(csSettingsDir, 0755); err == nil {
+				_ = os.WriteFile(filepath.Join(csSettingsDir, "settings.json"),
+					[]byte(`{"extensions.supportNodeGlobalNavigator":true}`+"\n"), 0644)
+			}
+		}
 	}
 
 	// Build env from workspace schema defaults.
@@ -271,26 +293,25 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	for k, v := range ws.EnvDefaults {
 		env[k] = v
 	}
-	// Per-workspace data dir for code-server runtime state (logs, DBs, settings).
-	env["XDG_DATA_HOME"] = "/workspace/.code-server"
+
+	// Build cmd: base cmd + extra args from schema.
+	cmd := ws.Cmd
+	if len(ws.ExtraCmdArgs) > 0 {
+		cmd = append(append([]string{}, cmd...), ws.ExtraCmdArgs...)
+	}
 
 	// Launch managed container via kernel.
 	// Subdomain uses only the random ID — permanent, never changes on rename.
 	subdomain := "ws-" + wsID
 	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
-		Name:       displayName,
-		Image:      ws.Image,
-		Port:       ws.Port,
-		Subdomain:  subdomain,
-		VolumeName: volumeName,
-		ExtraMounts: []pluginsdk.ExtraMount{
-			{
-				VolumeName: "code-server-shared/extensions",
-				Target:     "/mnt/shared-extensions",
-			},
-		},
-		Env:        env,
-		Cmd:        append(ws.Cmd, "--extensions-dir", "/mnt/shared-extensions"),
+		Name:              displayName,
+		Image:             ws.Image,
+		Port:              ws.Port,
+		Subdomain:         subdomain,
+		VolumeName:        volumeName,
+		ExtraMounts:       ws.SharedMounts,
+		Env:               env,
+		Cmd:        cmd,
 		DockerUser: ws.DockerUser,
 	})
 	if err != nil {
@@ -625,13 +646,16 @@ func (h *Handler) fetchWorkspaceSchema(pluginID string) *workspaceSchemaData {
 }
 
 type workspaceSchemaData struct {
-	DisplayName string            `json:"display_name"`
-	Description string            `json:"description"`
-	Image       string            `json:"image"`
-	Port        int               `json:"port"`
-	Cmd         []string          `json:"cmd"`
-	DockerUser  string            `json:"docker_user"`
-	EnvDefaults map[string]string `json:"env_defaults"`
+	DisplayName  string                 `json:"display_name"`
+	Description  string                 `json:"description"`
+	Image        string                 `json:"image"`
+	Port         int                    `json:"port"`
+	Cmd          []string               `json:"cmd"`
+	DockerUser   string                 `json:"docker_user"`
+	EnvDefaults  map[string]string      `json:"env_defaults"`
+	SharedMounts []pluginsdk.ExtraMount `json:"shared_mounts"`
+	ExtraCmdArgs []string               `json:"extra_cmd_args"`
+	SetupScripts []string               `json:"setup_scripts"` // e.g. ["code-server-navigator"]
 }
 
 func dirSize(path string) int64 {
