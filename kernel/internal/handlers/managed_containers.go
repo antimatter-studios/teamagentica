@@ -274,6 +274,32 @@ func (h *PluginHandler) ForceDeleteManagedContainer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
+// containerTargetURL returns the URL for a managed container.
+// Default: http://teamagentica-mc-{id}:{port}.
+func containerTargetURL(mc *models.ManagedContainer) string {
+	return fmt.Sprintf("http://teamagentica-mc-%s:%d", mc.ID, mc.Port)
+}
+
+// buildProxyRequest constructs the upstream request that the proxy will send
+// to the managed container. Given the container metadata, the sub-path from
+// the route, and the original incoming request, it returns a new request with:
+//   - URL = http://teamagentica-mc-{id}:{port}/ws/{id}{path}
+//   - Host = original request Host (preserved for WebSocket Origin checks)
+func buildProxyRequest(mc *models.ManagedContainer, path string, incoming *http.Request) *http.Request {
+	targetURL := containerTargetURL(mc)
+	fullPath := "/ws/" + mc.ID + path
+
+	req := incoming.Clone(incoming.Context())
+	parsed, _ := url.Parse(targetURL)
+	req.URL = parsed
+	req.URL.Path = fullPath
+	req.Host = incoming.Host
+	return req
+}
+
+// testContainerTargetOverride, when non-empty, overrides the container target URL in tests.
+var testContainerTargetOverride string
+
 // ProxyToManagedContainer handles ANY /ws/:container_id/*path — proxies requests
 // through the kernel to the target managed container. Uses httputil.ReverseProxy
 // to support both regular HTTP and WebSocket connections transparently.
@@ -293,19 +319,22 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 		return
 	}
 
-	// Container hostname is deterministic: "teamagentica-mc-{id}" (set in docker.go).
-	target, _ := url.Parse(fmt.Sprintf("http://teamagentica-mc-%s:%d", mc.ID, mc.Port))
+	targetURL := containerTargetURL(&mc)
+	if testContainerTargetOverride != "" {
+		targetURL = testContainerTargetOverride
+	}
+	target, _ := url.Parse(targetURL)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
-	// Rewrite the request path to strip the /ws/:container_id prefix.
-	// Preserve the original Host header so code-server's ensureOrigin check
-	// (Origin == Host) passes for WebSocket upgrades. Without this,
-	// Origin="api.teamagentica.localhost" mismatches Host="teamagentica-mc-xxx:8080" → 403.
+	// Forward the full path (/ws/{id}/...) to the container.
+	// Containers with portpilot (devbox) use PROXY_BASE_PATH to strip the prefix.
+	// Preserve original Host so WebSocket Origin==Host checks pass.
+	fullPath := "/ws/" + containerID + path
 	originalHost := c.Request.Host
 	defaultDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		defaultDirector(req)
-		req.URL.Path = path
+		req.URL.Path = fullPath
 		req.Host = originalHost
 	}
 

@@ -331,6 +331,9 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 	for k, v := range env {
 		envSlice = append(envSlice, k+"="+v)
 	}
+	// Every managed container gets the proxy base path as an env var.
+	// The workspace image's entrypoint decides how to use it.
+	envSlice = append(envSlice, "PROXY_BASE_PATH=/ws/"+mc.ID)
 
 	// Docker-proxy labels for subdomain routing.
 	var labels map[string]string
@@ -349,9 +352,7 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		Labels:   labels,
 	}
 	if cmd := mc.GetCmd(); len(cmd) > 0 {
-		// Append path-based proxy base path so the workspace is accessible
-		// via /ws/{id}/ through the kernel proxy (no subdomain required).
-		cfg.Cmd = append(cmd, "--abs-proxy-base-path=/ws/"+mc.ID)
+		cfg.Cmd = cmd
 	}
 	if mc.DockerUser != "" {
 		cfg.User = mc.DockerUser
