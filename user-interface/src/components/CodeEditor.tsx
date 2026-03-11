@@ -54,7 +54,9 @@ export default function CodeEditor() {
   const [newEnvId, setNewEnvId] = useState("");
   const [newGitRepo, setNewGitRepo] = useState("");
 
+  const [detectedPorts, setDetectedPorts] = useState<Record<string, number[]>>({});
   const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const portPollRef = useRef<ReturnType<typeof setInterval>>();
 
   const fetchAll = useCallback(async () => {
     try {
@@ -79,6 +81,32 @@ export default function CodeEditor() {
     pollRef.current = setInterval(fetchAll, 10000);
     return () => clearInterval(pollRef.current);
   }, [fetchAll]);
+
+  // Poll portpilot for detected ports on open workspace tabs.
+  useEffect(() => {
+    const pollPorts = async () => {
+      const wsTabs = openTabs.filter((t) => t !== LIST_TAB);
+      if (wsTabs.length === 0) return;
+      const results: Record<string, number[]> = {};
+      await Promise.all(
+        wsTabs.map(async (id) => {
+          try {
+            const resp = await fetch(`${API_BASE}/ws/${id}/ports`, { credentials: "include" });
+            if (resp.ok) {
+              const data = await resp.json();
+              results[id] = (data.ports || []).sort((a: number, b: number) => a - b);
+            }
+          } catch {
+            // Container may not be ready yet — ignore.
+          }
+        })
+      );
+      setDetectedPorts((prev) => ({ ...prev, ...results }));
+    };
+    pollPorts();
+    portPollRef.current = setInterval(pollPorts, 3000);
+    return () => clearInterval(portPollRef.current);
+  }, [openTabs]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,6 +177,7 @@ export default function CodeEditor() {
       await apiPost(`${ROUTE}/workspaces`, {
         name: displayName,
         environment_id: envId,
+        volume_name: volumeName,
       });
       setLaunchVolume(null);
       await fetchAll();
@@ -580,13 +609,30 @@ export default function CodeEditor() {
               <div
                 key={tabId}
                 className="ws-content"
-                style={{ display: activeTab === tabId ? "block" : "none" }}
+                style={{ display: activeTab === tabId ? "flex" : "none", flexDirection: "column" }}
               >
+                {(detectedPorts[tabId]?.length ?? 0) > 0 && (
+                  <div className="ws-port-bar">
+                    <span className="ws-port-label">Ports:</span>
+                    {detectedPorts[tabId].map((port) => (
+                      <a
+                        key={port}
+                        href={`${API_BASE}/ws/${tabId}/proxy/${port}/`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ws-port-link"
+                      >
+                        {port}
+                      </a>
+                    ))}
+                  </div>
+                )}
                 <iframe
                   src={iframeSrc(ws)}
                   className="code-editor-iframe"
                   title={`Workspace: ${ws.name}`}
                   allow="clipboard-read; clipboard-write"
+                  style={{ flex: 1 }}
                 />
               </div>
             );
