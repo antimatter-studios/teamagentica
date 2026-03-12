@@ -40,7 +40,9 @@ func main() {
 				"image":        "teamagentica-devbox:latest",
 				"port":         7681,
 				"docker_user":  "",
-				"shared_mounts": []map[string]interface{}{},
+				"shared_mounts": []map[string]interface{}{
+					{"volume_name": "opencode-shared", "target": "/home/coder/.opencode"},
+				},
 				"env_defaults": map[string]string{
 					"DEVBOX_APP":        "opencode",
 					"DEFAULT_WORKSPACE": "/workspace",

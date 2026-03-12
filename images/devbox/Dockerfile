@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     neovim \
     jq \
     unzip \
+    procps \
     tmux \
     supervisor \
     libwebsockets-dev \

@@ -24,7 +24,8 @@ func main() {
 
 	const defaultPort = 8090
 
-	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
+	var sdkClient *pluginsdk.Client
+	sdkClient = pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           pluginID,
 		Host:         hostname,
 		Port:         defaultPort,
@@ -32,21 +33,55 @@ func main() {
 		Version:      "1.0.0",
 		Schema: map[string]interface{}{
 			"config": map[string]pluginsdk.ConfigSchemaField{
+				"CODEX_APPROVAL_MODE": {
+					Type:     "select",
+					Label:    "Approval Mode",
+					Default:  "suggest",
+					Options:  []string{"suggest", "auto-edit", "full-auto"},
+					HelpText: "suggest: asks before everything, auto-edit: auto-approves file changes, full-auto: auto-approves everything",
+					Order:    1,
+				},
 				"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
 			},
-			"workspace": map[string]interface{}{
-				"display_name": "Codex Terminal",
-				"description":  "Web terminal with OpenAI Codex CLI — AI-powered coding assistant",
-				"image":        "teamagentica-devbox:latest",
-				"port":         7681,
-				"docker_user":  "",
-				"shared_mounts": []map[string]interface{}{},
-				"env_defaults": map[string]string{
-					"DEVBOX_APP":        "codex",
-					"DEFAULT_WORKSPACE": "/workspace",
-					"HOME":             "/home/coder",
+		},
+		SchemaFunc: func() map[string]interface{} {
+			// Read current config to merge into workspace env_defaults.
+			approvalMode := "suggest"
+			if cfg, err := sdkClient.FetchConfig(); err == nil {
+				if v, ok := cfg["CODEX_APPROVAL_MODE"]; ok && v != "" {
+					approvalMode = v
+				}
+			}
+
+			return map[string]interface{}{
+				"config": map[string]pluginsdk.ConfigSchemaField{
+					"CODEX_APPROVAL_MODE": {
+						Type:     "select",
+						Label:    "Approval Mode",
+						Default:  "suggest",
+						Options:  []string{"suggest", "auto-edit", "full-auto"},
+						HelpText: "suggest: asks before everything, auto-edit: auto-approves file changes, full-auto: auto-approves everything",
+						Order:    1,
+					},
+					"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
 				},
-			},
+				"workspace": map[string]interface{}{
+					"display_name": "Codex Terminal",
+					"description":  "Web terminal with OpenAI Codex CLI — AI-powered coding assistant",
+					"image":        "teamagentica-devbox:latest",
+					"port":         7681,
+					"docker_user":  "",
+					"shared_mounts": []map[string]interface{}{
+						{"volume_name": "codex-shared", "target": "/home/coder/.codex"},
+					},
+					"env_defaults": map[string]string{
+						"DEVBOX_APP":          "codex",
+						"DEFAULT_WORKSPACE":   "/workspace",
+						"HOME":               "/home/coder",
+						"CODEX_APPROVAL_MODE": approvalMode,
+					},
+				},
+			}
 		},
 	})
 

@@ -24,7 +24,8 @@ func main() {
 
 	const defaultPort = 8090
 
-	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
+	var sdkClient *pluginsdk.Client
+	sdkClient = pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           pluginID,
 		Host:         hostname,
 		Port:         defaultPort,
@@ -32,23 +33,52 @@ func main() {
 		Version:      "1.0.0",
 		Schema: map[string]interface{}{
 			"config": map[string]pluginsdk.ConfigSchemaField{
+				"CLAUDE_SKIP_PERMISSIONS": {
+					Type:     "boolean",
+					Label:    "Bypass Permissions",
+					Default:  "false",
+					HelpText: "Run Claude Code with --dangerously-skip-permissions (auto-approves all tool use)",
+					Order:    1,
+				},
 				"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
 			},
-			"workspace": map[string]interface{}{
-				"display_name": "Claude Terminal",
-				"description":  "Web terminal with Claude Code CLI — AI-powered coding assistant",
-				"image":        "teamagentica-devbox:latest",
-				"port":         7681,
-				"docker_user":  "",
-				"shared_mounts": []map[string]interface{}{
-					{"volume_name": "claude-shared", "target": "/home/coder/.claude"},
+		},
+		SchemaFunc: func() map[string]interface{} {
+			skipPermissions := "false"
+			if cfg, err := sdkClient.FetchConfig(); err == nil {
+				if v, ok := cfg["CLAUDE_SKIP_PERMISSIONS"]; ok && v != "" {
+					skipPermissions = v
+				}
+			}
+
+			return map[string]interface{}{
+				"config": map[string]pluginsdk.ConfigSchemaField{
+					"CLAUDE_SKIP_PERMISSIONS": {
+						Type:     "boolean",
+						Label:    "Bypass Permissions",
+						Default:  "false",
+						HelpText: "Run Claude Code with --dangerously-skip-permissions (auto-approves all tool use)",
+						Order:    1,
+					},
+					"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
 				},
-				"env_defaults": map[string]string{
-					"DEVBOX_APP":        "claude",
-					"DEFAULT_WORKSPACE": "/workspace",
-					"HOME":             "/home/coder",
+				"workspace": map[string]interface{}{
+					"display_name": "Claude Terminal",
+					"description":  "Web terminal with Claude Code CLI — AI-powered coding assistant",
+					"image":        "teamagentica-devbox:latest",
+					"port":         7681,
+					"docker_user":  "",
+					"shared_mounts": []map[string]interface{}{
+						{"volume_name": "claude-shared", "target": "/home/coder/.claude"},
+					},
+					"env_defaults": map[string]string{
+						"DEVBOX_APP":              "claude",
+						"DEFAULT_WORKSPACE":       "/workspace",
+						"HOME":                   "/home/coder",
+						"CLAUDE_SKIP_PERMISSIONS": skipPermissions,
+					},
 				},
-			},
+			}
 		},
 	})
 

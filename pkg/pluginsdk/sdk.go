@@ -40,6 +40,11 @@ type VisibleWhen struct {
 	Value string `json:"value"`
 }
 
+// SchemaFunc is called on each GET /schema request, allowing plugins to return
+// a dynamic schema that reflects current config state. If nil, the static
+// Schema/ConfigSchema/WorkspaceSchema fields are used instead.
+type SchemaFunc func() map[string]interface{}
+
 // Registration holds the plugin's self-description sent to the kernel on boot.
 type Registration struct {
 	ID           string                       `json:"id"`
@@ -52,6 +57,7 @@ type Registration struct {
 	Schema          map[string]interface{}       `json:"schema,omitempty"`
 	ConfigSchema    map[string]ConfigSchemaField `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{}       `json:"workspace_schema,omitempty"`
+	SchemaFunc      SchemaFunc                   `json:"-"`
 }
 
 // EventCallback is the payload delivered by the kernel for subscribed events.
@@ -455,8 +461,15 @@ func (c *Client) startInternalServer() error {
 	mux := http.NewServeMux()
 
 	// Always serve schema.
-	schemaData := c.buildSchemaJSON()
-	if schemaData != nil {
+	if c.registration.SchemaFunc != nil {
+		// Dynamic schema — call function on each request.
+		mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
+			data := c.registration.SchemaFunc()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(data)
+		})
+	} else if schemaData := c.buildSchemaJSON(); schemaData != nil {
+		// Static schema — marshal once.
 		schemaBytes, err := json.Marshal(schemaData)
 		if err != nil {
 			log.Printf("pluginsdk: WARNING: failed to marshal schema: %v", err)
