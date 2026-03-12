@@ -839,7 +839,7 @@ body::after {
 .dash-plugin-ver {
   margin-left: auto;
   font-size: 10px;
-  color: var(--text-muted);
+  color: #fff;
   font-family: var(--font-mono);
 }
 
@@ -1269,8 +1269,9 @@ body::after {
 
 .plugin-version {
   font-size: 11px;
-  color: var(--text-muted);
+  color: #fff;
   letter-spacing: 1px;
+  margin-left: auto;
   flex-shrink: 0;
 }
 
