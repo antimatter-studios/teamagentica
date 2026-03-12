@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE, apiGet, apiPost, apiPatch, apiDelete } from "../api/client";
 
 const ROUTE = "/api/route/infra-workspace-manager";
-
 interface Environment {
   plugin_id: string;
   name: string;
   description: string;
   image: string;
   port: number;
+  icon?: string;
 }
 
 interface Workspace {
@@ -55,6 +55,7 @@ export default function CodeEditor() {
   const [newGitRepo, setNewGitRepo] = useState("");
 
   const [detectedPorts, setDetectedPorts] = useState<Record<string, number[]>>({});
+  const iframeRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const pollRef = useRef<ReturnType<typeof setInterval>>();
   const portPollRef = useRef<ReturnType<typeof setInterval>>();
 
@@ -141,7 +142,25 @@ export default function CodeEditor() {
     }
   };
 
-  const openWorkspace = (ws: Workspace) => {
+  const [startingIds, setStartingIds] = useState<Set<string>>(new Set());
+
+  const openWorkspace = async (ws: Workspace) => {
+    // Lazy-start: if the workspace is stopped, start it first.
+    if (ws.status !== "running" && !startingIds.has(ws.id)) {
+      setStartingIds((prev) => new Set(prev).add(ws.id));
+      try {
+        await apiPost(`${ROUTE}/workspaces/${ws.id}/start`, {});
+        await fetchAll();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Failed to start workspace");
+      } finally {
+        setStartingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(ws.id);
+          return next;
+        });
+      }
+    }
     if (!openTabs.includes(ws.id)) {
       setOpenTabs((tabs) => [...tabs, ws.id]);
     }
@@ -151,9 +170,7 @@ export default function CodeEditor() {
   const closeTab = (tabId: string) => {
     setOpenTabs((tabs) => {
       const next = tabs.filter((t) => t !== tabId);
-      // Ensure at least the list tab remains.
       if (next.length === 0) next.push(LIST_TAB);
-      // If closing the active tab, switch to the nearest neighbor.
       if (activeTab === tabId) {
         const closedIdx = tabs.indexOf(tabId);
         const newActive = next[Math.min(closedIdx, next.length - 1)];
@@ -164,7 +181,6 @@ export default function CodeEditor() {
   };
 
   const iframeSrc = (ws: Workspace) => {
-    // Path-based routing through kernel — auth via session cookie (same-origin).
     return `${API_BASE}/ws/${ws.id}/`;
   };
 
@@ -199,15 +215,19 @@ export default function CodeEditor() {
     return url.replace(/\.git$/, "").replace(/^.*[:/]([^/]+\/[^/]+)$/, "$1");
   };
 
+  // Build volume lookup by name for workspace enrichment.
+  const volMap = new Map(volumes.map((v) => [v.name, v]));
   const orphanVolumes = volumes.filter((v) => !v.has_workspace && !v.is_empty);
-
-  // Build a map of workspace ID → workspace for quick lookup.
   const wsMap = new Map(workspaces.map((ws) => [ws.id, ws]));
+
+  // Find environment name from workspace.
+  const envNameMap = new Map(environments.map((e) => [e.plugin_id, e.name]));
+  const envIconMap = new Map(environments.filter((e) => e.icon).map((e) => [e.plugin_id, e.icon!]));
 
   if (loading) {
     return (
       <div className="code-editor-container">
-        <div className="ws-loading">Loading workspaces…</div>
+        <div className="ws-loading">Loading workspaces...</div>
       </div>
     );
   }
@@ -246,12 +266,11 @@ export default function CodeEditor() {
                     closeTab(tabId);
                   }}
                 >
-                  ×
+                  x
                 </button>
               </div>
             );
           })}
-          {/* Quick-open: show list tab if not already open */}
           {!openTabs.includes(LIST_TAB) && (
             <button
               className="ws-tab ws-tab-add"
@@ -270,7 +289,7 @@ export default function CodeEditor() {
           <div className="ws-error">{error}</div>
         )}
 
-        {/* List panel — visible when list tab is active */}
+        {/* List panel */}
         <div
           className="ws-list-panel"
           style={{ display: activeTab === LIST_TAB ? "flex" : "none" }}
@@ -280,7 +299,7 @@ export default function CodeEditor() {
               className="ws-btn ws-btn-create"
               onClick={() => setShowCreate(!showCreate)}
             >
-              + New
+              + New Workspace
             </button>
           </div>
 
@@ -336,7 +355,7 @@ export default function CodeEditor() {
                     className="ws-btn ws-btn-create"
                     disabled={creating || !newName.trim() || !newEnvId}
                   >
-                    {creating ? "Creating…" : "Create Workspace"}
+                    {creating ? "Creating..." : "Create Workspace"}
                   </button>
                   <button
                     type="button"
@@ -350,8 +369,8 @@ export default function CodeEditor() {
             </div>
           )}
 
-          {/* Workspace list */}
-          <div className="ws-list">
+          {/* Workspace card grid */}
+          <div className="ws-card-grid">
             {workspaces.length === 0 && !showCreate ? (
               <div className="ws-empty">
                 <p>No workspaces yet.</p>
@@ -360,126 +379,151 @@ export default function CodeEditor() {
                 </p>
               </div>
             ) : (
-              workspaces.map((ws) => (
-                <div
-                  key={ws.id}
-                  className={`ws-list-row${openTabs.includes(ws.id) ? " ws-list-row-open" : ""}`}
-                >
+              workspaces.map((ws) => {
+                const vol = volMap.get(ws.volume_name);
+                const tags = vol?.tags?.filter((t) => t !== "git") || [];
+                const gitRemote = vol?.git_remote;
+                const envName = envNameMap.get(ws.environment);
+                const envIcon = envIconMap.get(ws.environment);
+                const isOpen = openTabs.includes(ws.id);
+
+                return (
                   <div
-                    className="ws-list-info"
+                    key={ws.id}
+                    className={`ws-card${isOpen ? " ws-card-open" : ""}`}
                     onClick={() => openWorkspace(ws)}
-                    style={{ cursor: "pointer" }}
                   >
-                    <div className="ws-list-details">
-                      {renamingId === ws.id ? (
-                        <form
-                          className="ws-rename-form"
-                          onSubmit={async (e) => {
-                            e.preventDefault();
-                            if (!renameValue.trim()) return;
-                            setError(null);
-                            try {
-                              await apiPatch(`${ROUTE}/workspaces/${ws.id}`, {
-                                name: renameValue.trim(),
-                              });
-                              setRenamingId(null);
-                              await fetchAll();
-                            } catch (err: unknown) {
-                              setError(
-                                err instanceof Error
-                                  ? err.message
-                                  : "Failed to rename"
-                              );
-                            }
-                          }}
-                        >
-                          <input
-                            type="text"
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            className="ws-input ws-input-rename"
-                            autoFocus
-                            onClick={(e) => e.stopPropagation()}
+                    {/* Environment icon placeholder */}
+                    <div className="ws-card-preview">
+                      <div className="ws-card-no-preview">
+                        {envIcon ? (
+                          <span
+                            className="ws-card-env-icon"
+                            dangerouslySetInnerHTML={{ __html: envIcon }}
                           />
-                          <button
-                            type="submit"
-                            className="ws-btn ws-btn-open ws-btn-sm"
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            className="ws-btn ws-btn-cancel ws-btn-sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRenamingId(null);
+                        ) : (
+                          <span className="ws-card-no-preview-text">{envName || "Workspace"}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Card body */}
+                    <div className="ws-card-body">
+                      <div className="ws-card-info">
+                        {renamingId === ws.id ? (
+                          <form
+                            className="ws-rename-form"
+                            onSubmit={async (e) => {
+                              e.preventDefault();
+                              if (!renameValue.trim()) return;
+                              setError(null);
+                              try {
+                                await apiPatch(`${ROUTE}/workspaces/${ws.id}`, {
+                                  name: renameValue.trim(),
+                                });
+                                setRenamingId(null);
+                                await fetchAll();
+                              } catch (err: unknown) {
+                                setError(
+                                  err instanceof Error ? err.message : "Failed to rename"
+                                );
+                              }
                             }}
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            Cancel
-                          </button>
-                        </form>
-                      ) : (
-                        <>
-                          <span className="ws-list-name">{ws.name}</span>
-                          <span className="ws-list-meta">
-                            /ws/{ws.id}
-                          </span>
-                        </>
-                      )}
+                            <input
+                              type="text"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              className="ws-input ws-input-rename"
+                              autoFocus
+                            />
+                            <button type="submit" className="ws-btn ws-btn-open ws-btn-sm">
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              className="ws-btn ws-btn-cancel ws-btn-sm"
+                              onClick={() => setRenamingId(null)}
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <div className="ws-card-name-row">
+                              <span className="ws-card-name">{ws.name}</span>
+                              {startingIds.has(ws.id) ? (
+                                <span className="ws-card-status ws-card-status-starting">Starting...</span>
+                              ) : ws.status !== "running" ? (
+                                <span className="ws-card-status ws-card-status-stopped">Stopped</span>
+                              ) : null}
+                            </div>
+                            {envName && (
+                              <span className="ws-card-env">{envName}</span>
+                            )}
+                            {gitRemote && (
+                              <span className="ws-card-repo">{shortRepoName(gitRemote)}</span>
+                            )}
+                            {tags.length > 0 && (
+                              <div className="ws-card-tags">
+                                {tags.map((tag) => (
+                                  <span key={tag} className="ws-card-tag">{tag}</span>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="ws-card-actions" onClick={(e) => e.stopPropagation()}>
+                        {confirmDelete === ws.id ? (
+                          <>
+                            <span className="ws-confirm-text">Delete?</span>
+                            <button
+                              className="ws-btn ws-btn-danger ws-btn-sm"
+                              onClick={() => handleDelete(ws.id)}
+                            >
+                              Yes
+                            </button>
+                            <button
+                              className="ws-btn ws-btn-cancel ws-btn-sm"
+                              onClick={() => setConfirmDelete(null)}
+                            >
+                              No
+                            </button>
+                          </>
+                        ) : renamingId === ws.id ? null : (
+                          <>
+                            <button
+                              className="ws-btn ws-btn-open ws-btn-sm"
+                              onClick={() => openWorkspace(ws)}
+                            >
+                              {isOpen ? "View" : "Open"}
+                            </button>
+                            <button
+                              className="ws-btn ws-btn-rename ws-btn-sm"
+                              onClick={() => {
+                                setRenamingId(ws.id);
+                                setRenameValue(ws.name);
+                              }}
+                            >
+                              Rename
+                            </button>
+                            <button
+                              className="ws-btn ws-btn-danger ws-btn-sm"
+                              onClick={() => setConfirmDelete(ws.id)}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <div className="ws-list-actions">
-                    {confirmDelete === ws.id ? (
-                      <>
-                        <span className="ws-confirm-text">Delete?</span>
-                        <button
-                          className="ws-btn ws-btn-danger ws-btn-sm"
-                          onClick={() => handleDelete(ws.id)}
-                        >
-                          Yes
-                        </button>
-                        <button
-                          className="ws-btn ws-btn-cancel ws-btn-sm"
-                          onClick={() => setConfirmDelete(null)}
-                        >
-                          No
-                        </button>
-                      </>
-                    ) : renamingId === ws.id ? null : (
-                      <>
-                        <button
-                          className="ws-btn ws-btn-open ws-btn-sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openWorkspace(ws);
-                          }}
-                        >
-                          {openTabs.includes(ws.id) ? "View" : "Open"}
-                        </button>
-                        <button
-                          className="ws-btn ws-btn-rename ws-btn-sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRenamingId(ws.id);
-                            setRenameValue(ws.name);
-                          }}
-                        >
-                          Rename
-                        </button>
-                        <button
-                          className="ws-btn ws-btn-danger ws-btn-sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setConfirmDelete(ws.id);
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
@@ -524,7 +568,7 @@ export default function CodeEditor() {
                           onClick={() => setConfirmDelete(`vol:${v.name}`)}
                           title="Delete volume"
                         >
-                          ×
+                          x
                         </button>
                       )}
                     </div>
@@ -599,7 +643,7 @@ export default function CodeEditor() {
           )}
         </div>
 
-        {/* Workspace iframes — each open tab gets a persistent iframe */}
+        {/* Workspace iframes */}
         {openTabs
           .filter((t) => t !== LIST_TAB)
           .map((tabId) => {
@@ -628,6 +672,7 @@ export default function CodeEditor() {
                   </div>
                 )}
                 <iframe
+                  ref={(el) => { iframeRefs.current[tabId] = el; }}
                   src={iframeSrc(ws)}
                   className="code-editor-iframe"
                   title={`Workspace: ${ws.name}`}
