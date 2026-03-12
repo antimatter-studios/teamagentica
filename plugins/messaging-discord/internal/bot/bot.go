@@ -13,6 +13,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/msgbuffer"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/kernel"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/relay"
 )
@@ -22,18 +23,16 @@ const maxMessageLength = 2000
 // Bot manages the Discord bot session.
 type Bot struct {
 	session      *discordgo.Session
-	kernelClient *kernel.Client
+	kernelClient *kernel.Client // used for image/video tool calls only
 	relayClient  *relay.Client
 	botUserID    string
 	aliases      *alias.AliasMap
-	defaultAgent atomic.Pointer[string]
 	debug        atomic.Bool
 	sdk          *pluginsdk.Client
-	msgBuffer    *MessageBuffer
+	msgBuffer    *msgbuffer.Buffer
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
-// The default agent must be set via the plugin config UI (config:update event).
 func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*Bot, error) {
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
@@ -54,7 +53,7 @@ func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*B
 		aliases:      aliases,
 	}
 
-	b.msgBuffer = NewMessageBuffer(1*time.Second, func(channelID string, text string, mediaURLs []string) {
+	b.msgBuffer = msgbuffer.New(1*time.Second, func(channelID string, text string, mediaURLs []string) {
 		b.processBuffered(channelID, text, mediaURLs)
 	})
 
@@ -67,7 +66,7 @@ func (b *Bot) SetMessageBufferMS(ms int) {
 		ms = 0
 	}
 	b.msgBuffer.SetDuration(time.Duration(ms) * time.Millisecond)
-	log.Printf("Message buffer duration updated: %dms", ms)
+	log.Printf("Message buffer duration: %dms", ms)
 }
 
 // SetSDK attaches the plugin SDK client for event reporting.
@@ -93,19 +92,6 @@ func (b *Bot) emitEvent(eventType, detail string) {
 	}
 }
 
-// SetDefaultAgent atomically updates the coordinator agent plugin ID.
-func (b *Bot) SetDefaultAgent(agent string) {
-	b.defaultAgent.Store(&agent)
-	log.Printf("Coordinator agent updated: %s", agent)
-}
-
-// getDefaultAgent atomically reads the coordinator agent plugin ID.
-func (b *Bot) getDefaultAgent() string {
-	if p := b.defaultAgent.Load(); p != nil {
-		return *p
-	}
-	return ""
-}
 
 // Start opens the Discord connection and begins listening for messages.
 func (b *Bot) Start() error {
@@ -275,102 +261,10 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 		return
 	}
 
-	// Fallback: direct kernel routing (no relay available).
-	b.processBufferedDirect(channelID, text, mediaURLs)
-}
-
-// processBufferedDirect is the legacy routing path when no relay is configured.
-func (b *Bot) processBufferedDirect(channelID string, text string, mediaURLs []string) {
-	s := b.session
-
-	// Check for direct @mention routing.
-	if !b.aliases.IsEmpty() {
-		result := b.aliases.Parse(text)
-		if result.Target != nil && result.Target.Type == alias.TargetAgent {
-			if result.Remainder == "" {
-				s.ChannelMessageSend(channelID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
-				return
-			}
-			b.emitEvent("alias_route", fmt.Sprintf("@%s → %s", result.Alias, result.Target.PluginID))
-			response, err := b.kernelClient.ChatWithAgentDirect(
-				result.Target.PluginID, result.Target.Model, result.Remainder, mediaURLs, false, result.Alias)
-			if err != nil {
-				log.Printf("Alias route error (@%s): %v", result.Alias, err)
-				b.emitEvent("alias_error", fmt.Sprintf("@%s: %v", result.Alias, err))
-				s.ChannelMessageSend(channelID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
-				return
-			}
-			if b.debug.Load() {
-				b.emitEvent("agent_response", fmt.Sprintf("from @%s: %s", result.Alias, truncate(response, 200)))
-			} else {
-				b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", result.Alias, len(response)))
-			}
-			b.sendResponse(s, channelID, formatAttributedResponse(result.Alias, response))
-			return
-		}
-	}
-
-	// Route to coordinator agent.
-	coordinator := b.resolveDefaultAgent()
-	if coordinator == nil {
-		log.Printf("No coordinator agent configured — rejecting buffered message")
-		b.emitEvent("error", "no coordinator agent configured")
-		s.ChannelMessageSend(channelID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
-		return
-	}
-
-	response, err := b.kernelClient.ChatWithAgentDirect(coordinator.PluginID, coordinator.Model, text, mediaURLs, true, "")
-	if err != nil {
-		log.Printf("Error calling kernel: %v", err)
-		b.emitEvent("error", fmt.Sprintf("agent error: %v", err))
-		s.ChannelMessageSend(channelID, "Sorry, I encountered an error processing your message.")
-		return
-	}
-
-	if b.debug.Load() {
-		b.emitEvent("agent_response", fmt.Sprintf("response: %s", truncate(response, 200)))
-	} else {
-		b.emitEvent("agent_response", fmt.Sprintf("response length=%d chars", len(response)))
-	}
-
-	// Check if coordinator delegated to another alias.
-	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
-		if target := b.aliases.Resolve(delegatedAlias); target != nil {
-			b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
-			switch target.Type {
-			case alias.TargetAgent:
-				delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
-					target.PluginID, target.Model, delegatedMsg, nil, false, delegatedAlias)
-				if delegErr != nil {
-					response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
-				} else {
-					response = formatAttributedResponse(delegatedAlias, delegatedResp)
-				}
-			case alias.TargetImage:
-				b.handleImageGenerate(s, channelID, "", stripToolPrefix(target.PluginID), delegatedMsg)
-				return
-			case alias.TargetVideo:
-				b.handleVideoGenerate(s, channelID, "", stripToolPrefix(target.PluginID), delegatedMsg)
-				return
-			}
-		}
-	}
-
-	// Attribute the response to the coordinator's alias (or plugin ID).
-	if coordinator != nil && !strings.HasPrefix(response, "[@") {
-		responderName := b.aliases.FindAliasByPluginID(coordinator.PluginID)
-		if responderName == "" {
-			responderName = coordinator.PluginID
-		}
-		response = formatAttributedResponse(responderName, response)
-	}
-
-	if err := b.sendResponse(s, channelID, response); err != nil {
-		log.Printf("Error sending response: %v", err)
-		b.emitEvent("error", fmt.Sprintf("send error: %v", err))
-	} else {
-		b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(response)))
-	}
+	// No relay configured — cannot route.
+	log.Printf("No relay client configured — cannot route message")
+	b.emitEvent("error", "no relay client configured")
+	s.ChannelMessageSend(channelID, "Message routing is not available. The agent relay is not configured.")
 }
 
 // isBotMentioned checks whether the bot was mentioned in the message.
@@ -394,26 +288,6 @@ func (b *Bot) stripBotMention(content string) string {
 	return content
 }
 
-// resolvedAgent holds the plugin ID and optional model for a resolved coordinator.
-type resolvedAgent struct {
-	PluginID string
-	Model    string
-}
-
-// resolveDefaultAgent returns the configured coordinator agent.
-// Returns nil if no default agent is set — callers must treat this as an error.
-// The DEFAULT_AGENT config stores an alias name, so we resolve it via the alias map.
-func (b *Bot) resolveDefaultAgent() *resolvedAgent {
-	da := b.getDefaultAgent()
-	if da == "" {
-		return nil
-	}
-	if target := b.aliases.Resolve(da); target != nil {
-		return &resolvedAgent{PluginID: target.PluginID, Model: target.Model}
-	}
-	return &resolvedAgent{PluginID: da}
-}
-
 // formatAttributedResponse prefixes a response with the responder's name
 // so users can see who authored the message.
 func formatAttributedResponse(name, response string) string {
@@ -432,6 +306,8 @@ func truncate(s string, maxLen int) string {
 }
 
 // sendResponse sends a message to the channel, splitting into chunks if over 2000 chars.
+// Retries once on failure — the relay round-trip can take long enough for idle connections
+// to be reset by network proxies, but a fresh connection succeeds immediately.
 func (b *Bot) sendResponse(s *discordgo.Session, channelID, response string) error {
 	if len(response) == 0 {
 		response = "(empty response)"
@@ -440,7 +316,11 @@ func (b *Bot) sendResponse(s *discordgo.Session, channelID, response string) err
 	chunks := splitMessage(response, maxMessageLength)
 	for _, chunk := range chunks {
 		if _, err := s.ChannelMessageSend(channelID, chunk); err != nil {
-			return fmt.Errorf("sending message chunk: %w", err)
+			// Retry once — idle connection may have been reset during the relay call.
+			time.Sleep(500 * time.Millisecond)
+			if _, err2 := s.ChannelMessageSend(channelID, chunk); err2 != nil {
+				return fmt.Errorf("sending message chunk: %w (retry: %v)", err, err2)
+			}
 		}
 	}
 	return nil

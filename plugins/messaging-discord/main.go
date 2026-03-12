@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,10 +41,10 @@ func main() {
 		Host:         hostname,
 		Port:         httpPort,
 		Capabilities: []string{"messaging:discord", "messaging:send", "messaging:receive"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"DISCORD_BOT_TOKEN": {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Discord bot token from developer portal", Order: 1},
-			"DEFAULT_AGENT":     {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator", Order: 5},
+			"COORDINATOR_ALIAS": {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "The @alias that manages conversations — routes unaddressed messages and delegates to other agents", Order: 5},
 			"MESSAGE_BUFFER_MS": {Type: "number", Label: "Message Buffer (ms)", Default: "1000", HelpText: "Debounce window for consolidating sequential messages (e.g. forwarded image + text). Set to 0 to disable.", Order: 6},
 			"PLUGIN_DEBUG":      {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
 		},
@@ -94,11 +95,13 @@ func main() {
 
 	discordBot.SetSDK(sdkClient)
 	discordBot.SetRelayClient(relay.NewClient(sdkClient, pluginID))
+
+	// Set coordinator on relay if configured.
+	if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
+		setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+	}
 	if debug {
 		discordBot.SetDebug(true)
-	}
-	if agent := pluginConfig["DEFAULT_AGENT"]; agent != "" {
-		discordBot.SetDefaultAgent(agent)
 	}
 	if v := pluginConfig["MESSAGE_BUFFER_MS"]; v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {
@@ -128,9 +131,6 @@ func main() {
 			log.Printf("Failed to parse config:update detail: %v", err)
 			return
 		}
-		if agent, ok := detail.Config["DEFAULT_AGENT"]; ok {
-			discordBot.SetDefaultAgent(agent)
-		}
 		if d, ok := detail.Config["PLUGIN_DEBUG"]; ok {
 			discordBot.SetDebug(d == "true" || d == "1")
 		}
@@ -138,6 +138,9 @@ func main() {
 			if ms, err := strconv.Atoi(v); err == nil {
 				discordBot.SetMessageBufferMS(ms)
 			}
+		}
+		if v, ok := detail.Config["COORDINATOR_ALIAS"]; ok {
+			setCoordinatorOnRelay(sdkClient, pluginID, v)
 		}
 	}))
 
@@ -149,18 +152,11 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /config/options/{field}", func(w http.ResponseWriter, r *http.Request) {
-		field := r.PathValue("field")
 		w.Header().Set("Content-Type", "application/json")
-		if field == "DEFAULT_AGENT" {
-			entries := aliases.List()
-			var names []string
-			for _, e := range entries {
-				if e.Target.Type == alias.TargetAgent {
-					names = append(names, e.Alias)
-				}
-			}
-			data, _ := json.Marshal(map[string]interface{}{"options": names})
-			w.Write(data)
+		field := r.PathValue("field")
+		if field == "COORDINATOR_ALIAS" {
+			agentAliases := aliases.ListAgentAliases()
+			json.NewEncoder(w).Encode(map[string][]string{"options": agentAliases})
 			return
 		}
 		w.Write([]byte(`{"options":[]}`))
@@ -201,4 +197,18 @@ func main() {
 	server.Shutdown(shutdownCtx)
 
 	log.Println("Discord plugin shut down")
+}
+
+// setCoordinatorOnRelay tells the relay which alias should coordinate conversations for this plugin.
+func setCoordinatorOnRelay(sdk *pluginsdk.Client, sourcePlugin, aliasName string) {
+	payload, _ := json.Marshal(map[string]string{
+		"source_plugin": sourcePlugin,
+		"alias":         aliasName,
+	})
+	_, err := sdk.RouteToPlugin(context.Background(), "infra-agent-relay", "POST", "/config/coordinator", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("Failed to set coordinator on relay: %v", err)
+		return
+	}
+	log.Printf("Coordinator set on relay: %s → @%s", sourcePlugin, aliasName)
 }

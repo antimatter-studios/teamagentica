@@ -17,26 +17,6 @@ type Client struct {
 	httpClient   *http.Client
 }
 
-// chatRequest is the request body for the routed chat endpoint.
-type chatRequest struct {
-	Message       string            `json:"message"`
-	Model         string            `json:"model,omitempty"`
-	ImageURLs     []string          `json:"image_urls,omitempty"`
-	Conversation  []conversationMsg `json:"conversation"`
-	IsCoordinator bool              `json:"is_coordinator,omitempty"`
-	AgentAlias    string            `json:"agent_alias,omitempty"`
-}
-
-type conversationMsg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// chatResponse is the response body from the chat endpoint.
-type chatResponse struct {
-	Response string `json:"response"`
-}
-
 // NewClient creates a new kernel API client.
 // If tlsConfig is non-nil, the client uses it for mTLS connections.
 func NewClient(baseURL, serviceToken string, tlsConfig *tls.Config) *Client {
@@ -283,58 +263,3 @@ func (c *Client) findPluginByCapability(capability string) (string, error) {
 	return "", fmt.Errorf("no plugin found with capability %s", capability)
 }
 
-// ChatWithAgentDirect routes a message to a specific plugin.
-// Pass isCoordinator=true for coordinator calls, and agentAlias for the target agent's alias.
-func (c *Client) ChatWithAgentDirect(pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
-	return c.chatWithPlugin(pluginID, model, message, imageURLs, isCoordinator, agentAlias)
-}
-
-// chatWithPlugin is the shared HTTP logic for routing a chat message to a plugin.
-func (c *Client) chatWithPlugin(pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
-	conv := []conversationMsg{{Role: "user", Content: message}}
-
-	reqBody := chatRequest{
-		Message:       message,
-		Model:         model,
-		ImageURLs:     imageURLs,
-		Conversation:  conv,
-		IsCoordinator: isCoordinator,
-		AgentAlias:    agentAlias,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshalling request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/api/route/%s/chat", c.baseURL, pluginID)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.serviceToken)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("sending request to kernel: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp chatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("unmarshalling response: %w", err)
-	}
-
-	return chatResp.Response, nil
-}
