@@ -32,7 +32,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"ai:chat", "ai:chat:requesty"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"REQUESTY_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://app.requesty.ai", Order: 1},
 			"REQUESTY_MODEL":  {Type: "select", Label: "Model", Default: "google/gemini-2.5-flash", Dynamic: true, Order: 2},

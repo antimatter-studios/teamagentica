@@ -38,7 +38,7 @@ func main() {
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: []string{"tunnel:ngrok"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"NGROK_AUTHTOKEN":     {Type: "string", Label: "ngrok Auth Token", Required: true, Secret: true, HelpText: "Your ngrok authentication token from https://dashboard.ngrok.com"},
 			"NGROK_DOMAIN":        {Type: "string", Label: "Custom Domain", HelpText: "Optional static ngrok domain (e.g. my-app.ngrok-free.app). Leave empty for a random URL."},

@@ -39,7 +39,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"storage:block", "storage:api"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"STORAGE_DATA_PATH":    {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Local filesystem path for volume storage", Order: 1},
 			"STORAGE_VOLUMES_PATH": {Type: "string", Label: "Volumes Path", Default: "/data/volumes", HelpText: "Path for namespace-isolated block storage volumes", Order: 2},

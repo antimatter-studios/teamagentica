@@ -35,7 +35,7 @@ func main() {
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: []string{"system:infra-cost-explorer"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"PLUGIN_PORT":      {Type: "number", Label: "Listen Port", Default: "8090", HelpText: "Port the cost explorer listens on"},
 			"PLUGIN_DATA_PATH": {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Path for the database file"},

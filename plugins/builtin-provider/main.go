@@ -40,7 +40,7 @@ func main() {
 		Host:         hostname,
 		Port:         portInt,
 		Capabilities: []string{"marketplace:provider"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 	})
 
 	sdkClient.Start(context.Background())

@@ -30,7 +30,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"tool:image", "tool:image:nanobanana"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"GEMINI_API_KEY":   {Type: "string", Label: "Gemini API Key", Required: true, Secret: true, HelpText: "Get your API key at https://aistudio.google.com/apikey", Order: 1},
 			"NANOBANANA_MODEL": {Type: "select", Label: "Model", Default: "gemini-2.5-flash-image", Dynamic: true, Order: 2},

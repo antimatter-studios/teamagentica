@@ -32,7 +32,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"ai:chat", "ai:chat:kimi"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"KIMI_API_KEY":   {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.moonshot.ai", Order: 1},
 			"KIMI_MODEL":     {Type: "select", Label: "Model", Default: "kimi-k2-turbo-preview", Dynamic: true, Order: 2},

@@ -32,7 +32,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"ai:chat", "ai:chat:openrouter"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"OPENROUTER_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://openrouter.ai/keys", Order: 1},
 			"OPENROUTER_MODEL":  {Type: "select", Label: "Model", Default: "google/gemini-2.5-flash", Dynamic: true, Order: 2},

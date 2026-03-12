@@ -37,7 +37,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         port,
 		Capabilities: []string{"ai:chat", "ai:chat:gemini"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"GEMINI_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://aistudio.google.com/apikey", Order: 1},
 			"GEMINI_MODEL":   {Type: "select", Label: "Model", Default: "gemini-2.5-flash", Dynamic: true, Order: 2},

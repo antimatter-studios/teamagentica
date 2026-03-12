@@ -30,7 +30,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"tool:video", "tool:video:seedance"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"SEEDANCE_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key from seedanceapi.org dashboard", Order: 1},
 			"SEEDANCE_MODEL":   {Type: "select", Label: "Model", Default: "seedance-2.0", Dynamic: true, Order: 2},

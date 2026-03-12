@@ -54,7 +54,7 @@ func main() {
 		Host:         hostname,
 		Port:         httpPort,
 		Capabilities: []string{"system:chat"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"DEFAULT_AGENT": {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator. Leave empty to require manual agent selection.", Order: 1},
 			"PLUGIN_DEBUG":  {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},

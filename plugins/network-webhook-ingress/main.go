@@ -51,7 +51,7 @@ func main() {
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: []string{"webhook:ingress", "webhook:routing"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"WEBHOOK_INGRESS_PORT": {Type: "number", Label: "Listen Port", Default: "9000", HelpText: "Port the ingress listens on for external webhook traffic"},
 		},

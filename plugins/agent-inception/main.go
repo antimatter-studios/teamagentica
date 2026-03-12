@@ -32,7 +32,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"ai:chat", "ai:chat:inception"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"INCEPTION_API_KEY":   {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.inceptionlabs.ai/", Order: 1},
 			"INCEPTION_MODEL":    {Type: "select", Label: "Model", Default: "mercury-2", Dynamic: true, Order: 2},

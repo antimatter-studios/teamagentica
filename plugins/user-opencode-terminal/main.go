@@ -29,7 +29,7 @@ func main() {
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: []string{"workspace:environment"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		Schema: map[string]interface{}{
 			"config": map[string]pluginsdk.ConfigSchemaField{
 				"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},

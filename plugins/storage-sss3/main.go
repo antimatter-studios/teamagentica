@@ -44,7 +44,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: []string{"storage:api", "storage:object", "tool:storage"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"S3_ENDPOINT":      {Type: "string", Label: "S3 Endpoint", Required: true, Default: "http://sss3:9000", HelpText: "S3-compatible endpoint URL", Order: 1},
 			"S3_BUCKET":        {Type: "string", Label: "Bucket Name", Required: true, Default: "teamagentica", HelpText: "S3 bucket name for storage", Order: 2},

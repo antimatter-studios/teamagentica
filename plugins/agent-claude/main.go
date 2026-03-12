@@ -39,7 +39,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         port,
 		Capabilities: []string{"ai:chat", "ai:chat:anthropic"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"CLAUDE_BACKEND":     {Type: "select", Label: "Backend", Default: "cli", Options: []string{"cli", "api_key"}, HelpText: "Choose how to interact with Claude", Order: 1},
 			"ANTHROPIC_API_KEY":  {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://console.anthropic.com/settings/keys", VisibleWhen: &pluginsdk.VisibleWhen{Field: "CLAUDE_BACKEND", Value: "api_key"}, Order: 2},

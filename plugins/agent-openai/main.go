@@ -39,7 +39,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         port,
 		Capabilities: []string{"ai:chat", "ai:chat:openai"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"OPENAI_BACKEND": {Type: "select", Label: "Backend", Default: "subscription", Options: []string{"subscription", "api_key"}, HelpText: "Choose how to authenticate with OpenAI", Order: 1},
 			"OPENAI_AUTH":    {Type: "oauth", Label: "Login with OpenAI", HelpText: "Authenticate with your OpenAI account to use Codex models", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "subscription"}, Order: 2},

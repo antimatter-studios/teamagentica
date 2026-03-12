@@ -39,7 +39,7 @@ func main() {
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: []string{"mcp:server"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"MCP_SERVER_PORT": {Type: "number", Label: "Listen Port", Default: "8081", HelpText: "Port the MCP server listens on"},
 			"PLUGIN_DEBUG":    {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed MCP protocol traffic", Order: 99},

@@ -38,7 +38,7 @@ func main() {
 		Host:         hostname,
 		Port:         httpPort,
 		Capabilities: []string{"messaging:whatsapp"},
-		Version:      "1.0.0",
+		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"WHATSAPP_ACCESS_TOKEN":    {Type: "string", Label: "Access Token", Required: true, Secret: true, HelpText: "Permanent access token from Meta developer portal", Order: 1},
 			"WHATSAPP_PHONE_NUMBER_ID": {Type: "string", Label: "Phone Number ID", Required: true, HelpText: "WhatsApp Business phone number ID from Meta developer portal", Order: 2},
