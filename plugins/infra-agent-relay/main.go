@@ -1,189 +1,335 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/bridge"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/router"
 	"github.com/gin-gonic/gin"
 )
 
-// workspaceConn tracks a bridge connection to an agent-driven workspace.
-type workspaceConn struct {
-	WorkspaceID string
-	Client      *bridge.Client
-}
-
-// relay manages connections to agent-bridge instances across workspaces.
+// relay is the central message routing service.
+// Messaging plugins send messages here; the relay routes to the correct
+// destination: an LLM agent plugin (via kernel) or a workspace bridge (via TCP).
 type relay struct {
-	mu    sync.RWMutex
-	conns map[string]*workspaceConn // workspaceID → connection
-	sdk   *pluginsdk.Client
+	mu     sync.RWMutex
+	conns  map[string]*bridge.Client // workspaceID → TCP connection
+	routes *router.Table
+	sdk    *pluginsdk.Client
 }
 
 func newRelay(sdk *pluginsdk.Client) *relay {
 	return &relay{
-		conns: make(map[string]*workspaceConn),
-		sdk:   sdk,
+		conns:  make(map[string]*bridge.Client),
+		routes: router.NewTable(),
+		sdk:    sdk,
 	}
 }
 
-// getOrConnect returns an existing connection or establishes a new one.
+// --- Chat endpoint: the main entry point for all messaging plugins ---
+
+// relayRequest is the envelope from messaging plugins.
+type relayRequest struct {
+	SourcePlugin string   `json:"source_plugin"`       // e.g. "messaging-discord"
+	ChannelID    string   `json:"channel_id"`           // channel/group/chat ID
+	Message      string   `json:"message"`              // user's message text
+	ImageURLs    []string `json:"image_urls,omitempty"` // attached media
+}
+
+// relayResponse is returned to messaging plugins.
+type relayResponse struct {
+	Response  string `json:"response"`            // the response text/content
+	Responder string `json:"responder,omitempty"` // alias or plugin ID that responded
+}
+
+// handleChat is the single entry point for all messages from messaging plugins.
+func (r *relay) handleChat(c *gin.Context) {
+	var req relayRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.SourcePlugin == "" || req.ChannelID == "" || req.Message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source_plugin, channel_id, and message required"})
+		return
+	}
+
+	// 1. Check if this channel is mapped to a workspace bridge.
+	if ws := r.routes.GetWorkspace(req.SourcePlugin, req.ChannelID); ws != nil {
+		r.routeToWorkspace(c, ws, req)
+		return
+	}
+
+	// 2. Check for @alias prefix in message.
+	aliases := r.routes.Aliases()
+	if aliases != nil && !aliases.IsEmpty() {
+		result := aliases.Parse(req.Message)
+		if result.Target != nil && result.Target.Type == alias.TargetAgent {
+			if result.Remainder == "" {
+				c.JSON(http.StatusOK, relayResponse{
+					Response:  fmt.Sprintf("Usage: @%s <message>", result.Alias),
+					Responder: result.Alias,
+				})
+				return
+			}
+			r.routeToAgent(c, result.Target.PluginID, result.Target.Model,
+				result.Remainder, req.ImageURLs, false, result.Alias)
+			return
+		}
+	}
+
+	// 3. Route to coordinator agent for this source plugin.
+	coordinator := r.routes.GetCoordinator(req.SourcePlugin)
+	if coordinator == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no coordinator configured for " + req.SourcePlugin})
+		return
+	}
+
+	response, err := r.callAgent(coordinator.PluginID, coordinator.Model,
+		req.Message, req.ImageURLs, true, "")
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("coordinator: %v", err)})
+		return
+	}
+
+	// 4. Check if coordinator delegated via ROUTE:@alias.
+	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
+		if aliases != nil {
+			if target := aliases.Resolve(delegatedAlias); target != nil && target.Type == alias.TargetAgent {
+				delegatedResp, err := r.callAgent(target.PluginID, target.Model,
+					delegatedMsg, nil, false, delegatedAlias)
+				if err != nil {
+					c.JSON(http.StatusOK, relayResponse{
+						Response:  fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, err),
+						Responder: delegatedAlias,
+					})
+					return
+				}
+				c.JSON(http.StatusOK, relayResponse{
+					Response:  delegatedResp,
+					Responder: delegatedAlias,
+				})
+				return
+			}
+		}
+	}
+
+	// Return coordinator's direct response.
+	responderName := ""
+	if aliases != nil {
+		responderName = aliases.FindAliasByPluginID(coordinator.PluginID)
+	}
+	if responderName == "" {
+		responderName = coordinator.PluginID
+	}
+
+	c.JSON(http.StatusOK, relayResponse{
+		Response:  response,
+		Responder: responderName,
+	})
+}
+
+// routeToWorkspace forwards a message to a workspace bridge via TCP.
+func (r *relay) routeToWorkspace(c *gin.Context, ws *router.WorkspaceRoute, req relayRequest) {
+	client, err := r.getOrConnect(ws.WorkspaceID, ws.BridgeAddr)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("connect: %v", err)})
+		return
+	}
+
+	_, err = client.SendPrompt(req.Message)
+	if err != nil {
+		r.disconnect(ws.WorkspaceID)
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("send: %v", err)})
+		return
+	}
+
+	response, err := client.ReadResponse()
+	if err != nil {
+		r.disconnect(ws.WorkspaceID)
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("response: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, relayResponse{
+		Response:  response,
+		Responder: "workspace:" + ws.WorkspaceID,
+	})
+}
+
+// routeToAgent forwards a message to an agent plugin and returns the response.
+func (r *relay) routeToAgent(c *gin.Context, pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) {
+	response, err := r.callAgent(pluginID, model, message, imageURLs, isCoordinator, agentAlias)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("agent: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, relayResponse{
+		Response:  response,
+		Responder: agentAlias,
+	})
+}
+
+// agentChatRequest is the standard chat format used by all agent plugins.
+type agentChatRequest struct {
+	Message       string             `json:"message"`
+	Model         string             `json:"model,omitempty"`
+	ImageURLs     []string           `json:"image_urls,omitempty"`
+	Conversation  []conversationMsg  `json:"conversation"`
+	IsCoordinator bool               `json:"is_coordinator,omitempty"`
+	AgentAlias    string             `json:"agent_alias,omitempty"`
+}
+
+type conversationMsg struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type agentChatResponse struct {
+	Response string `json:"response"`
+}
+
+// callAgent sends a chat request to an agent plugin via the kernel route.
+func (r *relay) callAgent(pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
+	reqBody := agentChatRequest{
+		Message:       message,
+		Model:         model,
+		ImageURLs:     imageURLs,
+		Conversation:  []conversationMsg{{Role: "user", Content: message}},
+		IsCoordinator: isCoordinator,
+		AgentAlias:    agentAlias,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal: %w", err)
+	}
+
+	respBody, err := r.sdk.RouteToPlugin(context.Background(), pluginID, "POST", "/chat", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+
+	var chatResp agentChatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	return chatResp.Response, nil
+}
+
+// --- Workspace connection management ---
+
 func (r *relay) getOrConnect(workspaceID, bridgeAddr string) (*bridge.Client, error) {
 	r.mu.RLock()
-	if wc, ok := r.conns[workspaceID]; ok {
+	if client, ok := r.conns[workspaceID]; ok {
 		r.mu.RUnlock()
-		return wc.Client, nil
+		return client, nil
 	}
 	r.mu.RUnlock()
 
-	// Connect to agent-bridge.
 	client := bridge.NewClient(bridgeAddr)
 	if err := client.Connect(); err != nil {
 		return nil, err
 	}
 
 	r.mu.Lock()
-	r.conns[workspaceID] = &workspaceConn{
-		WorkspaceID: workspaceID,
-		Client:      client,
-	}
+	r.conns[workspaceID] = client
 	r.mu.Unlock()
 
 	return client, nil
 }
 
-// disconnect closes and removes a workspace connection.
 func (r *relay) disconnect(workspaceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if wc, ok := r.conns[workspaceID]; ok {
-		wc.Client.Close()
+	if client, ok := r.conns[workspaceID]; ok {
+		client.Close()
 		delete(r.conns, workspaceID)
 	}
 }
 
-// chatRequest is the incoming message format from messaging plugins.
-type chatRequest struct {
-	Message     string `json:"message"`
-	WorkspaceID string `json:"workspace_id"`
-	BridgeAddr  string `json:"bridge_addr"` // host:port of agent-bridge in the container
-}
+// --- Config & routing management endpoints ---
 
-// chatResponse is the response sent back to messaging plugins.
-type chatResponse struct {
-	Response string `json:"response"`
-}
-
-// handleChat receives a message, forwards it to agent-bridge, waits for
-// the response, and returns it.
-func (r *relay) handleChat(c *gin.Context) {
-	var req chatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if req.WorkspaceID == "" || req.BridgeAddr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace_id and bridge_addr required"})
-		return
-	}
-
-	client, err := r.getOrConnect(req.WorkspaceID, req.BridgeAddr)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("connect: %v", err)})
-		return
-	}
-
-	// Send prompt.
-	_, err = client.SendPrompt(req.Message)
-	if err != nil {
-		r.disconnect(req.WorkspaceID)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("send: %v", err)})
-		return
-	}
-
-	// Wait for response.
-	response, err := client.ReadResponse()
-	if err != nil {
-		r.disconnect(req.WorkspaceID)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("response: %v", err)})
-		return
-	}
-
-	c.JSON(http.StatusOK, chatResponse{Response: response})
-}
-
-// handleCommand sends a slash command to agent-bridge.
-func (r *relay) handleCommand(c *gin.Context) {
+// handleSetCoordinator sets the coordinator agent for a source plugin.
+func (r *relay) handleSetCoordinator(c *gin.Context) {
 	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		BridgeAddr  string `json:"bridge_addr"`
-		Command     string `json:"command"` // e.g. "/reset" or "/session ws-123-456"
+		SourcePlugin string `json:"source_plugin"`
+		PluginID     string `json:"plugin_id"`
+		Model        string `json:"model,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	client, err := r.getOrConnect(req.WorkspaceID, req.BridgeAddr)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("connect: %v", err)})
-		return
-	}
-
-	_, err = client.SendCommand(req.Command)
-	if err != nil {
-		r.disconnect(req.WorkspaceID)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("send: %v", err)})
-		return
-	}
-
-	response, err := client.ReadResponse()
-	if err != nil {
-		r.disconnect(req.WorkspaceID)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("response: %v", err)})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"response": response})
+	r.routes.SetCoordinator(req.SourcePlugin, req.PluginID, req.Model)
+	log.Printf("coordinator set: %s → %s (model=%s)", req.SourcePlugin, req.PluginID, req.Model)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// handleStatus returns the status of all active workspace connections.
+// handleMapWorkspace maps a channel to a workspace bridge.
+func (r *relay) handleMapWorkspace(c *gin.Context) {
+	var req struct {
+		SourcePlugin string `json:"source_plugin"`
+		ChannelID    string `json:"channel_id"`
+		WorkspaceID  string `json:"workspace_id"`
+		BridgeAddr   string `json:"bridge_addr"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	r.routes.MapWorkspace(req.SourcePlugin, req.ChannelID, req.WorkspaceID, req.BridgeAddr)
+	log.Printf("workspace mapped: %s/%s → %s at %s", req.SourcePlugin, req.ChannelID, req.WorkspaceID, req.BridgeAddr)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// handleUnmapWorkspace removes a channel→workspace mapping.
+func (r *relay) handleUnmapWorkspace(c *gin.Context) {
+	var req struct {
+		SourcePlugin string `json:"source_plugin"`
+		ChannelID    string `json:"channel_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	r.routes.UnmapWorkspace(req.SourcePlugin, req.ChannelID)
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// handleStatus returns the relay's routing state.
 func (r *relay) handleStatus(c *gin.Context) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	workspaces := make([]string, 0, len(r.conns))
 	for id := range r.conns {
 		workspaces = append(workspaces, id)
 	}
+	r.mu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
-		"active_connections": len(r.conns),
+		"active_connections": len(workspaces),
 		"workspaces":         workspaces,
+		"coordinators":       r.routes.ListCoordinators(),
+		"workspace_mappings": r.routes.ListWorkspaces(),
 	})
-}
-
-// handleDisconnect closes a workspace connection.
-func (r *relay) handleDisconnect(c *gin.Context) {
-	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	r.disconnect(req.WorkspaceID)
-	c.JSON(http.StatusOK, gin.H{"status": "disconnected"})
 }
 
 func main() {
@@ -204,32 +350,53 @@ func main() {
 		Version:      "0.1.0",
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{},
 	})
-	sdkClient.Start(context.Background())
-
 	r := newRelay(sdkClient)
 
-	router := gin.Default()
+	// Subscribe to alias updates from kernel (before Start).
+	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Aliases []alias.AliasInfo `json:"aliases"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("alias update parse error: %v", err)
+			return
+		}
+		r.routes.SetAliases(alias.NewAliasMap(detail.Aliases))
+		log.Printf("Aliases updated: %d entries", len(detail.Aliases))
+	}))
+
+	sdkClient.Start(context.Background())
+
+	// Fetch initial aliases.
+	entries, err := sdkClient.FetchAliases()
+	if err != nil {
+		log.Printf("Initial alias fetch failed: %v (will update via events)", err)
+	} else {
+		r.routes.SetAliases(alias.NewAliasMap(entries))
+		log.Printf("Loaded %d aliases", len(entries))
+	}
+
+	ginRouter := gin.Default()
 
 	// Health check.
-	router.GET("/health", func(c *gin.Context) {
+	ginRouter.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Chat endpoint — messaging plugins route here to talk to agent workspaces.
-	router.POST("/chat", r.handleChat)
+	// Main chat endpoint — all messaging plugins route here.
+	ginRouter.POST("/chat", r.handleChat)
 
-	// Command endpoint — send slash commands to agent-bridge.
-	router.POST("/command", r.handleCommand)
+	// Routing config endpoints.
+	ginRouter.POST("/config/coordinator", r.handleSetCoordinator)
+	ginRouter.POST("/config/workspace/map", r.handleMapWorkspace)
+	ginRouter.POST("/config/workspace/unmap", r.handleUnmapWorkspace)
 
-	// Status endpoint — list active workspace connections.
-	router.GET("/status", r.handleStatus)
-
-	// Disconnect endpoint — close a workspace connection.
-	router.POST("/disconnect", r.handleDisconnect)
+	// Status endpoint.
+	ginRouter.GET("/status", r.handleStatus)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
+		Handler: ginRouter,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
 }
@@ -241,6 +408,3 @@ func getHostname() string {
 	}
 	return hostname
 }
-
-// Keep json import used.
-var _ = json.Marshal
