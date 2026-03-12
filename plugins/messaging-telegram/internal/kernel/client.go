@@ -6,47 +6,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 )
 
-const (
-	// maxHistory is the max number of message pairs (user+assistant) kept per chat.
-	maxHistory = 20
-)
-
 // Client communicates with the kernel REST API.
+// Used only for image/video tool discovery and generation.
 type Client struct {
 	baseURL      string
 	serviceToken string
 	httpClient   *http.Client
 	debug        bool
 
-	// Per-chat conversation history keyed by chat ID.
+	// Per-chat conversation history keyed by chat ID (used by /clear command).
 	histMu  sync.Mutex
-	history map[int64][]conversationMsg
-}
-
-// chatRequest is the request body for the routed chat endpoint.
-type chatRequest struct {
-	Message       string            `json:"message"`
-	Model         string            `json:"model,omitempty"`
-	ImageURLs     []string          `json:"image_urls,omitempty"`
-	Conversation  []conversationMsg `json:"conversation"`
-	IsCoordinator bool              `json:"is_coordinator,omitempty"`
-	AgentAlias    string            `json:"agent_alias,omitempty"`
-}
-
-type conversationMsg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// chatResponse is the response body from the chat endpoint.
-type chatResponse struct {
-	Response string `json:"response"`
+	history map[int64]bool
 }
 
 // NewClient creates a new kernel API client.
@@ -58,11 +33,13 @@ func NewClient(baseURL, serviceToken string, debug bool) *Client {
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
-		history: make(map[int64][]conversationMsg),
+		history: make(map[int64]bool),
 	}
 }
 
 // ClearHistory resets conversation history for a chat.
+// Note: with relay routing, conversation history is managed by the agent plugins.
+// This is kept for the /clear command to provide user feedback.
 func (c *Client) ClearHistory(chatID int64) {
 	c.histMu.Lock()
 	delete(c.history, chatID)
@@ -359,105 +336,3 @@ func (c *Client) GenerateImage(ctx context.Context, provider, prompt string) (*i
 	return &genResp, nil
 }
 
-// ChatWithAgentDirect routes a message to a specific plugin+model.
-// Includes per-chat conversation history.
-func (c *Client) ChatWithAgentDirect(ctx context.Context, chatID int64, userID int64, pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
-	return c.chatWithPlugin(ctx, chatID, userID, pluginID, model, message, imageURLs, isCoordinator, agentAlias)
-}
-
-// chatWithPlugin is the shared HTTP+history logic for routing a chat message.
-func (c *Client) chatWithPlugin(ctx context.Context, chatID int64, userID int64, pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
-	// Build conversation: prior history + new user message.
-	c.histMu.Lock()
-	hist := c.history[chatID]
-	conv := make([]conversationMsg, 0, len(hist)+1)
-	conv = append(conv, hist...)
-	c.histMu.Unlock()
-
-	conv = append(conv, conversationMsg{Role: "user", Content: message})
-
-	reqBody := chatRequest{
-		Message:       message,
-		Model:         model,
-		ImageURLs:     imageURLs,
-		Conversation:  conv,
-		IsCoordinator: isCoordinator,
-		AgentAlias:    agentAlias,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshalling request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/api/route/%s/chat", c.baseURL, pluginID)
-
-	if c.debug {
-		log.Printf("[kernel] POST %s", url)
-		log.Printf("[kernel] request: agent=%s model=%q history=%d message=%q",
-			pluginID, model, len(conv)-1, truncateStr(message, 200))
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.serviceToken)
-	if userID != 0 {
-		req.Header.Set("X-Teamagentica-User-ID", fmt.Sprintf("telegram:%d", userID))
-	}
-
-	start := time.Now()
-	resp, err := c.httpClient.Do(req)
-	elapsed := time.Since(start)
-	if err != nil {
-		log.Printf("[kernel] request failed after %v: %v", elapsed, err)
-		return "", fmt.Errorf("sending request to kernel: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading response body: %w", err)
-	}
-
-	if c.debug {
-		log.Printf("[kernel] response status=%d time=%v body=%s",
-			resp.StatusCode, elapsed, truncateStr(string(respBody), 500))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp chatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("unmarshalling response: %w", err)
-	}
-
-	if c.debug {
-		log.Printf("[kernel] agent response: %s", truncateStr(chatResp.Response, 300))
-	}
-
-	// Store the exchange in history (without the system prompt).
-	c.histMu.Lock()
-	c.history[chatID] = append(c.history[chatID],
-		conversationMsg{Role: "user", Content: message},
-		conversationMsg{Role: "assistant", Content: chatResp.Response},
-	)
-	if len(c.history[chatID]) > maxHistory*2 {
-		c.history[chatID] = c.history[chatID][len(c.history[chatID])-maxHistory*2:]
-	}
-	c.histMu.Unlock()
-
-	return chatResp.Response, nil
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}

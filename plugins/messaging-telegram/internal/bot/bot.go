@@ -8,15 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/msgbuffer"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/kernel"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/relay"
 )
@@ -32,10 +33,9 @@ type Bot struct {
 	allowedUsers map[int64]bool
 	pollTimeout  int
 	debug        bool
-	aliases      *alias.AliasMap
-	relayClient  *relay.Client
-	defaultAgent atomic.Pointer[string] // plugin ID for coordinator brain
-	msgBuffer    *MessageBuffer
+	aliases     *alias.AliasMap
+	relayClient *relay.Client
+	msgBuffer   *msgbuffer.Buffer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -80,7 +80,8 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		shutdownCh:   make(chan struct{}),
 	}
 
-	b.msgBuffer = NewMessageBuffer(1*time.Second, func(chatID int64, text string, mediaURLs []string) {
+	b.msgBuffer = msgbuffer.New(1*time.Second, func(channelID string, text string, mediaURLs []string) {
+		chatID, _ := strconv.ParseInt(channelID, 10, 64)
 		b.processBuffered(chatID, text, mediaURLs)
 	})
 
@@ -96,23 +97,9 @@ func (b *Bot) SetMessageBufferMS(ms int) {
 	log.Printf("Message buffer duration updated: %dms", ms)
 }
 
-// SetDefaultAgent atomically updates the coordinator agent plugin ID.
-func (b *Bot) SetDefaultAgent(agent string) {
-	b.defaultAgent.Store(&agent)
-	log.Printf("Coordinator agent updated: %s", agent)
-}
-
 // SetRelayClient attaches the relay client for routing messages.
 func (b *Bot) SetRelayClient(rc *relay.Client) {
 	b.relayClient = rc
-}
-
-// getDefaultAgent atomically reads the coordinator agent plugin ID.
-func (b *Bot) getDefaultAgent() string {
-	if p := b.defaultAgent.Load(); p != nil {
-		return *p
-	}
-	return ""
 }
 
 // emitEvent sends a debug event to the kernel console.
@@ -561,7 +548,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	log.Printf("[message] buffering from @%s (user=%d chat=%d): %s", username, userID, msg.Chat.ID, text)
 
 	// Buffer the message — will be flushed after debounce window.
-	b.msgBuffer.Add(msg.Chat.ID, text, imageURLs)
+	b.msgBuffer.Add(fmt.Sprintf("%d", msg.Chat.ID), text, imageURLs)
 }
 
 // handleCommand processes slash commands immediately without buffering.
@@ -643,101 +630,11 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 		return
 	}
 
-	// Fallback: direct kernel routing (no relay available).
-	b.processBufferedDirect(chatID, text, imageURLs)
-}
-
-// processBufferedDirect is the legacy routing path when no relay is configured.
-func (b *Bot) processBufferedDirect(chatID int64, text string, imageURLs []string) {
-	msgCtx, msgCancel := context.WithCancel(b.ctx)
-	defer msgCancel()
-
-	b.wg.Add(1)
-	go b.sendTypingLoop(msgCtx, chatID)
-
-	var userID int64
-
-	// Check for direct @mention routing.
-	if !b.aliases.IsEmpty() {
-		result := b.aliases.Parse(text)
-		if result.Target != nil {
-			msgCancel()
-			switch result.Target.Type {
-			case alias.TargetAgent:
-				b.handleAliasAgent(chatID, userID, "", result, imageURLs)
-			case alias.TargetImage:
-				b.handleImageGenerate(chatID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
-			case alias.TargetVideo:
-				b.handleVideoGenerate(chatID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
-			}
-			return
-		}
-	}
-
-	// Route to coordinator agent.
-	coordinator := b.resolveDefaultAgent()
-	if coordinator == nil {
-		msgCancel()
-		log.Printf("No coordinator agent configured — rejecting buffered message")
-		b.emitEvent("error", "no coordinator agent configured")
-		b.sendResponse(chatID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
-		return
-	}
-
-	response, err := b.kernelClient.ChatWithAgentDirect(msgCtx, chatID, userID, coordinator.PluginID, coordinator.Model, text, imageURLs, true, "")
+	// No relay configured — cannot route.
 	msgCancel()
-
-	if err != nil {
-		log.Printf("Agent error: %v", err)
-		b.emitEvent("error", fmt.Sprintf("agent error: %v", err))
-		b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
-		return
-	}
-
-	b.emitEvent("agent_response", fmt.Sprintf("response length=%d chars", len(response)))
-
-	// Check if coordinator delegated to another alias.
-	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
-		if target := b.aliases.Resolve(delegatedAlias); target != nil {
-			b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
-			delegCtx, delegCancel := context.WithCancel(b.ctx)
-			switch target.Type {
-			case alias.TargetAgent:
-				delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
-					delegCtx, chatID, userID, target.PluginID, target.Model, delegatedMsg, nil, false, delegatedAlias)
-				if delegErr != nil {
-					response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
-				} else {
-					response = formatAttributedResponse(delegatedAlias, delegatedResp)
-				}
-			case alias.TargetImage:
-				delegCancel()
-				b.handleImageGenerate(chatID, "", stripToolPrefix(target.PluginID), delegatedMsg)
-				return
-			case alias.TargetVideo:
-				delegCancel()
-				b.handleVideoGenerate(chatID, "", stripToolPrefix(target.PluginID), delegatedMsg)
-				return
-			}
-			delegCancel()
-		}
-	}
-
-	// Attribute the response to the coordinator's alias (or plugin ID).
-	if coordinator != nil && !strings.HasPrefix(response, "[@") {
-		responderName := b.aliases.FindAliasByPluginID(coordinator.PluginID)
-		if responderName == "" {
-			responderName = coordinator.PluginID
-		}
-		response = formatAttributedResponse(responderName, response)
-	}
-
-	if err := b.sendResponse(chatID, response); err != nil {
-		log.Printf("Error sending response: %v", err)
-		b.emitEvent("error", fmt.Sprintf("send error: %v", err))
-	} else {
-		b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(response)))
-	}
+	log.Printf("No relay client configured — cannot route message")
+	b.emitEvent("error", "no relay client configured")
+	b.sendResponse(chatID, "Message routing is not available. The agent relay is not configured.")
 }
 
 // handleImageGenerate submits an image generation request to a specific provider.
@@ -924,36 +821,6 @@ func (b *Bot) sendTypingLoop(ctx context.Context, chatID int64) {
 	}
 }
 
-// handleAliasAgent routes a message directly to a specific agent via @mention.
-func (b *Bot) handleAliasAgent(chatID int64, userID int64, username string, result alias.ParseResult, imageURLs []string) {
-	target := result.Target
-	message := result.Remainder
-	if message == "" {
-		b.sendResponse(chatID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
-		return
-	}
-
-	b.emitEvent("alias_route", fmt.Sprintf("@%s → %s from @%s", result.Alias, target.PluginID, username))
-
-	reqCtx, reqCancel := context.WithCancel(b.ctx)
-	defer reqCancel()
-
-	b.wg.Add(1)
-	go b.sendTypingLoop(reqCtx, chatID)
-
-	response, err := b.kernelClient.ChatWithAgentDirect(reqCtx, chatID, userID, target.PluginID, target.Model, message, imageURLs, false, result.Alias)
-	reqCancel()
-
-	if err != nil {
-		log.Printf("Alias agent error (@%s → %s): %v", result.Alias, target.PluginID, err)
-		b.emitEvent("alias_error", fmt.Sprintf("@%s: %v", result.Alias, err))
-		b.sendResponse(chatID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
-		return
-	}
-
-	b.sendResponse(chatID, formatAttributedResponse(result.Alias, response))
-}
-
 // formatAttributedResponse prefixes a response with the responder's name
 // so users can see who authored the message.
 func formatAttributedResponse(name, response string) string {
@@ -988,35 +855,8 @@ func (b *Bot) handleAliasesCommand(chatID int64) {
 		}
 	}
 
-	if da := b.getDefaultAgent(); da != "" {
-		sb.WriteString(fmt.Sprintf("\nCoordinator: %s", da))
-	}
-
-	sb.WriteString("\n\nUsage: @nickname <message>")
+	sb.WriteString("\nUsage: @nickname <message>")
 	b.sendResponse(chatID, sb.String())
-}
-
-// resolvedAgent holds the plugin ID and optional model for a resolved coordinator.
-type resolvedAgent struct {
-	PluginID string
-	Model    string
-}
-
-// resolveDefaultAgent returns the configured coordinator agent.
-// Returns nil if no default agent is set — callers must treat this as an error.
-// The DEFAULT_AGENT config stores an alias name (e.g. "gem"), so we resolve it
-// via the alias map.
-func (b *Bot) resolveDefaultAgent() *resolvedAgent {
-	da := b.getDefaultAgent()
-	if da == "" {
-		return nil
-	}
-	// DEFAULT_AGENT is an alias name — resolve to plugin ID.
-	if target := b.aliases.Resolve(da); target != nil {
-		return &resolvedAgent{PluginID: target.PluginID, Model: target.Model}
-	}
-	// If it doesn't resolve as an alias, treat it as a raw plugin ID.
-	return &resolvedAgent{PluginID: da}
 }
 
 // extractMediaURLs extracts photo, video, voice, audio, and document media
