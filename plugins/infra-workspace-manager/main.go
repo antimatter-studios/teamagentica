@@ -12,6 +12,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-workspace-manager/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-workspace-manager/internal/storage"
 )
 
 func main() {
@@ -68,8 +69,15 @@ func main() {
 		log.Fatalf("failed to create workspace volumes dir: %v", err)
 	}
 
+	// Local SQLite database for workspace-manager-level metadata
+	// (environment tracking, etc.) — kept separate from the kernel.
+	db, err := storage.Open(workspaceDir)
+	if err != nil {
+		log.Fatalf("failed to open workspace database: %v", err)
+	}
+
 	router := gin.Default()
-	h := handlers.NewHandler(workspaceDir, baseDomain, debug)
+	h := handlers.NewHandler(workspaceDir, baseDomain, debug, db)
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
@@ -83,6 +91,7 @@ func main() {
 	router.GET("/workspaces/:id", h.GetWorkspace)
 	router.PATCH("/workspaces/:id", h.RenameWorkspace)
 	router.DELETE("/workspaces/:id", h.DeleteWorkspace)
+	router.POST("/workspaces/:id/start", h.StartWorkspace)
 
 	// Git persistence.
 	router.POST("/workspaces/:id/persist", h.PersistWorkspace)

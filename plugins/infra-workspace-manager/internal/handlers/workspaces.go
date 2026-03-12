@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-workspace-manager/internal/storage"
 )
 
 // randomID generates an 8-character hex string for use as a workspace identifier.
@@ -29,13 +30,15 @@ type Handler struct {
 	baseDomain   string
 	debug        bool
 	sdk          *pluginsdk.Client
+	db           *storage.DB
 }
 
-func NewHandler(workspaceDir, baseDomain string, debug bool) *Handler {
+func NewHandler(workspaceDir, baseDomain string, debug bool, db *storage.DB) *Handler {
 	return &Handler{
 		workspaceDir: workspaceDir,
 		baseDomain:   baseDomain,
 		debug:        debug,
+		db:           db,
 	}
 }
 
@@ -65,6 +68,7 @@ type environmentInfo struct {
 	Description string `json:"description"`
 	Image       string `json:"image"`
 	Port        int    `json:"port"`
+	Icon        string `json:"icon,omitempty"`
 }
 
 // ListEnvironments returns all installed workspace plugins.
@@ -93,6 +97,7 @@ func (h *Handler) ListEnvironments(c *gin.Context) {
 			Description: ws.Description,
 			Image:       ws.Image,
 			Port:        ws.Port,
+			Icon:        ws.Icon,
 		})
 	}
 
@@ -136,6 +141,10 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 			Status:     mc.Status,
 			Subdomain:  mc.Subdomain,
 			VolumeName: mc.VolumeName,
+		}
+		// Enrich with workspace-manager-level data from local DB.
+		if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
+			ws.Environment = rec.EnvironmentID
 		}
 		if mc.Subdomain != "" && h.baseDomain != "" {
 			ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -304,20 +313,26 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	// Subdomain uses only the random ID — permanent, never changes on rename.
 	subdomain := "ws-" + wsID
 	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
-		Name:              displayName,
-		Image:             ws.Image,
-		Port:              ws.Port,
-		Subdomain:         subdomain,
-		VolumeName:        volumeName,
-		ExtraMounts:       ws.SharedMounts,
-		Env:               env,
-		Cmd:        cmd,
-		DockerUser: ws.DockerUser,
+		Name:        displayName,
+		Image:       ws.Image,
+		Port:        ws.Port,
+		Subdomain:   subdomain,
+		VolumeName:  volumeName,
+		ExtraMounts: ws.SharedMounts,
+		Env:         env,
+		Cmd:         cmd,
+		DockerUser:  ws.DockerUser,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch workspace: " + err.Error()})
 		return
 	}
+
+	// Track workspace-level metadata in local DB.
+	h.db.Put(&storage.WorkspaceRecord{
+		ContainerID:   mc.ID,
+		EnvironmentID: req.EnvironmentID,
+	})
 
 	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s","environment":"%s","key":"%s"}`, mc.ID, req.EnvironmentID, wsKey))
 
@@ -482,6 +497,40 @@ func extractVolumePrefix(volumeName string) string {
 	return volumeName + "-"
 }
 
+// StartWorkspace re-launches a stopped workspace container.
+func (h *Handler) StartWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	id := c.Param("id")
+	mc, err := h.sdk.StartManagedContainer(id)
+	if err != nil {
+		log.Printf("failed to start workspace %s: %v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start workspace: " + err.Error()})
+		return
+	}
+
+	h.emitEvent("workspace:started", fmt.Sprintf(`{"id":"%s"}`, id))
+
+	result := workspaceInfo{
+		ID:         mc.ID,
+		Name:       mc.Name,
+		Status:     mc.Status,
+		Subdomain:  mc.Subdomain,
+		VolumeName: mc.VolumeName,
+	}
+	if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
+		result.Environment = rec.EnvironmentID
+	}
+	if mc.Subdomain != "" && h.baseDomain != "" {
+		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 // DeleteWorkspace stops the container and optionally removes the volume.
 func (h *Handler) DeleteWorkspace(c *gin.Context) {
 	if h.sdk == nil {
@@ -511,6 +560,9 @@ func (h *Handler) DeleteWorkspace(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop workspace: " + err.Error()})
 		return
 	}
+
+	// Clean up local workspace record.
+	h.db.Delete(id)
 
 	if removeVolume && volumeName != "" {
 		volumePath := filepath.Join(h.workspaceDir, "volumes", volumeName)
@@ -650,6 +702,7 @@ type workspaceSchemaData struct {
 	Description  string                 `json:"description"`
 	Image        string                 `json:"image"`
 	Port         int                    `json:"port"`
+	Icon         string                 `json:"icon"`
 	Cmd          []string               `json:"cmd"`
 	DockerUser   string                 `json:"docker_user"`
 	EnvDefaults  map[string]string      `json:"env_defaults"`
