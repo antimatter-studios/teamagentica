@@ -14,6 +14,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/relay"
 )
 
 const maxMessageLength = 2000
@@ -22,6 +23,7 @@ const maxMessageLength = 2000
 type Bot struct {
 	session      *discordgo.Session
 	kernelClient *kernel.Client
+	relayClient  *relay.Client
 	botUserID    string
 	aliases      *alias.AliasMap
 	defaultAgent atomic.Pointer[string]
@@ -71,6 +73,11 @@ func (b *Bot) SetMessageBufferMS(ms int) {
 // SetSDK attaches the plugin SDK client for event reporting.
 func (b *Bot) SetSDK(sdk *pluginsdk.Client) {
 	b.sdk = sdk
+}
+
+// SetRelayClient attaches the relay client for routing messages.
+func (b *Bot) SetRelayClient(rc *relay.Client) {
+	b.relayClient = rc
 }
 
 // SetDebug atomically updates the debug mode.
@@ -227,41 +234,83 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 	// Show typing indicator.
 	s.ChannelTyping(channelID)
 
-	// Check for direct @mention routing (fast path).
+	// Image/video aliases are handled locally (platform-specific output).
 	if !b.aliases.IsEmpty() {
 		result := b.aliases.Parse(text)
 		if result.Target != nil {
 			switch result.Target.Type {
-			case alias.TargetAgent:
-				if result.Remainder == "" {
-					s.ChannelMessageSend(channelID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
-					return
-				}
-				b.emitEvent("alias_route", fmt.Sprintf("@%s → %s", result.Alias, result.Target.PluginID))
-				response, err := b.kernelClient.ChatWithAgentDirect(
-					result.Target.PluginID, result.Target.Model, result.Remainder, mediaURLs, false, result.Alias)
-				if err != nil {
-					log.Printf("Alias route error (@%s): %v", result.Alias, err)
-					b.emitEvent("alias_error", fmt.Sprintf("@%s: %v", result.Alias, err))
-					s.ChannelMessageSend(channelID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
-					return
-				}
-				if b.debug.Load() {
-					b.emitEvent("agent_response", fmt.Sprintf("from @%s: %s", result.Alias, truncate(response, 200)))
-				} else {
-					b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", result.Alias, len(response)))
-				}
-				b.sendResponse(s, channelID, formatAttributedResponse(result.Alias, response))
 			case alias.TargetImage:
 				b.handleImageGenerate(s, channelID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
+				return
 			case alias.TargetVideo:
 				b.handleVideoGenerate(s, channelID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
+				return
 			}
+		}
+	}
+
+	// All text routing goes through the relay (alias, coordinator, workspace).
+	if b.relayClient != nil {
+		resp, err := b.relayClient.Chat(channelID, text, mediaURLs)
+		if err != nil {
+			log.Printf("Relay error: %v", err)
+			b.emitEvent("error", fmt.Sprintf("relay: %v", err))
+			s.ChannelMessageSend(channelID, "Sorry, I encountered an error processing your message.")
+			return
+		}
+
+		if b.debug.Load() {
+			b.emitEvent("agent_response", fmt.Sprintf("from @%s: %s", resp.Responder, truncate(resp.Response, 200)))
+		} else {
+			b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", resp.Responder, len(resp.Response)))
+		}
+
+		response := formatAttributedResponse(resp.Responder, resp.Response)
+		if err := b.sendResponse(s, channelID, response); err != nil {
+			log.Printf("Error sending response: %v", err)
+			b.emitEvent("error", fmt.Sprintf("send error: %v", err))
+		} else {
+			b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(resp.Response)))
+		}
+		return
+	}
+
+	// Fallback: direct kernel routing (no relay available).
+	b.processBufferedDirect(channelID, text, mediaURLs)
+}
+
+// processBufferedDirect is the legacy routing path when no relay is configured.
+func (b *Bot) processBufferedDirect(channelID string, text string, mediaURLs []string) {
+	s := b.session
+
+	// Check for direct @mention routing.
+	if !b.aliases.IsEmpty() {
+		result := b.aliases.Parse(text)
+		if result.Target != nil && result.Target.Type == alias.TargetAgent {
+			if result.Remainder == "" {
+				s.ChannelMessageSend(channelID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
+				return
+			}
+			b.emitEvent("alias_route", fmt.Sprintf("@%s → %s", result.Alias, result.Target.PluginID))
+			response, err := b.kernelClient.ChatWithAgentDirect(
+				result.Target.PluginID, result.Target.Model, result.Remainder, mediaURLs, false, result.Alias)
+			if err != nil {
+				log.Printf("Alias route error (@%s): %v", result.Alias, err)
+				b.emitEvent("alias_error", fmt.Sprintf("@%s: %v", result.Alias, err))
+				s.ChannelMessageSend(channelID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
+				return
+			}
+			if b.debug.Load() {
+				b.emitEvent("agent_response", fmt.Sprintf("from @%s: %s", result.Alias, truncate(response, 200)))
+			} else {
+				b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", result.Alias, len(response)))
+			}
+			b.sendResponse(s, channelID, formatAttributedResponse(result.Alias, response))
 			return
 		}
 	}
 
-	// Route to coordinator agent — requires DEFAULT_AGENT to be set in plugin config.
+	// Route to coordinator agent.
 	coordinator := b.resolveDefaultAgent()
 	if coordinator == nil {
 		log.Printf("No coordinator agent configured — rejecting buffered message")
@@ -271,7 +320,6 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 	}
 
 	response, err := b.kernelClient.ChatWithAgentDirect(coordinator.PluginID, coordinator.Model, text, mediaURLs, true, "")
-
 	if err != nil {
 		log.Printf("Error calling kernel: %v", err)
 		b.emitEvent("error", fmt.Sprintf("agent error: %v", err))
@@ -317,7 +365,6 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 		response = formatAttributedResponse(responderName, response)
 	}
 
-	// Send the response, splitting if necessary
 	if err := b.sendResponse(s, channelID, response); err != nil {
 		log.Printf("Error sending response: %v", err)
 		b.emitEvent("error", fmt.Sprintf("send error: %v", err))

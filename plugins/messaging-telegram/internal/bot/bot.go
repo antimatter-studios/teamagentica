@@ -18,6 +18,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/relay"
 )
 
 const maxMessageLength = 4096
@@ -32,6 +33,7 @@ type Bot struct {
 	pollTimeout  int
 	debug        bool
 	aliases      *alias.AliasMap
+	relayClient  *relay.Client
 	defaultAgent atomic.Pointer[string] // plugin ID for coordinator brain
 	msgBuffer    *MessageBuffer
 
@@ -98,6 +100,11 @@ func (b *Bot) SetMessageBufferMS(ms int) {
 func (b *Bot) SetDefaultAgent(agent string) {
 	b.defaultAgent.Store(&agent)
 	log.Printf("Coordinator agent updated: %s", agent)
+}
+
+// SetRelayClient attaches the relay client for routing messages.
+func (b *Bot) SetRelayClient(rc *relay.Client) {
+	b.relayClient = rc
 }
 
 // getDefaultAgent atomically reads the coordinator agent plugin ID.
@@ -594,11 +601,63 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 	b.wg.Add(1)
 	go b.sendTypingLoop(msgCtx, chatID)
 
-	// Use a zero userID — the buffer merges messages so we don't track per-message user.
-	// In practice all buffered messages come from the same user in a private chat.
+	// Image/video aliases are handled locally (platform-specific output).
+	if !b.aliases.IsEmpty() {
+		result := b.aliases.Parse(text)
+		if result.Target != nil {
+			switch result.Target.Type {
+			case alias.TargetImage:
+				msgCancel()
+				b.handleImageGenerate(chatID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
+				return
+			case alias.TargetVideo:
+				msgCancel()
+				b.handleVideoGenerate(chatID, "", stripToolPrefix(result.Target.PluginID), result.Remainder)
+				return
+			}
+		}
+	}
+
+	// All text routing goes through the relay (alias, coordinator, workspace).
+	if b.relayClient != nil {
+		channelID := fmt.Sprintf("%d", chatID)
+		resp, err := b.relayClient.Chat(channelID, text, imageURLs)
+		msgCancel()
+
+		if err != nil {
+			log.Printf("Relay error: %v", err)
+			b.emitEvent("error", fmt.Sprintf("relay: %v", err))
+			b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
+			return
+		}
+
+		b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", resp.Responder, len(resp.Response)))
+
+		response := formatAttributedResponse(resp.Responder, resp.Response)
+		if err := b.sendResponse(chatID, response); err != nil {
+			log.Printf("Error sending response: %v", err)
+			b.emitEvent("error", fmt.Sprintf("send error: %v", err))
+		} else {
+			b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(resp.Response)))
+		}
+		return
+	}
+
+	// Fallback: direct kernel routing (no relay available).
+	b.processBufferedDirect(chatID, text, imageURLs)
+}
+
+// processBufferedDirect is the legacy routing path when no relay is configured.
+func (b *Bot) processBufferedDirect(chatID int64, text string, imageURLs []string) {
+	msgCtx, msgCancel := context.WithCancel(b.ctx)
+	defer msgCancel()
+
+	b.wg.Add(1)
+	go b.sendTypingLoop(msgCtx, chatID)
+
 	var userID int64
 
-	// Check for direct @mention routing (fast path — no coordinator needed).
+	// Check for direct @mention routing.
 	if !b.aliases.IsEmpty() {
 		result := b.aliases.Parse(text)
 		if result.Target != nil {
@@ -615,7 +674,7 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 		}
 	}
 
-	// Route to coordinator agent — requires DEFAULT_AGENT to be set in plugin config.
+	// Route to coordinator agent.
 	coordinator := b.resolveDefaultAgent()
 	if coordinator == nil {
 		msgCancel()
@@ -641,7 +700,6 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
 		if target := b.aliases.Resolve(delegatedAlias); target != nil {
 			b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
-			// Re-route to the delegated target.
 			delegCtx, delegCancel := context.WithCancel(b.ctx)
 			switch target.Type {
 			case alias.TargetAgent:
@@ -674,7 +732,6 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 		response = formatAttributedResponse(responderName, response)
 	}
 
-	// Send the response, splitting if necessary.
 	if err := b.sendResponse(chatID, response); err != nil {
 		log.Printf("Error sending response: %v", err)
 		b.emitEvent("error", fmt.Sprintf("send error: %v", err))

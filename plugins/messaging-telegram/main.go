@@ -18,6 +18,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/bot"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/relay"
 )
 
 func main() {
@@ -107,6 +108,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}
+
+	telegramBot.SetRelayClient(relay.NewClient(sdkClient, pluginID))
 
 	// Apply initial DEFAULT_AGENT from fetched config.
 	if agent := pluginConfig["DEFAULT_AGENT"]; agent != "" {

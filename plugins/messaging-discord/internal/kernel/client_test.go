@@ -39,7 +39,7 @@ func TestChatWithAgentDirect_Success(t *testing.T) {
 	defer server.Close()
 
 	c := NewClient(server.URL, "test-token", nil)
-	response, err := c.ChatWithAgentDirect("agent-openai", "", "Hello", nil, "")
+	response, err := c.ChatWithAgentDirect("agent-openai", "", "Hello", nil, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

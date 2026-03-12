@@ -16,6 +16,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/bot"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/relay"
 )
 
 func main() {
@@ -92,6 +93,7 @@ func main() {
 	}
 
 	discordBot.SetSDK(sdkClient)
+	discordBot.SetRelayClient(relay.NewClient(sdkClient, pluginID))
 	if debug {
 		discordBot.SetDebug(true)
 	}
