@@ -501,6 +501,23 @@
   config_schema:
     PLUGIN_DEBUG:
         default: "false"
+        help_text: Log detailed request/response traffic
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Routes messages between messaging plugins and agent-bridge instances running in workspace containers
+  group: infrastructure
+  id: infra-agent-relay
+  image: teamagentica-infra-agent-relay:latest
+  name: Agent Relay
+  tags:
+    - infra:agent-relay
+    - infrastructure
+  version: 0.1.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
         help_text: Log detailed request/response traffic to the debug console (may include sensitive data)
         label: Debug Mode
         order: 99

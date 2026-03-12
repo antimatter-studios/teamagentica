@@ -20,6 +20,7 @@ use (
 	./plugins/storage-sss3
 	./plugins/storage-volume
 	./plugins/infra-workspace-manager
+	./plugins/infra-agent-relay
 	./plugins/messaging-telegram
 	./plugins/tool-nanobanana
 	./plugins/tool-seedance

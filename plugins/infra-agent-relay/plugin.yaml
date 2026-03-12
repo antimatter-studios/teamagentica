@@ -1,0 +1,15 @@
+id: infra-agent-relay
+name: "Agent Relay"
+description: "Routes messages between messaging plugins and agent-bridge instances running in workspace containers"
+group: infrastructure
+version: "0.1.0"
+image: "teamagentica-infra-agent-relay:latest"
+author: teamagentica
+tags: [infra:agent-relay, infrastructure]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic"
+    order: 99

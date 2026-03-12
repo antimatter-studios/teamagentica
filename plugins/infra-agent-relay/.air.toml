@@ -1,0 +1,40 @@
+root = "."
+tmp_dir = "build"
+
+[build]
+  bin = "./build/air-infra-agent-relay"
+  cmd = "go build -o ./build/air-infra-agent-relay ."
+  delay = 1000
+  exclude_dir = ["build", "vendor", "node_modules"]
+  exclude_file = []
+  exclude_regex = ["_test.go"]
+  exclude_unchanged = false
+  follow_symlink = false
+  include_ext = ["go", "tpl", "tmpl", "html", "toml"]
+  include_dir = []
+  kill_delay = "0s"
+  log = "build-errors.log"
+  poll = true
+  poll_interval = 1000
+  rerun = false
+  rerun_delay = 500
+  send_interrupt = false
+  stop_on_error = false
+
+[color]
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  main_only = false
+  time = false
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

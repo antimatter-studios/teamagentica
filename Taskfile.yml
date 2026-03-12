@@ -85,6 +85,9 @@ includes:
   infra-mcp-server:
     taskfile: ./plugins/infra-mcp-server/Taskfile.yml
     dir: ./plugins/infra-mcp-server
+  infra-agent-relay:
+    taskfile: ./plugins/infra-agent-relay/Taskfile.yml
+    dir: ./plugins/infra-agent-relay
   user-codex-terminal:
     taskfile: ./plugins/user-codex-terminal/Taskfile.yml
     dir: ./plugins/user-codex-terminal
@@ -196,6 +199,7 @@ tasks:
       - agent-requesty:build
       - builtin-provider:build
       - infra-cost-explorer:build
+      - infra-agent-relay:build
       - storage-sss3:build
       - messaging-discord:build
       - network-ngrok:build
@@ -226,6 +230,7 @@ tasks:
       - task: infra-cron-scheduler:docker:prod
       - task: infra-mcp-server:docker:prod
       - task: infra-workspace-manager:docker:prod
+      - task: infra-agent-relay:docker:prod
       - task: messaging-chat:docker:prod
       - task: messaging-discord:docker:prod
       - task: messaging-telegram:docker:prod
@@ -260,6 +265,7 @@ tasks:
       - task: infra-cron-scheduler:docker:dev
       - task: infra-mcp-server:docker:dev
       - task: infra-workspace-manager:docker:dev
+      - task: infra-agent-relay:docker:dev
       - task: messaging-chat:docker:dev
       - task: messaging-discord:docker:dev
       - task: messaging-telegram:docker:dev
@@ -280,9 +286,26 @@ tasks:
       - task: restart:running
 
   build:images:workspace:devbox:
-    desc: Build the devbox workspace image (ttyd + AI coding CLIs + dev tools)
+    desc: Build all devbox workspace images (base + terminal + agent)
     cmds:
       - docker build -t teamagentica-devbox:latest images/devbox/
+      - docker build -t teamagentica-devbox-terminal:latest images/devbox-terminal/
+      - docker build -t teamagentica-devbox-agent:latest images/devbox-agent/
+
+  build:images:workspace:devbox-base:
+    desc: Build devbox base image only (tools + runtimes, no interface)
+    cmds:
+      - docker build -t teamagentica-devbox:latest images/devbox/
+
+  build:images:workspace:devbox-terminal:
+    desc: Build devbox terminal image (human-facing, ttyd)
+    cmds:
+      - docker build -t teamagentica-devbox-terminal:latest images/devbox-terminal/
+
+  build:images:workspace:devbox-agent:
+    desc: Build devbox agent image (agent-driven, agent-bridge)
+    cmds:
+      - docker build -t teamagentica-devbox-agent:latest images/devbox-agent/
 
   restart:running:
     desc: Restart any running plugin containers so they pick up new images
@@ -317,6 +340,7 @@ tasks:
       - agent-requesty:clean
       - builtin-provider:clean
       - infra-cost-explorer:clean
+      - infra-agent-relay:clean
       - storage-sss3:clean
       - messaging-discord:clean
       - network-ngrok:clean
