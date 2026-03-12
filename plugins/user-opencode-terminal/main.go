@@ -37,6 +37,7 @@ func main() {
 			"workspace": map[string]interface{}{
 				"display_name": "OpenCode Terminal",
 				"description":  "Web terminal with OpenCode CLI — AI-powered coding assistant",
+				"icon":         `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" fill="#6366F1"/><path d="M9 8l-4 4 4 4M15 8l4 4-4 4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
 				"image":        "teamagentica-devbox:latest",
 				"port":         7681,
 				"docker_user":  "",

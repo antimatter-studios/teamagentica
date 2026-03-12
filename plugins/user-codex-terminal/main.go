@@ -68,6 +68,7 @@ func main() {
 				"workspace": map[string]interface{}{
 					"display_name": "Codex Terminal",
 					"description":  "Web terminal with OpenAI Codex CLI — AI-powered coding assistant",
+					"icon":         `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" fill="#10A37F"/><path d="M12 6v12M8 10l4-4 4 4M8 14l4 4 4-4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
 					"image":        "teamagentica-devbox:latest",
 					"port":         7681,
 					"docker_user":  "",

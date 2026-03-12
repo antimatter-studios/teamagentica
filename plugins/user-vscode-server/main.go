@@ -35,11 +35,12 @@ func main() {
 				"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
 			},
 			"workspace": map[string]interface{}{
-				"display_name":  "VS Code",
-				"description":   "Full IDE with terminal, extensions, and git support",
-				"image":       "teamagentica-code-server:latest",
-				"port":        8080,
-				"docker_user": "coder",
+				"display_name": "VS Code",
+				"description":  "Full IDE with terminal, extensions, and git support",
+				"icon":         `<svg viewBox="0 0 24 24" fill="none"><path d="M17.5 0L9.5 8 5 4.5 2 6v12l3 1.5L9.5 16l8 8 4.5-2V2L17.5 0zM5 14.5v-5l3 2.5-3 2.5zm9.5 2L9.5 12l5-4.5v9z" fill="#007ACC"/></svg>`,
+				"image":        "teamagentica-code-server:latest",
+				"port":         8080,
+				"docker_user":  "coder",
 				"setup_scripts": []string{"code-server-navigator"},
 				"shared_mounts": []map[string]interface{}{
 					{"volume_name": "code-server-shared/extensions", "target": "/mnt/shared-extensions"},
