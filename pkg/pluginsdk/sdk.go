@@ -584,14 +584,14 @@ func (c *Client) FetchConfig() (map[string]string, error) {
 
 // ManagedContainerInfo represents a managed container tracked by the kernel.
 type ManagedContainerInfo struct {
-	ID         string `json:"id"`
-	PluginID   string `json:"plugin_id"`
-	Name       string `json:"name"`
-	Image      string `json:"image"`
-	Status     string `json:"status"`
-	Port       int    `json:"port"`
-	Subdomain  string `json:"subdomain"`
-	VolumeName string `json:"volume_name"`
+	ID       string `json:"id"`
+	PluginID string `json:"plugin_id"`
+	Name     string `json:"name"`
+	Image         string `json:"image"`
+	Status        string `json:"status"`
+	Port          int    `json:"port"`
+	Subdomain     string `json:"subdomain"`
+	VolumeName    string `json:"volume_name"`
 }
 
 // ExtraMount describes an additional bind mount for a managed container.
@@ -603,15 +603,15 @@ type ExtraMount struct {
 
 // CreateManagedContainerRequest is the body for creating a managed container.
 type CreateManagedContainerRequest struct {
-	Name        string            `json:"name"`
-	Image       string            `json:"image"`
-	Port        int               `json:"port"`
-	Subdomain   string            `json:"subdomain"`
-	VolumeName  string            `json:"volume_name,omitempty"`
-	ExtraMounts []ExtraMount      `json:"extra_mounts,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Cmd         []string          `json:"cmd,omitempty"`
-	DockerUser  string            `json:"docker_user,omitempty"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	Port          int               `json:"port"`
+	Subdomain     string            `json:"subdomain"`
+	VolumeName  string       `json:"volume_name,omitempty"`
+	ExtraMounts []ExtraMount `json:"extra_mounts,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Cmd           []string          `json:"cmd,omitempty"`
+	DockerUser    string            `json:"docker_user,omitempty"`
 }
 
 // CreateManagedContainer asks the kernel to launch a managed container.
@@ -665,6 +665,32 @@ func (c *Client) ListManagedContainers() ([]ManagedContainerInfo, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return containers, nil
+}
+
+// StartManagedContainer re-launches a stopped managed container.
+func (c *Client) StartManagedContainer(containerID string) (*ManagedContainerInfo, error) {
+	req, err := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/containers/"+containerID+"/start", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("kernel returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var mc ManagedContainerInfo
+	if err := json.NewDecoder(resp.Body).Decode(&mc); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &mc, nil
 }
 
 // DeleteManagedContainer stops and removes a managed container.
