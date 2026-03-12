@@ -13,16 +13,19 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-// DevVersion returns version with a build timestamp appended when
-// TEAMAGENTICA_DEV_MODE=true. Each process start gets a unique stamp.
+// DevVersion returns version with a build timestamp appended when running
+// under air (binary name starts with "air-"). Each process start gets a
+// unique stamp. Production binaries return the base version unchanged.
 func DevVersion(base string) string {
-	if os.Getenv("TEAMAGENTICA_DEV_MODE") == "true" {
+	if strings.HasPrefix(filepath.Base(os.Args[0]), "air-") {
 		return base + "-" + time.Now().Format("20060102_150405")
 	}
 	return base
