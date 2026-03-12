@@ -199,6 +199,22 @@ func (m *AliasMap) FindAliasByPluginID(pluginID string) string {
 	return ""
 }
 
+// ListAgentAliases returns sorted alias names that point to agent plugins.
+func (m *AliasMap) ListAgentAliases() []string {
+	aliases := m.getMap()
+	if aliases == nil {
+		return nil
+	}
+	var names []string
+	for name, target := range aliases {
+		if target.Type == TargetAgent {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // IsEmpty returns true if no aliases are configured.
 func (m *AliasMap) IsEmpty() bool {
 	aliases := m.getMap()

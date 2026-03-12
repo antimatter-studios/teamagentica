@@ -19,6 +19,15 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
+// DevVersion returns version with a build timestamp appended when
+// TEAMAGENTICA_DEV_MODE=true. Each process start gets a unique stamp.
+func DevVersion(base string) string {
+	if os.Getenv("TEAMAGENTICA_DEV_MODE") == "true" {
+		return base + "-" + time.Now().Format("20060102_150405")
+	}
+	return base
+}
+
 // ConfigSchemaField describes a single configuration field for a plugin.
 type ConfigSchemaField struct {
 	Type        string            `json:"type"`
@@ -103,6 +112,7 @@ type Client struct {
 	config       Config
 	registration Registration
 	httpClient   *http.Client
+	routeClient  *http.Client // longer timeout for RouteToPlugin (AI chat)
 	stopCh       chan struct{}
 
 	// Internal event server for receiving kernel callbacks.
@@ -119,22 +129,35 @@ type Client struct {
 // NewClient creates a new SDK client.
 // If TLS is enabled and cert/key/CA paths are set, configures mTLS on the HTTP client.
 func NewClient(cfg Config, reg Registration) *Client {
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	// SDK gets its own transport — never share http.DefaultTransport with
+	// other libraries (e.g. discordgo) to avoid connection pool interference.
+	transport := &http.Transport{
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+	}
 
 	if cfg.TLSEnabled && cfg.TLSCert != "" && cfg.TLSKey != "" && cfg.TLSCA != "" {
 		tlsCfg, err := buildClientTLSConfig(cfg.TLSCert, cfg.TLSKey, cfg.TLSCA)
 		if err != nil {
 			log.Printf("pluginsdk: WARNING: failed to configure mTLS client: %v — falling back to plain HTTP", err)
 		} else {
-			httpClient.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+			transport.TLSClientConfig = tlsCfg
 			log.Println("pluginsdk: mTLS client configured")
 		}
 	}
+
+	// Short timeout for control-plane calls (register, heartbeat, config).
+	httpClient := &http.Client{Timeout: 10 * time.Second, Transport: transport}
+
+	// Long timeout for data-plane calls (RouteToPlugin — AI agent chat can take 2+ min).
+	routeClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
 
 	return &Client{
 		config:       cfg,
 		registration: reg,
 		httpClient:   httpClient,
+		routeClient:  routeClient,
 		stopCh:       make(chan struct{}),
 	}
 }
@@ -1027,7 +1050,7 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.routeClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
