@@ -19,21 +19,21 @@ type ExtraMount struct {
 // by the kernel. Unlike plugins, managed containers don't run the SDK —
 // they are raw workload containers (code-server, terminals, etc.).
 type ManagedContainer struct {
-	ID          string    `json:"id" gorm:"primaryKey"`
-	PluginID    string    `json:"plugin_id" gorm:"not null;index"`
-	Name        string    `json:"name" gorm:"not null"`
-	Image       string    `json:"image" gorm:"not null"`
-	ContainerID string    `json:"-"`
-	Status      string    `json:"status" gorm:"not null;default:'stopped'"`
-	Port        int       `json:"port" gorm:"not null"`
-	Subdomain   string    `json:"subdomain" gorm:"uniqueIndex"`
-	VolumeName  string    `json:"volume_name"`
-	ExtraMounts string    `json:"-" gorm:"type:text"` // JSON array of ExtraMount
-	Env         string    `json:"-" gorm:"type:text"`
-	Cmd        string `json:"-" gorm:"type:text"` // JSON array of command args
-	DockerUser string `json:"-" gorm:"column:docker_user"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID         string    `json:"id" gorm:"primaryKey"`
+	PluginID   string    `json:"plugin_id" gorm:"not null;index"`
+	Name       string    `json:"name" gorm:"not null"`
+	Image         string    `json:"image" gorm:"not null"`
+	ContainerID   string    `json:"-"`
+	Status        string    `json:"status" gorm:"not null;default:'stopped'"`
+	Port          int       `json:"port" gorm:"not null"`
+	Subdomain     string    `json:"subdomain" gorm:"uniqueIndex"`
+	VolumeName    string    `json:"volume_name"`
+	ExtraMounts   string    `json:"-" gorm:"type:text"` // JSON array of ExtraMount
+	Env           string    `json:"-" gorm:"type:text"`
+	Cmd           string    `json:"-" gorm:"type:text"` // JSON array of command args
+	DockerUser    string    `json:"-" gorm:"column:docker_user"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // GetEnv parses the stored JSON env string into a map.

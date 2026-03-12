@@ -22,15 +22,15 @@ import (
 // --- request types ---
 
 type createManagedContainerRequest struct {
-	Name        string              `json:"name" binding:"required"`
-	Image       string              `json:"image" binding:"required"`
-	Port        int                 `json:"port" binding:"required"`
-	Subdomain   string              `json:"subdomain" binding:"required"`
+	Name          string              `json:"name" binding:"required"`
+	Image         string              `json:"image" binding:"required"`
+	Port          int                 `json:"port" binding:"required"`
+	Subdomain     string              `json:"subdomain" binding:"required"`
 	VolumeName  string              `json:"volume_name"`
 	ExtraMounts []models.ExtraMount `json:"extra_mounts"`
-	Env         map[string]string   `json:"env"`
-	Cmd         []string            `json:"cmd"`
-	DockerUser  string              `json:"docker_user"`
+	Env           map[string]string   `json:"env"`
+	Cmd           []string            `json:"cmd"`
+	DockerUser    string              `json:"docker_user"`
 }
 
 // --- helpers ---
@@ -78,14 +78,14 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 	}
 
 	mc := models.ManagedContainer{
-		ID:         uuid.New().String()[:8],
-		PluginID:   pluginID,
-		Name:       req.Name,
-		Image:      req.Image,
-		Port:       req.Port,
-		Subdomain:  req.Subdomain,
-		VolumeName: req.VolumeName,
-		DockerUser: req.DockerUser,
+		ID:       uuid.New().String()[:8],
+		PluginID: pluginID,
+		Name:     req.Name,
+		Image:         req.Image,
+		Port:          req.Port,
+		Subdomain:     req.Subdomain,
+		VolumeName:    req.VolumeName,
+		DockerUser:    req.DockerUser,
 	}
 	mc.SetEnv(req.Env)
 	mc.SetCmd(req.Cmd)
@@ -222,6 +222,43 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	c.JSON(http.StatusOK, mc)
 }
 
+// StartManagedContainer handles POST /api/plugins/containers/:id/start.
+// Re-launches a stopped container using its stored configuration.
+func (h *PluginHandler) StartManagedContainer(c *gin.Context) {
+	pluginID, ok := extractPluginID(c)
+	if !ok {
+		return
+	}
+
+	var mc models.ManagedContainer
+	if err := h.db.First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		return
+	}
+
+	if mc.Status == "running" {
+		c.JSON(http.StatusOK, mc)
+		return
+	}
+
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime unavailable"})
+		return
+	}
+
+	containerID, err := h.runtime.StartManagedContainer(c.Request.Context(), &mc, h.cfg.BaseDomain)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start container: %v", err)})
+		return
+	}
+
+	mc.ContainerID = containerID
+	mc.Status = "running"
+	h.db.Save(&mc)
+
+	c.JSON(http.StatusOK, mc)
+}
+
 // GetManagedContainerLogs handles GET /api/plugins/containers/:id/logs.
 func (h *PluginHandler) GetManagedContainerLogs(c *gin.Context) {
 	pluginID, ok := extractPluginID(c)
@@ -339,9 +376,10 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		// Remove any upstream CSP that restricts framing — the UI embeds
-		// workspaces in iframes from a different origin (ui.* vs api.*).
+		// Remove upstream headers that restrict framing — the UI
+		// embeds workspaces in iframes.
 		resp.Header.Del("Content-Security-Policy")
+		resp.Header.Del("X-Frame-Options")
 
 		var detail string
 		if resp.StatusCode >= 400 {

@@ -222,6 +222,7 @@ func main() {
 		pluginRegGroup.GET("/containers/:cid", pluginHandler.GetManagedContainer)
 		pluginRegGroup.PATCH("/containers/:cid", pluginHandler.UpdateManagedContainer)
 		pluginRegGroup.DELETE("/containers/:cid", pluginHandler.DeleteManagedContainer)
+		pluginRegGroup.POST("/containers/:cid/start", pluginHandler.StartManagedContainer)
 		pluginRegGroup.GET("/containers/:cid/logs", pluginHandler.GetManagedContainerLogs)
 	}
 
