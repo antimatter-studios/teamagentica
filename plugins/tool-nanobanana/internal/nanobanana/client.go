@@ -143,6 +143,9 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 	}
 
 	if result.ImageData == "" {
+		if result.Text != "" {
+			return nil, fmt.Errorf("%s", result.Text)
+		}
 		return nil, fmt.Errorf("no image data in response")
 	}
 
