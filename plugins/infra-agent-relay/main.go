@@ -266,10 +266,12 @@ func (r *relay) disconnect(workspaceID string) {
 // --- Config & routing management endpoints ---
 
 // handleSetCoordinator sets the coordinator agent for a source plugin.
+// Accepts either plugin_id directly or alias (resolved from the alias map).
 func (r *relay) handleSetCoordinator(c *gin.Context) {
 	var req struct {
 		SourcePlugin string `json:"source_plugin"`
-		PluginID     string `json:"plugin_id"`
+		PluginID     string `json:"plugin_id,omitempty"`
+		Alias        string `json:"alias,omitempty"`
 		Model        string `json:"model,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -277,9 +279,40 @@ func (r *relay) handleSetCoordinator(c *gin.Context) {
 		return
 	}
 
-	r.routes.SetCoordinator(req.SourcePlugin, req.PluginID, req.Model)
-	log.Printf("coordinator set: %s → %s (model=%s)", req.SourcePlugin, req.PluginID, req.Model)
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	if req.SourcePlugin == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source_plugin required"})
+		return
+	}
+
+	pluginID := req.PluginID
+	model := req.Model
+
+	// If alias is provided, resolve it to a plugin ID.
+	if req.Alias != "" && pluginID == "" {
+		aliases := r.routes.Aliases()
+		if aliases == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "aliases not loaded yet"})
+			return
+		}
+		target := aliases.Resolve(req.Alias)
+		if target == nil || target.Type != alias.TargetAgent {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias @%s not found or not an agent", req.Alias)})
+			return
+		}
+		pluginID = target.PluginID
+		if model == "" {
+			model = target.Model
+		}
+	}
+
+	if pluginID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plugin_id or alias required"})
+		return
+	}
+
+	r.routes.SetCoordinator(req.SourcePlugin, pluginID, model)
+	log.Printf("coordinator set: %s → %s (model=%s, alias=%s)", req.SourcePlugin, pluginID, model, req.Alias)
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "plugin_id": pluginID, "alias": req.Alias})
 }
 
 // handleMapWorkspace maps a channel to a workspace bridge.
@@ -347,7 +380,7 @@ func main() {
 		Host:         getHostname(),
 		Port:         port,
 		Capabilities: []string{"infra:agent-relay"},
-		Version:      "0.1.0",
+		Version:      pluginsdk.DevVersion("0.1.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{},
 	})
 	r := newRelay(sdkClient)
