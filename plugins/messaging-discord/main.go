@@ -144,6 +144,14 @@ func main() {
 		}
 	}))
 
+	// Re-send coordinator when the relay (re)starts — it stores the mapping in memory.
+	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
+			log.Printf("Relay ready — re-sending coordinator assignment")
+			setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+		}
+	}))
+
 	if err := discordBot.Start(); err != nil {
 		log.Fatalf("Failed to start bot: %v", err)
 	}

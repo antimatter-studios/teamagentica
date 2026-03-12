@@ -431,6 +431,15 @@ func main() {
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: ginRouter,
 	}
+
+	// Broadcast that the relay is ready — messaging plugins use this to
+	// (re)send their coordinator assignments after a relay restart.
+	go func() {
+		// Small delay to ensure the HTTP server is accepting connections.
+		time.Sleep(500 * time.Millisecond)
+		sdkClient.ReportEvent("relay:ready", "accepting coordinator and chat requests")
+	}()
+
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
 }
 

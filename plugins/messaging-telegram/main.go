@@ -156,6 +156,14 @@ func main() {
 		}
 	}))
 
+	// Re-send coordinator when the relay (re)starts — it stores the mapping in memory.
+	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
+			log.Printf("Relay ready — re-sending coordinator assignment")
+			setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+		}
+	}))
+
 	// When network-webhook-ingress broadcasts webhook:ready, send our route info.
 	sdkClient.OnEvent("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Received webhook:ready — sending route update to network-webhook-ingress")
