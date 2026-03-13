@@ -13,11 +13,9 @@ RUN apk add --no-cache nodejs npm \
 COPY --from=claude-installer /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
 COPY --from=claude-installer /usr/local/bin/claude /usr/local/bin/claude
 
-WORKDIR /app/plugins/agent-claude
+WORKDIR /app
 
-# Copy SDK and plugin sources.
-COPY pkg/pluginsdk/ /app/pkg/pluginsdk/
-COPY plugins/agent-claude/ /app/plugins/agent-claude/
+COPY . .
 
 RUN go mod download
 
@@ -29,9 +27,7 @@ CMD ["air", "-c", ".air.toml"]
 # ── Build stage ──
 FROM golang:1.25-alpine AS builder
 WORKDIR /app
-COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-claude/ plugins/agent-claude/
-WORKDIR /app/plugins/agent-claude
+COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /agent-claude .
 
 # ── Prod stage ──

@@ -44,9 +44,9 @@ tasks:
   docker:dev:
     desc: Build dev Docker image
     cmds:
-      - docker build -t teamagentica-{{.BINARY_NAME}}:dev -f Dockerfile --target dev {{.ROOT_DIR}}
+      - docker build -t teamagentica-{{.BINARY_NAME}}:dev -f Dockerfile --target dev .
 
   docker:prod:
     desc: Build prod Docker image
     cmds:
-      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod {{.ROOT_DIR}}
+      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod .

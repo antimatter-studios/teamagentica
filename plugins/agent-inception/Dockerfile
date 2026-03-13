@@ -3,11 +3,9 @@ FROM golang:1.25-alpine AS dev
 
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app/plugins/agent-inception
+WORKDIR /app
 
-# Copy SDK and plugin sources
-COPY pkg/pluginsdk/ /app/pkg/pluginsdk/
-COPY plugins/agent-inception/ /app/plugins/agent-inception/
+COPY . .
 
 RUN go mod download
 
@@ -19,9 +17,7 @@ CMD ["air", "-c", ".air.toml"]
 # ── Build stage ──
 FROM golang:1.25-alpine AS builder
 WORKDIR /app
-COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-inception/ plugins/agent-inception/
-WORKDIR /app/plugins/agent-inception
+COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /agent-inception .
 
 # ── Prod stage ──

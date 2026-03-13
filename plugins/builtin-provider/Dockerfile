@@ -3,11 +3,9 @@ FROM golang:1.25-alpine AS dev
 
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app/plugins/builtin-provider
+WORKDIR /app
 
-# Copy SDK and plugin sources.
-COPY pkg/pluginsdk/ /app/pkg/pluginsdk/
-COPY plugins/builtin-provider/ /app/plugins/builtin-provider/
+COPY . .
 
 # The catalog.yaml file is pre-built on the host before starting.
 # It is bind-mounted into the container via the dev source mount.
@@ -18,12 +16,9 @@ EXPOSE 8083
 CMD ["air", "-c", ".air.toml"]
 
 # ── Build stage ──
-# Build from repo root: docker build -f plugins/builtin-provider/Dockerfile .
 FROM golang:1.25-alpine AS builder
 WORKDIR /app
-COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/ plugins/
-WORKDIR /app/plugins/builtin-provider
+COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /builtin-provider .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /build-catalog ./cmd/build-catalog
 

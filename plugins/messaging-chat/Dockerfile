@@ -4,11 +4,9 @@ FROM golang:1.25-alpine AS dev
 RUN apk add --no-cache gcc musl-dev
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app/plugins/messaging-chat
+WORKDIR /app
 
-# Copy SDK and plugin sources
-COPY pkg/pluginsdk/ /app/pkg/pluginsdk/
-COPY plugins/messaging-chat/ /app/plugins/messaging-chat/
+COPY . .
 
 RUN go mod download
 
@@ -19,9 +17,7 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.25-alpine AS builder
 RUN apk add --no-cache gcc musl-dev
 WORKDIR /app
-COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/messaging-chat/ plugins/messaging-chat/
-WORKDIR /app/plugins/messaging-chat
+COPY . .
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /messaging-chat .
 
 # -- Prod stage --

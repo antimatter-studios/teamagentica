@@ -3,23 +3,18 @@ FROM golang:1.25-alpine AS dev
 
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app/plugins/tool-nanobanana
+WORKDIR /app
 
-# Copy SDK and plugin sources
-COPY pkg/pluginsdk/ /app/pkg/pluginsdk/
-COPY plugins/tool-nanobanana/ /app/plugins/tool-nanobanana/
+COPY . .
 
 RUN go mod download
 
 CMD ["air", "-c", ".air.toml"]
 
 # -- Build stage --
-# Build from repo root: docker build -f plugins/tool-nanobanana/Dockerfile .
 FROM golang:1.25-alpine AS builder
 WORKDIR /app
-COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-nanobanana/ plugins/tool-nanobanana/
-WORKDIR /app/plugins/tool-nanobanana
+COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /nanobanana-plugin .
 
 # -- Prod stage --
