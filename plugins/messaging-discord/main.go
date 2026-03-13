@@ -16,6 +16,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/bot"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/channels"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/kernel"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/relay"
 )
@@ -40,10 +41,11 @@ func main() {
 		ID:           pluginID,
 		Host:         hostname,
 		Port:         httpPort,
-		Capabilities: []string{"messaging:discord", "messaging:send", "messaging:receive"},
+		Capabilities: []string{"messaging:discord", "messaging:send", "messaging:receive", "tool:discord"},
 		Version:      pluginsdk.DevVersion("1.0.0"),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"DISCORD_BOT_TOKEN": {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Discord bot token from developer portal", Order: 1},
+			"DISCORD_GUILD_ID":  {Type: "string", Label: "Guild ID", Required: true, HelpText: "Discord server ID for channel management tools", Order: 2},
 			"COORDINATOR_ALIAS": {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "The @alias that manages conversations — routes unaddressed messages and delegates to other agents", Order: 5},
 			"MESSAGE_BUFFER_MS": {Type: "number", Label: "Message Buffer (ms)", Default: "1000", HelpText: "Debounce window for consolidating sequential messages (e.g. forwarded image + text). Set to 0 to disable.", Order: 6},
 			"PLUGIN_DEBUG":      {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
@@ -96,6 +98,10 @@ func main() {
 	discordBot.SetSDK(sdkClient)
 	discordBot.SetRelayClient(relay.NewClient(sdkClient, pluginID))
 
+	if guildID := pluginConfig["DISCORD_GUILD_ID"]; guildID != "" {
+		discordBot.SetGuildID(guildID)
+	}
+
 	// Set coordinator on relay if configured.
 	if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
 		setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
@@ -144,6 +150,12 @@ func main() {
 		}
 	}))
 
+	// Re-discover slash commands when any plugin registers (debounced to coalesce startup bursts).
+	sdkClient.OnEvent("plugin:registered", pluginsdk.NewTimedDebouncer(3*time.Second, func(event pluginsdk.EventCallback) {
+		log.Printf("plugin:registered — refreshing slash commands")
+		discordBot.RefreshCommands()
+	}))
+
 	// Re-send coordinator when the relay (re)starts — it stores the mapping in memory.
 	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
@@ -156,7 +168,14 @@ func main() {
 		log.Fatalf("Failed to start bot: %v", err)
 	}
 
-	// HTTP server for config options and health.
+	// Shared callback store for interactive menus.
+	callbackStore := channels.NewCallbackStore()
+	discordBot.SetCallbackStore(callbackStore)
+
+	// Channel management tool handler (for MCP agent discovery).
+	chHandler := channels.NewHandler(discordBot.Session, discordBot.GuildID, callbackStore)
+
+	// HTTP server for config options, health, and tool endpoints.
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /config/options/{field}", func(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +193,23 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
+
+	mux.HandleFunc("GET /discord-commands", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		cmds := discordBot.ListRegisteredCommands()
+		if cmds == nil {
+			cmds = []bot.RegisteredCommand{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"commands": cmds})
+	})
+
+	// Tool endpoints for MCP agent discovery.
+	mux.HandleFunc("GET /tools", chHandler.Tools)
+	mux.HandleFunc("POST /channels/create-category", chHandler.CreateCategory)
+	mux.HandleFunc("POST /channels/create", chHandler.CreateChannel)
+	mux.HandleFunc("POST /channels/list", chHandler.ListChannels)
+	mux.HandleFunc("POST /channels/delete", chHandler.DeleteChannel)
+	mux.HandleFunc("POST /channels/send-menu", chHandler.SendMenu)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", httpPort),

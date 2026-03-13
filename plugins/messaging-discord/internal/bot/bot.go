@@ -14,6 +14,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/msgbuffer"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/channels"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/kernel"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/relay"
 )
@@ -26,10 +27,13 @@ type Bot struct {
 	kernelClient *kernel.Client // used for image/video tool calls only
 	relayClient  *relay.Client
 	botUserID    string
+	guildID      string
 	aliases      *alias.AliasMap
 	debug        atomic.Bool
 	sdk          *pluginsdk.Client
 	msgBuffer    *msgbuffer.Buffer
+	callbacks    *channels.CallbackStore
+	cmdOwners    map[string]commandOwner // slash command name → owning plugin
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -41,7 +45,8 @@ func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*B
 
 	session.Identify.Intents = discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
-		discordgo.IntentsMessageContent
+		discordgo.IntentsMessageContent |
+		discordgo.IntentsGuilds
 
 	if !aliases.IsEmpty() {
 		log.Printf("Configured %d aliases", len(aliases.List()))
@@ -74,9 +79,57 @@ func (b *Bot) SetSDK(sdk *pluginsdk.Client) {
 	b.sdk = sdk
 }
 
+// RegisteredCommand is a serializable view of a registered slash command route.
+type RegisteredCommand struct {
+	Key      string `json:"key"`      // e.g. "workspace/list"
+	PluginID string `json:"plugin_id"` // owning plugin
+	Endpoint string `json:"endpoint"` // HTTP endpoint on the plugin
+}
+
+// ListRegisteredCommands returns the currently registered slash command routes.
+func (b *Bot) ListRegisteredCommands() []RegisteredCommand {
+	var out []RegisteredCommand
+	for key, owner := range b.cmdOwners {
+		out = append(out, RegisteredCommand{Key: key, PluginID: owner.pluginID, Endpoint: owner.endpoint})
+	}
+	return out
+}
+
+// RefreshCommands re-discovers and re-registers slash commands from all plugins.
+// Safe to call multiple times; replaces the owner map atomically.
+func (b *Bot) RefreshCommands() {
+	if b.botUserID == "" {
+		return // not connected yet
+	}
+	owners := b.discoverAndRegisterCommands(b.botUserID)
+	if len(owners) > 0 {
+		b.cmdOwners = owners
+	}
+}
+
 // SetRelayClient attaches the relay client for routing messages.
 func (b *Bot) SetRelayClient(rc *relay.Client) {
 	b.relayClient = rc
+}
+
+// SetGuildID sets the guild ID for channel management.
+func (b *Bot) SetGuildID(id string) {
+	b.guildID = id
+}
+
+// GuildID returns the configured guild ID.
+func (b *Bot) GuildID() string {
+	return b.guildID
+}
+
+// Session returns the underlying discordgo session.
+func (b *Bot) Session() *discordgo.Session {
+	return b.session
+}
+
+// SetCallbackStore attaches the callback store for interactive menu handling.
+func (b *Bot) SetCallbackStore(cs *channels.CallbackStore) {
+	b.callbacks = cs
 }
 
 // SetDebug atomically updates the debug mode.
@@ -97,6 +150,7 @@ func (b *Bot) emitEvent(eventType, detail string) {
 func (b *Bot) Start() error {
 	b.session.AddHandler(b.onReady)
 	b.session.AddHandler(b.onMessageCreate)
+	b.session.AddHandler(b.onInteraction)
 
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("opening discord connection: %w", err)
@@ -117,6 +171,27 @@ func (b *Bot) Stop() error {
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	b.botUserID = r.User.ID
 	log.Printf("Connected to Discord as %s#%s (ID: %s)", r.User.Username, r.User.Discriminator, r.User.ID)
+	// Discover slash commands in a background goroutine with retries — other plugins
+	// may not have registered with the kernel yet when onReady fires.
+	go b.discoverCommandsWithRetry(r.User.ID)
+}
+
+// discoverCommandsWithRetry attempts command discovery up to 5 times with increasing
+// delays, stopping as soon as at least one command owner is registered.
+func (b *Bot) discoverCommandsWithRetry(appID string) {
+	delays := []time.Duration{0, 3 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second}
+	for i, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		owners := b.discoverAndRegisterCommands(appID)
+		if len(owners) > 0 {
+			b.cmdOwners = owners
+			return
+		}
+		log.Printf("Slash command discovery attempt %d/%d: no commands found", i+1, len(delays))
+	}
+	log.Printf("Slash command discovery gave up after %d attempts", len(delays))
 }
 
 // onMessageCreate handles incoming messages.
@@ -265,6 +340,83 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 	log.Printf("No relay client configured — cannot route message")
 	b.emitEvent("error", "no relay client configured")
 	s.ChannelMessageSend(channelID, "Message routing is not available. The agent relay is not configured.")
+}
+
+// onInteraction handles Discord interactions: slash commands and message component clicks.
+func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type == discordgo.InteractionApplicationCommand {
+		b.handleSlashCommand(s, i, b.cmdOwners)
+		return
+	}
+
+	if i.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+
+	data := i.MessageComponentData()
+	if b.callbacks == nil {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Content: "Interactive menus are not configured.", Flags: discordgo.MessageFlagsEphemeral},
+		})
+		return
+	}
+
+	// For select menus, the selected value is in data.Values[0].
+	// For buttons, the callback ID is in data.CustomID.
+	customID := data.CustomID
+	if len(data.Values) > 0 {
+		customID = data.Values[0]
+	}
+
+	callbackMsg, ok := b.callbacks.Lookup(customID)
+	if !ok {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Content: "This menu has expired. Please request a new one.", Flags: discordgo.MessageFlagsEphemeral},
+		})
+		return
+	}
+
+	// Acknowledge immediately with a "thinking" indicator — the relay call may take a while.
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+
+	channelID := i.ChannelID
+	log.Printf("Menu interaction from %s: %s", i.Member.User.Username, callbackMsg)
+	b.emitEvent("menu_interaction", fmt.Sprintf("callback: %s", truncate(callbackMsg, 200)))
+
+	// Route through relay as a new message.
+	if b.relayClient == nil {
+		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: "Message routing is not available.",
+		})
+		return
+	}
+
+	resp, err := b.relayClient.Chat(channelID, callbackMsg, nil)
+	if err != nil {
+		log.Printf("Menu relay error: %v", err)
+		b.emitEvent("error", fmt.Sprintf("menu relay: %v", err))
+		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: "Sorry, I encountered an error processing your selection.",
+		})
+		return
+	}
+
+	response := formatAttributedResponse(resp.Responder, resp.Response)
+	// Split long responses into chunks — followup messages also have the 2000 char limit.
+	chunks := splitMessage(response, maxMessageLength)
+	for j, chunk := range chunks {
+		if j == 0 {
+			s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: chunk})
+		} else {
+			s.ChannelMessageSend(channelID, chunk)
+		}
+	}
+
+	b.emitEvent("menu_response", fmt.Sprintf("from @%s (%d chars)", resp.Responder, len(resp.Response)))
 }
 
 // isBotMentioned checks whether the bot was mentioned in the message.
