@@ -3170,6 +3170,13 @@ body::after {
   color: var(--text-primary);
 }
 
+.pricing-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0;
+}
+
 .pricing-hint {
   font-size: 11px;
   color: var(--text-muted);

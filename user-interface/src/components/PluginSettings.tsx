@@ -9,8 +9,9 @@ import PluginLogsInline from "./PluginLogsInline";
 import PluginPricing from "./PluginPricing";
 import PluginTools from "./PluginTools";
 import PluginSystemPrompt from "./PluginSystemPrompt";
+import PluginDiscordCommands from "./PluginDiscordCommands";
 
-type DetailTab = "config" | "aliases" | "logs" | "pricing" | "tools" | "system-prompt";
+type DetailTab = "config" | "aliases" | "logs" | "pricing" | "tools" | "system-prompt" | "commands";
 
 // Plugin group metadata — matches the catalog group ordering.
 const GROUP_META: { id: string; name: string; order: number }[] = [
@@ -81,6 +82,7 @@ export default function PluginSettings() {
   const [hasPricing, setHasPricing] = useState(false);
   const [hasTools, setHasTools] = useState(false);
   const [hasSystemPrompt, setHasSystemPrompt] = useState(false);
+  const [hasCommands, setHasCommands] = useState(false);
 
   useEffect(() => {
     fetch();
@@ -140,6 +142,20 @@ export default function PluginSettings() {
     }
   }, []);
 
+  // Probe discord-commands endpoint when selected plugin changes.
+  const probeCommands = useCallback(async (pluginId: string, status: string) => {
+    if (status !== "running") {
+      setHasCommands(false);
+      return;
+    }
+    try {
+      await apiGet(`/api/route/${pluginId}/discord-commands`);
+      setHasCommands(true);
+    } catch {
+      setHasCommands(false);
+    }
+  }, []);
+
   // Probe system-prompt endpoint when selected plugin changes.
   const probeSystemPrompt = useCallback(async (pluginId: string, status: string) => {
     if (status !== "running") {
@@ -159,8 +175,9 @@ export default function PluginSettings() {
       probePricing(selected.id, selected.status);
       probeTools(selected.id, selected.status);
       probeSystemPrompt(selected.id, selected.status);
+      probeCommands(selected.id, selected.status);
       // Reset to config tab if current tab won't be available.
-      if ((detailTab === "pricing" || detailTab === "tools" || detailTab === "system-prompt") && selected.status !== "running") {
+      if ((detailTab === "pricing" || detailTab === "tools" || detailTab === "system-prompt" || detailTab === "commands") && selected.status !== "running") {
         setDetailTab("config");
       }
       if (detailTab === "aliases" && !hasAliases) {
@@ -170,8 +187,9 @@ export default function PluginSettings() {
       setHasPricing(false);
       setHasTools(false);
       setHasSystemPrompt(false);
+      setHasCommands(false);
     }
-  }, [selected?.id, selected?.status, probePricing, probeTools, probeSystemPrompt]);
+  }, [selected?.id, selected?.status, probePricing, probeTools, probeSystemPrompt, probeCommands]);
 
   async function handleAction(action: () => Promise<void>) {
     setActionError("");
@@ -332,7 +350,7 @@ export default function PluginSettings() {
                   UNINSTALL
                 </button>
 
-                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), ...(hasSystemPrompt ? ["system-prompt"] : []), ...(!selected.image ? [] : ["logs"])] as DetailTab[]).map((tab) => (
+                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), ...(hasSystemPrompt ? ["system-prompt"] : []), ...(hasCommands ? ["commands"] : []), ...(!selected.image ? [] : ["logs"])] as DetailTab[]).map((tab) => (
                   <button
                     key={tab}
                     className={`plugin-action-btn${detailTab === tab ? " btn-active" : ""}`}
@@ -396,6 +414,12 @@ export default function PluginSettings() {
               )}
               {detailTab === "system-prompt" && (
                 <PluginSystemPrompt
+                  key={selected.id}
+                  pluginId={selected.id}
+                />
+              )}
+              {detailTab === "commands" && (
+                <PluginDiscordCommands
                   key={selected.id}
                   pluginId={selected.id}
                 />
