@@ -19,6 +19,8 @@ RUN apk add --no-cache curl tar \
 
 # ── Dev stage: hot reload with Air ──
 FROM golang:1.25-alpine AS dev
+ENV GOPRIVATE=github.com/antimatter-studios/*
+ENV GONOSUMCHECK=github.com/antimatter-studios/*
 
 RUN apk add --no-cache git
 RUN go install github.com/air-verse/air@latest
@@ -38,6 +40,8 @@ CMD ["air", "-c", ".air.toml"]
 
 # ── Build stage ──
 FROM golang:1.25-alpine AS builder
+ENV GOPRIVATE=github.com/antimatter-studios/*
+ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git
 WORKDIR /app
 COPY . .
