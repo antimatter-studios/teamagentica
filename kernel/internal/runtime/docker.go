@@ -173,7 +173,29 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	projectRoot := d.projectRoot()
 
 	var dataMount mount.Mount
-	if d.devMode && projectRoot != "" {
+	isWorkspaceManager := hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:manager")
+	if isWorkspaceManager {
+		// workspace:manager uses storage-volume's data dir as /data so volumes are at /data/volumes.
+		if d.devMode && projectRoot != "" {
+			hostVolume := filepath.Join(projectRoot, "data", "storage-volume")
+			localDir := filepath.Join("/data", "storage-volume")
+			if err := os.MkdirAll(localDir, 0o755); err != nil {
+				log.Printf("warning: create storage-volume dir: %v", err)
+			}
+			dataMount = mount.Mount{
+				Type:   mount.TypeBind,
+				Source: hostVolume,
+				Target: "/data",
+			}
+		} else {
+			dataMount = mount.Mount{
+				Type:   mount.TypeVolume,
+				Source: "teamagentica-data-storage-volume",
+				Target: "/data",
+			}
+		}
+		log.Printf("workspace:manager plugin %s using storage-volume data at /data", plugin.ID)
+	} else if d.devMode && projectRoot != "" {
 		// Dev mode: bind mount plugin data from host for persistence and visibility.
 		hostPluginData := filepath.Join(projectRoot, "data", plugin.ID)
 
@@ -203,8 +225,9 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	}
 
 	// Cross-mount the storage:volume plugin's data into workspace-aware plugins.
-	if hasCapabilityPrefix(plugin.GetCapabilities(), "ai:chat") ||
-		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:") {
+	// workspace:manager is excluded — it already has storage-volume data at /data.
+	if !isWorkspaceManager && (hasCapabilityPrefix(plugin.GetCapabilities(), "ai:chat") ||
+		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:")) {
 		if d.devMode && projectRoot != "" {
 			hostVolume := filepath.Join(projectRoot, "data", "storage-volume")
 			localDir := filepath.Join("/data", "storage-volume")
