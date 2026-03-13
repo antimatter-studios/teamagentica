@@ -284,6 +284,16 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		)
 	}
 
+	// Plugins with build:docker capability get access to the Docker socket.
+	if hasCapabilityPrefix(plugin.GetCapabilities(), "build:docker") {
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: "/var/run/docker.sock",
+			Target: "/var/run/docker.sock",
+		})
+		log.Printf("mounting docker.sock into plugin %s (build:docker capability)", plugin.ID)
+	}
+
 	hostCfg := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 		Mounts:        mounts,
