@@ -3,7 +3,7 @@ module github.com/antimatter-studios/teamagentica/plugins/infra-workspace-manage
 go 1.24
 
 require (
-	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v0.0.0
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/glebarez/sqlite v1.11.0
 	gorm.io/gorm v1.31.1
@@ -48,4 +48,3 @@ require (
 	modernc.org/sqlite v1.23.1 // indirect
 )
 
-replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk

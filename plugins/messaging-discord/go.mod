@@ -3,7 +3,7 @@ module github.com/antimatter-studios/teamagentica/plugins/messaging-discord
 go 1.25.0
 
 require (
-	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v0.0.0
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0
 	github.com/bwmarrin/discordgo v0.29.0
 )
 
@@ -13,4 +13,3 @@ require (
 	golang.org/x/sys v0.0.0-20201119102817-f84b799fce68 // indirect
 )
 
-replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk

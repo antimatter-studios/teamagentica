@@ -3,7 +3,7 @@ module github.com/antimatter-studios/teamagentica/plugins/infra-cron-scheduler
 go 1.22
 
 require (
-	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v0.0.0
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/uuid v1.6.0
 )
@@ -37,4 +37,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk
