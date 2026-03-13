@@ -57,6 +57,53 @@ type VisibleWhen struct {
 // Schema/ConfigSchema/WorkspaceSchema fields are used instead.
 type SchemaFunc func() map[string]interface{}
 
+// DiscordCommandOption describes a single option/argument for a Discord command or subcommand.
+type DiscordCommandOption struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Type        string `json:"type"`              // "string", "integer", "boolean"
+	Required    bool   `json:"required,omitempty"`
+}
+
+// DiscordSubcommand describes a subcommand within a Discord slash command.
+type DiscordSubcommand struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Endpoint    string                 `json:"endpoint"` // POST endpoint on this plugin
+	Options     []DiscordCommandOption `json:"options,omitempty"`
+}
+
+// DiscordCommand describes a slash command a plugin exposes to Discord bots.
+// Either Endpoint (leaf command) or Subcommands should be set, not both.
+type DiscordCommand struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Endpoint    string                 `json:"endpoint,omitempty"`   // for leaf commands
+	Options     []DiscordCommandOption `json:"options,omitempty"`    // for leaf commands
+	Subcommands []DiscordSubcommand    `json:"subcommands,omitempty"` // for grouped commands
+}
+
+// DiscordCommandResponse is returned by a plugin's discord command endpoint.
+type DiscordCommandResponse struct {
+	Type    string                 `json:"type"`              // "text" or "embed"
+	Content string                 `json:"content,omitempty"` // for type "text"
+	Embeds  []DiscordEmbedResponse `json:"embeds,omitempty"`  // for type "embed"
+}
+
+// DiscordEmbedResponse describes a single Discord embed.
+type DiscordEmbedResponse struct {
+	Title  string                    `json:"title,omitempty"`
+	Color  int                       `json:"color,omitempty"`
+	Fields []DiscordEmbedFieldResponse `json:"fields,omitempty"`
+}
+
+// DiscordEmbedFieldResponse describes a single field within a Discord embed.
+type DiscordEmbedFieldResponse struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline,omitempty"`
+}
+
 // Registration holds the plugin's self-description sent to the kernel on boot.
 type Registration struct {
 	ID           string                       `json:"id"`
@@ -69,6 +116,7 @@ type Registration struct {
 	Schema          map[string]interface{}       `json:"schema,omitempty"`
 	ConfigSchema    map[string]ConfigSchemaField `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{}       `json:"workspace_schema,omitempty"`
+	DiscordCommands []DiscordCommand             `json:"discord_commands,omitempty"`
 	SchemaFunc      SchemaFunc                   `json:"-"`
 }
 
@@ -468,6 +516,9 @@ func (c *Client) buildSchemaJSON() map[string]interface{} {
 	}
 	if c.registration.WorkspaceSchema != nil {
 		schema["workspace"] = c.registration.WorkspaceSchema
+	}
+	if len(c.registration.DiscordCommands) > 0 {
+		schema["discord_commands"] = c.registration.DiscordCommands
 	}
 	if len(schema) == 0 {
 		return nil
