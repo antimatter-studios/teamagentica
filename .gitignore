@@ -17,6 +17,13 @@ brand.env
 # Build artifacts (air dev + production binaries)
 **/build/
 
+# Go binaries at plugin root (created by go build ./...)
+plugins/network-webhook-ingress/network-webhook-ingress
+plugins/user-claude-terminal/user-claude-terminal
+plugins/user-codex-terminal/user-codex-terminal
+plugins/user-opencode-terminal/user-opencode-terminal
+plugins/user-vscode-server/user-vscode-server
+
 # Do not commit the persistent data directory
 data/
 kernel/data/
