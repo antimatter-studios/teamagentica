@@ -7,7 +7,7 @@ RUN npm install -g @anthropic-ai/claude-code \
 # ── Dev stage: hot reload with Air ──
 FROM golang:1.25-alpine AS dev
 
-RUN apk add --no-cache nodejs npm \
+RUN apk add --no-cache git nodejs npm \
     && go install github.com/air-verse/air@latest
 
 COPY --from=claude-installer /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
@@ -26,6 +26,7 @@ CMD ["air", "-c", ".air.toml"]
 
 # ── Build stage ──
 FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache git
 WORKDIR /app
 COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /agent-claude .

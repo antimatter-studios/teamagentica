@@ -15,6 +15,7 @@ CMD ["air", "-c", ".air.toml"]
 
 # -- Build stage --
 FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache git
 WORKDIR /app
 COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /infra-agent-relay .

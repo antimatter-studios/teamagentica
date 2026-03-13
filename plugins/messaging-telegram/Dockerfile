@@ -1,6 +1,7 @@
 # -- Dev stage: hot reload with Air --
 FROM golang:1.25-alpine AS dev
 
+RUN apk add --no-cache git
 RUN go install github.com/air-verse/air@latest
 
 WORKDIR /app
@@ -13,6 +14,7 @@ CMD ["air", "-c", ".air.toml"]
 
 # -- Build stage --
 FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache git
 WORKDIR /app
 COPY . .
 RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /messaging-telegram .
