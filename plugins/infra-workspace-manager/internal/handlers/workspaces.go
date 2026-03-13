@@ -110,13 +110,14 @@ func (h *Handler) ListEnvironments(c *gin.Context) {
 // --- Workspace CRUD ---
 
 type workspaceInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Environment string `json:"environment"`
-	Status      string `json:"status"`
-	Subdomain   string `json:"subdomain"`
-	URL         string `json:"url,omitempty"`
-	VolumeName  string `json:"volume_name"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Environment     string `json:"environment"`
+	EnvironmentName string `json:"environment_name,omitempty"`
+	Status          string `json:"status"`
+	Subdomain       string `json:"subdomain"`
+	URL             string `json:"url,omitempty"`
+	VolumeName      string `json:"volume_name"`
 }
 
 // ListWorkspaces returns all managed containers owned by this plugin.
@@ -133,6 +134,9 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 		return
 	}
 
+	// Cache environment display names to avoid redundant schema lookups.
+	envNames := make(map[string]string)
+
 	var workspaces []workspaceInfo
 	for _, mc := range containers {
 		ws := workspaceInfo{
@@ -145,6 +149,12 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 		// Enrich with workspace-manager-level data from local DB.
 		if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
 			ws.Environment = rec.EnvironmentID
+			if name, ok := envNames[rec.EnvironmentID]; ok {
+				ws.EnvironmentName = name
+			} else if schema := h.fetchWorkspaceSchema(rec.EnvironmentID); schema != nil {
+				ws.EnvironmentName = schema.DisplayName
+				envNames[rec.EnvironmentID] = schema.DisplayName
+			}
 		}
 		if mc.Subdomain != "" && h.baseDomain != "" {
 			ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)

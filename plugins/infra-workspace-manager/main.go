@@ -32,8 +32,39 @@ func main() {
 		ID:           pluginID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"workspace:manager"},
+		Capabilities: []string{"workspace:manager", "tool:workspace", "discord:command"},
 		Version:      pluginsdk.DevVersion("1.0.0"),
+		DiscordCommands: []pluginsdk.DiscordCommand{
+			{
+				Name:        "workspace",
+				Description: "Manage workspaces",
+				Subcommands: []pluginsdk.DiscordSubcommand{
+					{
+						Name:        "list",
+						Description: "List all workspaces with their current status",
+						Endpoint:    "/discord-command/workspace/list",
+					},
+					{
+						Name:        "create",
+						Description: "Create a new workspace",
+						Endpoint:    "/discord-command/workspace/create",
+						Options: []pluginsdk.DiscordCommandOption{
+							{Name: "name", Description: "Display name for the workspace", Type: "string", Required: true},
+							{Name: "environment", Description: "Environment type (e.g. vscode, claude) — defaults to first available", Type: "string"},
+						},
+					},
+					{
+						Name:        "rename",
+						Description: "Rename an existing workspace",
+						Endpoint:    "/discord-command/workspace/rename",
+						Options: []pluginsdk.DiscordCommandOption{
+							{Name: "workspace", Description: "Current workspace name", Type: "string", Required: true},
+							{Name: "name", Description: "New display name", Type: "string", Required: true},
+						},
+					},
+				},
+			},
+		},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"WORKSPACE_MANAGER_PORT": {Type: "number", Label: "Listen Port", Default: "8091", HelpText: "Port the workspace manager listens on"},
 			"PLUGIN_DEBUG":           {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed operations", Order: 99},
@@ -63,8 +94,9 @@ func main() {
 	// Base domain for constructing workspace URLs.
 	baseDomain := os.Getenv("TEAMAGENTICA_BASE_DOMAIN")
 
-	// Workspace directory — contains volumes/ subdirectory for workspace data.
-	workspaceDir := "/workspaces"
+	// Data dir is /data (storage-volume's data, cross-mounted by the kernel).
+	// Volumes live at /data/volumes/.
+	workspaceDir := "/data"
 	if err := os.MkdirAll(workspaceDir+"/volumes", 0755); err != nil {
 		log.Fatalf("failed to create workspace volumes dir: %v", err)
 	}
@@ -99,6 +131,19 @@ func main() {
 	// Volume management.
 	router.GET("/volumes", h.ListVolumes)
 	router.DELETE("/volumes/:name", h.DeleteVolume)
+
+	// Discord slash command handlers.
+	router.POST("/discord-command/workspace/list", h.DiscordCommandWorkspaceList)
+	router.POST("/discord-command/workspace/create", h.DiscordCommandWorkspaceCreate)
+	router.POST("/discord-command/workspace/rename", h.DiscordCommandWorkspaceRename)
+
+	// Tool interface for AI agents.
+	router.GET("/tools", h.Tools)
+	router.POST("/tool/list_environments", h.ToolListEnvironments)
+	router.POST("/tool/create_workspace", h.ToolCreateWorkspace)
+	router.POST("/tool/list_workspaces", h.ToolListWorkspaces)
+	router.POST("/tool/start_workspace", h.ToolStartWorkspace)
+	router.POST("/tool/rename_workspace", h.ToolRenameWorkspace)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
