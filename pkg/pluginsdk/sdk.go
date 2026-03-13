@@ -113,6 +113,7 @@ type Registration struct {
 	EventPort    int                          `json:"event_port,omitempty"`
 	Capabilities []string                     `json:"capabilities"`
 	Version      string                       `json:"version"`
+	Candidate    bool                         `json:"candidate,omitempty"` // true if running as a candidate container
 	Schema          map[string]interface{}       `json:"schema,omitempty"`
 	ConfigSchema    map[string]ConfigSchemaField `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{}       `json:"workspace_schema,omitempty"`
@@ -142,6 +143,7 @@ type Config struct {
 	TLSKey      string // TEAMAGENTICA_TLS_KEY
 	TLSCA       string // TEAMAGENTICA_TLS_CA
 	TLSEnabled  bool   // TEAMAGENTICA_TLS_ENABLED
+	Candidate   bool   // TEAMAGENTICA_CANDIDATE — true if running as a candidate container
 }
 
 // LoadConfig reads plugin SDK config from environment variables.
@@ -155,6 +157,7 @@ func LoadConfig() Config {
 		TLSKey:      os.Getenv("TEAMAGENTICA_TLS_KEY"),
 		TLSCA:       os.Getenv("TEAMAGENTICA_TLS_CA"),
 		TLSEnabled:  os.Getenv("TEAMAGENTICA_TLS_ENABLED") == "true",
+		Candidate:   os.Getenv("TEAMAGENTICA_CANDIDATE") == "true",
 	}
 }
 
@@ -203,6 +206,11 @@ func NewClient(cfg Config, reg Registration) *Client {
 
 	// Long timeout for data-plane calls (RouteToPlugin — AI agent chat can take 2+ min).
 	routeClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
+
+	// Auto-set candidate flag from config if not already set.
+	if cfg.Candidate {
+		reg.Candidate = true
+	}
 
 	return &Client{
 		config:       cfg,
@@ -1176,7 +1184,7 @@ func (c *Client) register() error {
 
 // heartbeat calls POST /api/plugins/heartbeat on the kernel.
 func (c *Client) heartbeat() error {
-	body, err := json.Marshal(map[string]string{"id": c.registration.ID})
+	body, err := json.Marshal(map[string]interface{}{"id": c.registration.ID, "candidate": c.registration.Candidate})
 	if err != nil {
 		return fmt.Errorf("marshal heartbeat: %w", err)
 	}

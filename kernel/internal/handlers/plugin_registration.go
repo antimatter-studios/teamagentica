@@ -50,12 +50,14 @@ type pluginSelfRegisterRequest struct {
 	EventPort    int                    `json:"event_port,omitempty"`
 	Capabilities []string               `json:"capabilities"`
 	Version      string                 `json:"version"`
+	Candidate    bool                   `json:"candidate,omitempty"` // true if this is a candidate container
 	ConfigSchema    map[string]interface{} `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{} `json:"workspace_schema,omitempty"`
 }
 
 type pluginHeartbeatRequest struct {
-	ID string `json:"id" binding:"required"`
+	ID        string `json:"id" binding:"required"`
+	Candidate bool   `json:"candidate,omitempty"`
 }
 
 type pluginDeregisterRequest struct {
@@ -80,6 +82,29 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 	}
 
 	now := time.Now()
+
+	// Candidate registration — update candidate fields only.
+	if req.Candidate {
+		updates := map[string]interface{}{
+			"candidate_host":        req.Host,
+			"candidate_port":        req.Port,
+			"candidate_event_port":  req.EventPort,
+			"candidate_healthy":     true,
+			"candidate_last_seen":   now,
+		}
+		h.db.Model(&plugin).Updates(updates)
+
+		h.Events.Emit(events.DebugEvent{
+			Type:     "register",
+			PluginID: req.ID,
+			Detail:   fmt.Sprintf("candidate host=%s port=%d", req.Host, req.Port),
+		})
+
+		c.JSON(http.StatusOK, gin.H{"message": "registered as candidate"})
+		return
+	}
+
+	// Primary registration.
 	updates := map[string]interface{}{
 		"host":       req.Host,
 		"http_port":  req.Port,
@@ -157,10 +182,17 @@ func (h *PluginHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	h.db.Model(&plugin).Updates(map[string]interface{}{
-		"last_seen": time.Now(),
-		"status":    "running",
-	})
+	if req.Candidate {
+		h.db.Model(&plugin).Updates(map[string]interface{}{
+			"candidate_last_seen": time.Now(),
+			"candidate_healthy":   true,
+		})
+	} else {
+		h.db.Model(&plugin).Updates(map[string]interface{}{
+			"last_seen": time.Now(),
+			"status":    "running",
+		})
+	}
 
 	h.Events.Emit(events.DebugEvent{
 		Type:     "heartbeat",
@@ -534,7 +566,15 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 		return
 	}
 
-	target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), plugin.Host, plugin.HTTPPort))
+	// Route to candidate if healthy, otherwise fall back to primary.
+	routeHost := plugin.Host
+	routePort := plugin.HTTPPort
+	if plugin.HasCandidate() && plugin.CandidateHealthy {
+		routeHost = plugin.CandidateHost
+		routePort = plugin.CandidatePort
+	}
+
+	target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), routeHost, routePort))
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	// Use mTLS transport if configured.

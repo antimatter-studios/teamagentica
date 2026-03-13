@@ -73,6 +73,7 @@ func (m *Monitor) Start(ctx context.Context) {
 
 func (m *Monitor) checkAll(ctx context.Context) {
 	m.checkPlugins(ctx)
+	m.checkCandidates(ctx)
 	m.checkManagedContainers(ctx)
 }
 
@@ -214,6 +215,27 @@ func (m *Monitor) setStatus(p *models.Plugin, status string) {
 	}
 	if err := m.db.Model(p).Update("status", status).Error; err != nil {
 		log.Printf("health monitor: update status for %s: %v", p.ID, err)
+	}
+}
+
+// checkCandidates marks candidates as unhealthy when heartbeats go stale (>90s).
+func (m *Monitor) checkCandidates(ctx context.Context) {
+	var plugins []models.Plugin
+	if err := m.db.Where("candidate_host != ''").Find(&plugins).Error; err != nil {
+		return
+	}
+
+	staleTimeout := 90 * time.Second
+	for i := range plugins {
+		p := &plugins[i]
+		if p.CandidateLastSeen.IsZero() {
+			continue
+		}
+		if time.Since(p.CandidateLastSeen) > staleTimeout && p.CandidateHealthy {
+			log.Printf("health monitor: candidate for %s heartbeat stale — marking unhealthy", p.ID)
+			m.db.Model(p).Update("candidate_healthy", false)
+			m.emitEvent(p.ID, "warning", "candidate heartbeat stale — traffic falling back to primary")
+		}
 	}
 }
 

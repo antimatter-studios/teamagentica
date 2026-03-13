@@ -25,6 +25,19 @@ type Plugin struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 
+	// Candidate fields — a dev or new-build container running alongside the primary.
+	CandidateContainerID string    `json:"-"`
+	CandidateHost        string    `json:"candidate_host,omitempty"`
+	CandidatePort        int       `json:"candidate_port,omitempty"`
+	CandidateEventPort   int       `json:"-"`
+	CandidateHealthy     bool      `json:"candidate_healthy,omitempty"`
+	CandidateDeployedAt  time.Time `json:"candidate_deployed_at,omitempty"`
+	CandidateLastSeen    time.Time `json:"-"`
+
+	// Previous fields — stored on promote so rollback can restore.
+	PreviousImage   string `json:"-"`
+	PreviousVersion string `json:"-"`
+
 	// WorkspaceSchema defines how to launch a workspace environment.
 	// Only present on plugins with the workspace:environment capability.
 	// Stored as JSON; see WorkspaceSchemaData for the typed structure.
@@ -46,6 +59,22 @@ type Plugin struct {
 // metadata (e.g. workspace environment definitions).
 func (p *Plugin) IsMetadataOnly() bool {
 	return p.Image == ""
+}
+
+// HasCandidate returns true when a candidate container is deployed.
+func (p *Plugin) HasCandidate() bool {
+	return p.CandidateHost != ""
+}
+
+// ClearCandidate resets all candidate fields.
+func (p *Plugin) ClearCandidate() {
+	p.CandidateContainerID = ""
+	p.CandidateHost = ""
+	p.CandidatePort = 0
+	p.CandidateEventPort = 0
+	p.CandidateHealthy = false
+	p.CandidateDeployedAt = time.Time{}
+	p.CandidateLastSeen = time.Time{}
 }
 
 // VisibleWhen describes a condition under which a field should be visible.
