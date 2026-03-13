@@ -3,7 +3,7 @@ module github.com/antimatter-studios/teamagentica/plugins/builtin-provider
 go 1.22
 
 require (
-	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0-00010101000000-000000000000
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0
 	github.com/gin-gonic/gin v1.10.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -35,4 +35,3 @@ require (
 	golang.org/x/text v0.15.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
 )
-

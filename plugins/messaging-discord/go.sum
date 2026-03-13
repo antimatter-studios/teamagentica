@@ -1,3 +1,5 @@
+github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0 h1:k6c37XZ59D2feZ538NrBYHTWjM52hYbmqoYgp+uifdA=
+github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0/go.mod h1:fX+MVzgr4iwVkz+4nhWz30S76G/yrgkpYV3nXP+1K5c=
 github.com/bwmarrin/discordgo v0.29.0 h1:FmWeXFaKUwrcL3Cx65c20bTRW+vOb6k8AnaP+EgjDno=
 github.com/bwmarrin/discordgo v0.29.0/go.mod h1:NJZpH+1AfhIcyQsPeuBKsUtYrRnjkyu0kIVMCHkZtRY=
 github.com/gorilla/websocket v1.4.2 h1:+/TMaTYc4QFitKJxsQ7Yye35DkWvkdLcvGKqM+x0Ufc=
