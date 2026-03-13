@@ -227,6 +227,11 @@ func main() {
 		pluginRegGroup.DELETE("/containers/:cid", pluginHandler.DeleteManagedContainer)
 		pluginRegGroup.POST("/containers/:cid/start", pluginHandler.StartManagedContainer)
 		pluginRegGroup.GET("/containers/:cid/logs", pluginHandler.GetManagedContainerLogs)
+
+		// Deploy/promote/rollback (plugin-callable for automation).
+		pluginRegGroup.POST("/:id/deploy", pluginHandler.DeployCandidate)
+		pluginRegGroup.POST("/:id/promote", pluginHandler.PromoteCandidate)
+		pluginRegGroup.POST("/:id/rollback", pluginHandler.RollbackCandidate)
 	}
 
 	// Admin managed-container routes.
