@@ -1,0 +1,15 @@
+id: infra-builder
+name: "Docker Builder"
+description: "Builds Docker images from source in storage-volume volumes"
+group: infrastructure
+version: "1.0.0"
+image: "teamagentica-infra-builder:latest"
+author: teamagentica
+tags: [system, build, docker, infrastructure]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed build output to the debug console"
+    order: 99

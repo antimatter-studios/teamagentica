@@ -22,6 +22,7 @@ plugins/network-webhook-ingress/network-webhook-ingress
 plugins/user-claude-terminal/user-claude-terminal
 plugins/user-codex-terminal/user-codex-terminal
 plugins/user-opencode-terminal/user-opencode-terminal
+plugins/infra-builder/infra-builder
 plugins/user-vscode-server/user-vscode-server
 
 # Do not commit the persistent data directory

@@ -1115,3 +1115,22 @@
     - ide
     - vscode
   version: 1.0.0
+- author: teamagentica
+  config_schema:
+    PLUGIN_DEBUG:
+        default: "false"
+        help_text: Enable debug logging
+        label: Debug Mode
+        order: 99
+        type: boolean
+  description: Builds Docker images from source in storage-volume volumes
+  group: infrastructure
+  id: infra-builder
+  image: teamagentica-infra-builder:latest
+  name: Docker Builder
+  tags:
+    - system
+    - build
+    - docker
+    - infrastructure
+  version: 1.0.0

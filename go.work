@@ -13,6 +13,7 @@ use (
 	./plugins/builtin-provider
 	./plugins/messaging-chat
 	./plugins/infra-mcp-server
+	./plugins/infra-builder
 	./plugins/infra-cost-explorer
 	./plugins/messaging-discord
 	./plugins/network-ngrok
