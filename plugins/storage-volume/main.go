@@ -38,8 +38,39 @@ func main() {
 		Name:         "Volume Storage",
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"storage:block", "storage:api"},
+		Capabilities: []string{"storage:block", "storage:api", "tool:storage", "discord:command"},
 		Version:      pluginsdk.DevVersion("1.0.0"),
+		DiscordCommands: []pluginsdk.DiscordCommand{
+			{
+				Name:        "volume",
+				Description: "Manage storage volumes",
+				Subcommands: []pluginsdk.DiscordSubcommand{
+					{
+						Name:        "list",
+						Description: "List all storage volumes with size and metadata",
+						Endpoint:    "/discord-command/volume/list",
+					},
+					{
+						Name:        "create",
+						Description: "Create a new storage volume",
+						Endpoint:    "/discord-command/volume/create",
+						Options: []pluginsdk.DiscordCommandOption{
+							{Name: "name", Description: "Volume name (alphanumeric, hyphens, underscores, dots)", Type: "string", Required: true},
+							{Name: "type", Description: "Volume type: auth or storage (default: storage)", Type: "string"},
+						},
+					},
+					{
+						Name:        "rename",
+						Description: "Rename an existing volume",
+						Endpoint:    "/discord-command/volume/rename",
+						Options: []pluginsdk.DiscordCommandOption{
+							{Name: "volume", Description: "Current volume name", Type: "string", Required: true},
+							{Name: "name", Description: "New volume name", Type: "string", Required: true},
+						},
+					},
+				},
+			},
+		},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"STORAGE_DATA_PATH":    {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Local filesystem path for volume storage", Order: 1},
 			"STORAGE_VOLUMES_PATH": {Type: "string", Label: "Volumes Path", Default: "/data/volumes", HelpText: "Path for namespace-isolated block storage volumes", Order: 2},
@@ -115,6 +146,11 @@ func main() {
 	router.GET("/volumes/:name", h.GetVolume)
 	router.GET("/volumes/:name/path", h.GetVolumePath)
 	router.DELETE("/volumes/:name", h.DeleteVolume)
+
+	// Discord slash command handlers.
+	router.POST("/discord-command/volume/list", h.DiscordCommandVolumeList)
+	router.POST("/discord-command/volume/create", h.DiscordCommandVolumeCreate)
+	router.POST("/discord-command/volume/rename", h.DiscordCommandVolumeRename)
 
 	// Tool interface for AI agents.
 	router.GET("/tools", h.Tools)

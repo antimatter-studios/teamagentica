@@ -146,42 +146,66 @@ func (h *Handler) CreateVolume(c *gin.Context) {
 }
 
 // ListVolumes handles GET /volumes.
+// Discovers volumes from both metadata files and on-disk directories,
+// so volumes created externally (e.g. by workspace-manager) are visible.
 func (h *Handler) ListVolumes(c *gin.Context) {
 	filterType := c.Query("type")
 
+	// Collect volumes with metadata.
+	seen := make(map[string]bool)
+	var volumes []VolumeDetail
+
 	metaDir := filepath.Join(h.dataPath, "meta")
-	entries, err := os.ReadDir(metaDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, gin.H{"volumes": []Volume{}})
-			return
+	if entries, err := os.ReadDir(metaDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			vol, err := h.loadVolumeMeta(name)
+			if err != nil {
+				log.Printf("[volumes] skip unreadable meta %s: %v", name, err)
+				continue
+			}
+			if filterType != "" && vol.Type != filterType {
+				continue
+			}
+			seen[name] = true
+			volumes = append(volumes, VolumeDetail{
+				Volume:    *vol,
+				SizeBytes: dirSize(h.volumeDataPath(name)),
+				Path:      h.volumeDataPath(name),
+			})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
 	}
 
-	var volumes []VolumeDetail
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	// Also scan the volumes directory for directories without metadata.
+	if dirEntries, err := os.ReadDir(h.volumesPath); err == nil {
+		for _, e := range dirEntries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || seen[e.Name()] {
+				continue
+			}
+			// Infer type from name convention; skip type filter for unmanaged volumes
+			// unless filtering for "storage" (the default type).
+			if filterType != "" && filterType != "storage" {
+				continue
+			}
+			info, _ := e.Info()
+			var createdAt time.Time
+			if info != nil {
+				createdAt = info.ModTime().UTC()
+			}
+			volumes = append(volumes, VolumeDetail{
+				Volume: Volume{
+					Name:      e.Name(),
+					Type:      "storage",
+					Labels:    map[string]string{},
+					CreatedAt: createdAt,
+				},
+				SizeBytes: dirSize(h.volumeDataPath(e.Name())),
+				Path:      h.volumeDataPath(e.Name()),
+			})
 		}
-		name := strings.TrimSuffix(e.Name(), ".json")
-		vol, err := h.loadVolumeMeta(name)
-		if err != nil {
-			log.Printf("[volumes] skip unreadable meta %s: %v", name, err)
-			continue
-		}
-
-		if filterType != "" && vol.Type != filterType {
-			continue
-		}
-
-		detail := VolumeDetail{
-			Volume:    *vol,
-			SizeBytes: dirSize(h.volumeDataPath(name)),
-			Path:      h.volumeDataPath(name),
-		}
-		volumes = append(volumes, detail)
 	}
 
 	if volumes == nil {
