@@ -262,12 +262,7 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 			mount.Mount{
 				Type:   mount.TypeBind,
 				Source: filepath.Join(projectRoot, "plugins", pluginDir),
-				Target: filepath.Join("/app/plugins", pluginDir),
-			},
-			mount.Mount{
-				Type:   mount.TypeBind,
-				Source: filepath.Join(projectRoot, "pkg", "pluginsdk"),
-				Target: "/app/pkg/pluginsdk",
+				Target: "/app",
 			},
 		)
 		log.Printf("dev mode: mounting source for plugin %s from %s", plugin.ID, filepath.Join(projectRoot, "plugins", pluginDir))
