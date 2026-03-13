@@ -178,9 +178,10 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	var req struct {
 		Name          string `json:"name" binding:"required"`
 		EnvironmentID string `json:"environment_id" binding:"required"`
-		VolumeName    string `json:"volume_name,omitempty"` // reuse existing volume
+		VolumeName    string `json:"volume_name,omitempty"`    // reuse existing volume
 		GitRepo       string `json:"git_repo,omitempty"`
 		GitRef        string `json:"git_ref,omitempty"`
+		PluginSource  string `json:"plugin_source,omitempty"` // plugin name whose source to bind-mount for dev editing
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -323,15 +324,16 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	// Subdomain uses only the random ID — permanent, never changes on rename.
 	subdomain := "ws-" + wsID
 	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
-		Name:        displayName,
-		Image:       ws.Image,
-		Port:        ws.Port,
-		Subdomain:   subdomain,
-		VolumeName:  volumeName,
-		ExtraMounts: ws.SharedMounts,
-		Env:         env,
-		Cmd:         cmd,
-		DockerUser:  ws.DockerUser,
+		Name:         displayName,
+		Image:        ws.Image,
+		Port:         ws.Port,
+		Subdomain:    subdomain,
+		VolumeName:   volumeName,
+		ExtraMounts:  ws.SharedMounts,
+		Env:          env,
+		Cmd:          cmd,
+		DockerUser:   ws.DockerUser,
+		PluginSource: req.PluginSource,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch workspace: " + err.Error()})

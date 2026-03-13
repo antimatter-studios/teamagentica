@@ -689,6 +689,7 @@ type CreateManagedContainerRequest struct {
 	Env           map[string]string `json:"env,omitempty"`
 	Cmd           []string          `json:"cmd,omitempty"`
 	DockerUser    string            `json:"docker_user,omitempty"`
+	PluginSource  string            `json:"plugin_source,omitempty"` // plugin name whose source to bind-mount for dev editing
 }
 
 // CreateManagedContainer asks the kernel to launch a managed container.

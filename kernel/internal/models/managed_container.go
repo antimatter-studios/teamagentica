@@ -32,6 +32,7 @@ type ManagedContainer struct {
 	Env           string    `json:"-" gorm:"type:text"`
 	Cmd           string    `json:"-" gorm:"type:text"` // JSON array of command args
 	DockerUser    string    `json:"-" gorm:"column:docker_user"`
+	PluginSource  string    `json:"plugin_source,omitempty" gorm:"column:plugin_source"` // plugin name whose source to bind-mount for dev editing
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

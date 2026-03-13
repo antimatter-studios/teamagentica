@@ -434,6 +434,29 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		}
 	}
 
+	// Plugin source mounting: bind-mount a plugin's source directory into the
+	// workspace so edits propagate to the plugin container via shared host dir.
+	if mc.PluginSource != "" {
+		projectRoot := d.projectRoot()
+		if d.devMode && projectRoot != "" {
+			pluginSrc := filepath.Join(projectRoot, "plugins", mc.PluginSource)
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: pluginSrc,
+				Target: "/plugin-source",
+			})
+			log.Printf("managed container %s: mounting plugin source %s at /plugin-source", mc.ID, mc.PluginSource)
+
+			// Share Go module + build caches so builds inside the workspace are fast.
+			goModVol := d.network + "-gomodcache"
+			goBuildVol := d.network + "-gobuildcache"
+			mounts = append(mounts,
+				mount.Mount{Type: mount.TypeVolume, Source: goModVol, Target: "/go/pkg/mod"},
+				mount.Mount{Type: mount.TypeVolume, Source: goBuildVol, Target: "/root/.cache/go-build"},
+			)
+		}
+	}
+
 	hostCfg := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: "no"},
 		Mounts:        mounts,
@@ -454,7 +477,7 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		return "", fmt.Errorf("start managed container %s: %w", containerName, err)
 	}
 
-	log.Printf("started managed container %s (image=%s, volume=%s, subdomain=%s)", mc.ID, mc.Image, mc.VolumeName, mc.Subdomain)
+	log.Printf("started managed container %s (image=%s, volume=%s, subdomain=%s, plugin_source=%s)", mc.ID, mc.Image, mc.VolumeName, mc.Subdomain, mc.PluginSource)
 	return resp.ID, nil
 }
 

@@ -33,6 +33,7 @@ func (h *Handler) Tools(c *gin.Context) {
 					"git_repo":       gin.H{"type": "string", "description": "Git repository URL to clone into the workspace"},
 					"git_ref":        gin.H{"type": "string", "description": "Git branch or tag to checkout after cloning"},
 					"volume_name":    gin.H{"type": "string", "description": "Reuse an existing volume instead of creating a new one"},
+					"plugin_source":  gin.H{"type": "string", "description": "Plugin name whose source to bind-mount into the workspace for dev editing (e.g. 'messaging-discord')"},
 				},
 				"required": []string{"name", "environment_id"},
 			},

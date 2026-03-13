@@ -31,6 +31,7 @@ type createManagedContainerRequest struct {
 	Env           map[string]string   `json:"env"`
 	Cmd           []string            `json:"cmd"`
 	DockerUser    string              `json:"docker_user"`
+	PluginSource  string              `json:"plugin_source"` // plugin name whose source to mount for dev editing
 }
 
 // --- helpers ---
@@ -86,6 +87,7 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 		Subdomain:     req.Subdomain,
 		VolumeName:    req.VolumeName,
 		DockerUser:    req.DockerUser,
+		PluginSource:  req.PluginSource,
 	}
 	mc.SetEnv(req.Env)
 	mc.SetCmd(req.Cmd)
