@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -67,6 +69,59 @@ func (h *Handler) Tools(c *gin.Context) {
 					"name":         gin.H{"type": "string", "description": "New display name for the workspace"},
 				},
 				"required": []string{"workspace_id", "name"},
+			},
+		},
+		{
+			"name":        "build_plugin",
+			"description": "Build a Docker image for a plugin from source in a storage volume. Requires the infra-builder plugin to be installed. Returns build status and image tag.",
+			"endpoint":    "/tool/build_plugin",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"volume":     gin.H{"type": "string", "description": "Storage volume name containing the plugin source code"},
+					"dockerfile": gin.H{"type": "string", "description": "Path to Dockerfile relative to volume root (default: 'Dockerfile')"},
+					"image":      gin.H{"type": "string", "description": "Image name (e.g. 'teamagentica-messaging-discord')"},
+					"tag":        gin.H{"type": "string", "description": "Image tag (default: timestamp-based)"},
+				},
+				"required": []string{"volume", "image"},
+			},
+		},
+		{
+			"name":        "deploy_plugin",
+			"description": "Deploy a candidate container for a plugin. The candidate runs alongside the primary — traffic routes to the candidate when healthy. Use promote_plugin or rollback_plugin afterwards.",
+			"endpoint":    "/tool/deploy_plugin",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"plugin_id": gin.H{"type": "string", "description": "Plugin ID to deploy a candidate for"},
+					"image":     gin.H{"type": "string", "description": "Docker image to deploy (for prod candidates)"},
+					"dev_mode":  gin.H{"type": "boolean", "description": "Use dev image with source mounts (for dev candidates)"},
+				},
+				"required": []string{"plugin_id"},
+			},
+		},
+		{
+			"name":        "promote_plugin",
+			"description": "Promote a candidate container to become the new primary. Stops the old primary.",
+			"endpoint":    "/tool/promote_plugin",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"plugin_id": gin.H{"type": "string", "description": "Plugin ID whose candidate to promote"},
+				},
+				"required": []string{"plugin_id"},
+			},
+		},
+		{
+			"name":        "rollback_plugin",
+			"description": "Stop a candidate container and revert traffic to the primary.",
+			"endpoint":    "/tool/rollback_plugin",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"plugin_id": gin.H{"type": "string", "description": "Plugin ID whose candidate to rollback"},
+				},
+				"required": []string{"plugin_id"},
 			},
 		},
 	}})
@@ -241,4 +296,115 @@ func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 
 	h.emitEvent("workspace:renamed", fmt.Sprintf(`{"id":"%s","name":"%s"}`, req.WorkspaceID, newDisplayName))
 	c.JSON(http.StatusOK, gin.H{"status": "renamed", "id": req.WorkspaceID, "name": newDisplayName})
+}
+
+// ToolBuildPlugin handles POST /tool/build_plugin.
+// Routes the build request to the infra-builder plugin via kernel proxy.
+func (h *Handler) ToolBuildPlugin(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	var req struct {
+		Volume     string `json:"volume" binding:"required"`
+		Dockerfile string `json:"dockerfile"`
+		Image      string `json:"image" binding:"required"`
+		Tag        string `json:"tag"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Find infra-builder plugin.
+	builders, err := h.sdk.SearchPlugins("build:docker")
+	if err != nil || len(builders) == 0 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "infra-builder plugin not available"})
+		return
+	}
+
+	// Forward build request to infra-builder.
+	payload := fmt.Sprintf(`{"volume":%q,"dockerfile":%q,"image":%q,"tag":%q}`,
+		req.Volume, req.Dockerfile, req.Image, req.Tag)
+
+	resp, err := h.sdk.RouteToPlugin(context.Background(), builders[0].ID, http.MethodPost, "/build", bytes.NewReader([]byte(payload)))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "build request failed: " + err.Error()})
+		return
+	}
+
+	// Forward the response as-is.
+	c.Data(http.StatusOK, "application/json", resp)
+}
+
+// ToolDeployPlugin handles POST /tool/deploy_plugin.
+func (h *Handler) ToolDeployPlugin(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	var req struct {
+		PluginID string `json:"plugin_id" binding:"required"`
+		Image    string `json:"image"`
+		DevMode  bool   `json:"dev_mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.sdk.DeployCandidate(context.Background(), req.PluginID, req.Image, req.DevMode); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "deploy failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "candidate deployed", "plugin_id": req.PluginID})
+}
+
+// ToolPromotePlugin handles POST /tool/promote_plugin.
+func (h *Handler) ToolPromotePlugin(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	var req struct {
+		PluginID string `json:"plugin_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.sdk.PromoteCandidate(context.Background(), req.PluginID); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "promote failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "candidate promoted", "plugin_id": req.PluginID})
+}
+
+// ToolRollbackPlugin handles POST /tool/rollback_plugin.
+func (h *Handler) ToolRollbackPlugin(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	var req struct {
+		PluginID string `json:"plugin_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.sdk.RollbackCandidate(context.Background(), req.PluginID); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "rollback failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "candidate rolled back", "plugin_id": req.PluginID})
 }

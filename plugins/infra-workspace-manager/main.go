@@ -144,6 +144,10 @@ func main() {
 	router.POST("/tool/list_workspaces", h.ToolListWorkspaces)
 	router.POST("/tool/start_workspace", h.ToolStartWorkspace)
 	router.POST("/tool/rename_workspace", h.ToolRenameWorkspace)
+	router.POST("/tool/build_plugin", h.ToolBuildPlugin)
+	router.POST("/tool/deploy_plugin", h.ToolDeployPlugin)
+	router.POST("/tool/promote_plugin", h.ToolPromotePlugin)
+	router.POST("/tool/rollback_plugin", h.ToolRollbackPlugin)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
