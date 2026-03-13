@@ -175,6 +175,9 @@ func main() {
 		pluginsGroup.GET("/:id/logs", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginLogs)
 		pluginsGroup.GET("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginConfig)
 		pluginsGroup.PUT("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.UpdatePluginConfig)
+		pluginsGroup.POST("/:id/deploy", middleware.RequireCapability("plugins:manage"), pluginHandler.DeployCandidate)
+		pluginsGroup.POST("/:id/promote", middleware.RequireCapability("plugins:manage"), pluginHandler.PromoteCandidate)
+		pluginsGroup.POST("/:id/rollback", middleware.RequireCapability("plugins:manage"), pluginHandler.RollbackCandidate)
 	}
 
 	// Marketplace routes (authenticated, plugins:manage).

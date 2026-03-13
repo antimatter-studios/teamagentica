@@ -307,6 +307,23 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	return resp.ID, nil
 }
 
+// StartCandidatePlugin starts a candidate container alongside the primary.
+// Uses the same logic as StartPlugin but with a "-candidate" container name suffix
+// so both containers can coexist on the same network.
+func (d *DockerRuntime) StartCandidatePlugin(ctx context.Context, plugin *models.Plugin, env map[string]string) (string, error) {
+	// Temporarily override the ID to get a different container name,
+	// then restore it. The container name becomes "teamagentica-plugin-{id}-candidate".
+	origID := plugin.ID
+	plugin.ID = origID + "-candidate"
+	defer func() { plugin.ID = origID }()
+
+	// Ensure the TEAMAGENTICA_PLUGIN_ID env var still uses the original ID
+	// so the candidate registers with the same plugin identity.
+	env["TEAMAGENTICA_PLUGIN_ID"] = origID
+
+	return d.StartPlugin(ctx, plugin, env)
+}
+
 // StopPlugin stops and removes a container but keeps its data volume.
 // If the container no longer exists (already removed/crashed), this is
 // treated as success — the container is already gone.
