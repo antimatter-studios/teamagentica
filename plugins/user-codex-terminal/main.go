@@ -17,20 +17,17 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "user-codex-terminal"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8090
 
 	var sdkClient *pluginsdk.Client
 	sdkClient = pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"workspace:environment"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		Schema: map[string]interface{}{
 			"config": map[string]pluginsdk.ConfigSchemaField{
 				"CODEX_APPROVAL_MODE": {
@@ -99,7 +96,7 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "ok",
-			"plugin":  pluginID,
+			"plugin":  manifest.ID,
 			"version": "1.0.0",
 		})
 	})

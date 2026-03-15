@@ -22,10 +22,7 @@ func main() {
 	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "agent-openai"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	port := 8081
 	if v := os.Getenv("AGENT_OPENAI_PORT"); v != "" {
@@ -35,11 +32,12 @@ func main() {
 	}
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         port,
-		Capabilities: []string{"ai:chat", "ai:chat:openai"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
+		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"OPENAI_BACKEND": {Type: "select", Label: "Backend", Default: "subscription", Options: []string{"subscription", "api_key"}, HelpText: "Choose how to authenticate with OpenAI", Order: 1},
 			"OPENAI_AUTH":    {Type: "oauth", Label: "Login with OpenAI", HelpText: "Authenticate with your OpenAI account to use Codex models", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "subscription"}, Order: 2},

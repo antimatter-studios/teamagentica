@@ -35,12 +35,13 @@ func main() {
 	hostname, _ := os.Hostname()
 
 	sdkCfg := pluginsdk.LoadConfig()
+	manifest := pluginsdk.LoadManifest()
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           sdkCfg.PluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         portInt,
-		Capabilities: []string{"marketplace:provider"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 	})
 
 	sdkClient.Start(context.Background())

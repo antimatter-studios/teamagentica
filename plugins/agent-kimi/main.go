@@ -20,19 +20,17 @@ func main() {
 	// Load SDK infrastructure config from env.
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "agent-kimi"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8081
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"ai:chat", "ai:chat:kimi"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
+		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"KIMI_API_KEY":   {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.moonshot.ai", Order: 1},
 			"KIMI_MODEL":     {Type: "select", Label: "Model", Default: "kimi-k2-turbo-preview", Dynamic: true, Order: 2},

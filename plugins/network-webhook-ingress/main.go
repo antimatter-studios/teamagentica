@@ -38,20 +38,17 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "network-webhook-ingress"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 9000
 	httpPort := defaultPort
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"webhook:ingress", "webhook:routing"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"WEBHOOK_INGRESS_PORT": {Type: "number", Label: "Listen Port", Default: "9000", HelpText: "Port the ingress listens on for external webhook traffic"},
 		},

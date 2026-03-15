@@ -17,20 +17,16 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "tool-seedance"
-	}
-
 	const defaultPort = 8081
 
 	sdkCfg := pluginsdk.LoadConfig()
+	manifest := pluginsdk.LoadManifest()
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"tool:video", "tool:video:seedance"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"SEEDANCE_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key from seedanceapi.org dashboard", Order: 1},
 			"SEEDANCE_MODEL":   {Type: "select", Label: "Model", Default: "seedance-2.0", Dynamic: true, Order: 2},

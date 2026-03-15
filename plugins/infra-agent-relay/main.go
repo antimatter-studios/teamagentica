@@ -367,6 +367,7 @@ func (r *relay) handleStatus(c *gin.Context) {
 
 func main() {
 	sdkCfg := pluginsdk.LoadConfig()
+	manifest := pluginsdk.LoadManifest()
 
 	port := 8081
 	if p := os.Getenv("PORT"); p != "" {
@@ -376,11 +377,11 @@ func main() {
 	}
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           "infra-agent-relay",
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         port,
-		Capabilities: []string{"infra:agent-relay"},
-		Version:      pluginsdk.DevVersion("0.1.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{},
 	})
 	r := newRelay(sdkClient)

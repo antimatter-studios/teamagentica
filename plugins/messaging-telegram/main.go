@@ -30,20 +30,17 @@ func main() {
 
 	// Determine hostname and plugin ID for registration.
 	hostname := getHostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "messaging-telegram"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const httpPort = 8443
 
 	// Create plugin SDK client for kernel registration + heartbeats.
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         httpPort,
-		Capabilities: []string{"messaging:telegram", "messaging:send", "messaging:receive"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"TELEGRAM_BOT_TOKEN":     {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Telegram bot token from @BotFather", Order: 1},
 			"TELEGRAM_MODE":          {Type: "select", Label: "Update Mode", Default: "poll", Options: []string{"poll", "webhook"}, HelpText: "How the bot receives messages from Telegram", Order: 2},
@@ -102,19 +99,23 @@ func main() {
 	}
 	kernelBaseURL := fmt.Sprintf("%s://%s:%s", scheme, sdkCfg.KernelHost, sdkCfg.KernelPort)
 
+	// Persistent data directory for bot state (known groups, etc.).
+	dataDir := "/data"
+	os.MkdirAll(dataDir, 0755)
+
 	// Create the Telegram bot.
 	kernelClient := kernel.NewClient(kernelBaseURL, sdkCfg.PluginToken, debug)
-	telegramBot, err := bot.New(rootCtx, telegramToken, kernelClient, pluginID,
-		allowedUsers, pollTimeout, debug, aliases)
+	telegramBot, err := bot.New(rootCtx, telegramToken, kernelClient, manifest.ID,
+		allowedUsers, pollTimeout, debug, aliases, dataDir)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}
 
-	telegramBot.SetRelayClient(relay.NewClient(sdkClient, pluginID))
+	telegramBot.SetRelayClient(relay.NewClient(sdkClient, manifest.ID))
 
 	// Set coordinator on relay if configured.
 	if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
-		setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+		setCoordinatorOnRelay(sdkClient, manifest.ID, coordAlias)
 	}
 
 	// Apply initial MESSAGE_BUFFER_MS from fetched config.
@@ -152,7 +153,7 @@ func main() {
 			}
 		}
 		if v, ok := detail.Config["COORDINATOR_ALIAS"]; ok {
-			setCoordinatorOnRelay(sdkClient, pluginID, v)
+			setCoordinatorOnRelay(sdkClient, manifest.ID, v)
 		}
 	}))
 
@@ -160,14 +161,14 @@ func main() {
 	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
 			log.Printf("Relay ready — re-sending coordinator assignment")
-			setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+			setCoordinatorOnRelay(sdkClient, manifest.ID, coordAlias)
 		}
 	}))
 
 	// When network-webhook-ingress broadcasts webhook:ready, send our route info.
 	sdkClient.OnEvent("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Received webhook:ready — sending route update to network-webhook-ingress")
-		sendRouteUpdate(sdkClient, pluginID, hostname, httpPort)
+		sendRouteUpdate(sdkClient, manifest.ID, hostname, httpPort)
 	}))
 
 	// When network-webhook-ingress sends us our full webhook URL, switch to webhook mode.

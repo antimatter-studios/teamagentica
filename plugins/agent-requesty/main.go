@@ -20,19 +20,17 @@ func main() {
 	// Load SDK infrastructure config from env.
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "agent-requesty"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8081
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"ai:chat", "ai:chat:requesty"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
+		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"REQUESTY_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://app.requesty.ai", Order: 1},
 			"REQUESTY_MODEL":  {Type: "select", Label: "Model", Default: "google/gemini-2.5-flash", Dynamic: true, Order: 2},

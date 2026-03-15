@@ -22,19 +22,16 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "infra-cron-scheduler"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8081
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"tool:scheduler"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"SCHEDULER_PORT": {Type: "number", Label: "Listen Port", Default: "8081", HelpText: "Port the scheduler listens on"},
 			"PLUGIN_DEBUG":   {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Enable debug logging", Order: 99},

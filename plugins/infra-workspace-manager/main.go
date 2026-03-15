@@ -21,19 +21,16 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "infra-workspace-manager"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8091
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"workspace:manager", "tool:workspace", "discord:command"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		DiscordCommands: []pluginsdk.DiscordCommand{
 			{
 				Name:        "workspace",

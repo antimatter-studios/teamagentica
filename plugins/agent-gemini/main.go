@@ -20,10 +20,7 @@ func main() {
 	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "agent-gemini"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	port := 8081
 	if v := os.Getenv("AGENT_GEMINI_PORT"); v != "" {
@@ -33,11 +30,12 @@ func main() {
 	}
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         port,
-		Capabilities: []string{"ai:chat", "ai:chat:gemini"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
+		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"GEMINI_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://aistudio.google.com/apikey", Order: 1},
 			"GEMINI_MODEL":   {Type: "select", Label: "Model", Default: "gemini-2.5-flash", Dynamic: true, Order: 2},

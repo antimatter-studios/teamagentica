@@ -31,20 +31,17 @@ func main() {
 	// Load SDK config from env and register with kernel.
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "storage-sss3"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8081
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Name:         "Object Storage",
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"storage:api", "storage:object", "tool:storage"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"S3_ENDPOINT":      {Type: "string", Label: "S3 Endpoint", Required: true, Default: "http://sss3:9000", HelpText: "S3-compatible endpoint URL", Order: 1},
 			"S3_BUCKET":        {Type: "string", Label: "Bucket Name", Required: true, Default: "teamagentica", HelpText: "S3 bucket name for storage", Order: 2},

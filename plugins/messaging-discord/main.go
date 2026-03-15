@@ -29,20 +29,17 @@ func main() {
 
 	// Determine hostname and plugin ID for registration.
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "messaging-discord"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const httpPort = 8092
 
 	// Create plugin SDK client for kernel registration + heartbeats.
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         httpPort,
-		Capabilities: []string{"messaging:discord", "messaging:send", "messaging:receive", "tool:discord"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"DISCORD_BOT_TOKEN": {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Discord bot token from developer portal", Order: 1},
 			"DISCORD_GUILD_ID":  {Type: "string", Label: "Guild ID", Required: true, HelpText: "Discord server ID for channel management tools", Order: 2},
@@ -96,7 +93,7 @@ func main() {
 	}
 
 	discordBot.SetSDK(sdkClient)
-	discordBot.SetRelayClient(relay.NewClient(sdkClient, pluginID))
+	discordBot.SetRelayClient(relay.NewClient(sdkClient, manifest.ID))
 
 	if guildID := pluginConfig["DISCORD_GUILD_ID"]; guildID != "" {
 		discordBot.SetGuildID(guildID)
@@ -104,7 +101,7 @@ func main() {
 
 	// Set coordinator on relay if configured.
 	if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
-		setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+		setCoordinatorOnRelay(sdkClient, manifest.ID, coordAlias)
 	}
 	if debug {
 		discordBot.SetDebug(true)
@@ -146,7 +143,7 @@ func main() {
 			}
 		}
 		if v, ok := detail.Config["COORDINATOR_ALIAS"]; ok {
-			setCoordinatorOnRelay(sdkClient, pluginID, v)
+			setCoordinatorOnRelay(sdkClient, manifest.ID, v)
 		}
 	}))
 
@@ -160,7 +157,7 @@ func main() {
 	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
 			log.Printf("Relay ready — re-sending coordinator assignment")
-			setCoordinatorOnRelay(sdkClient, pluginID, coordAlias)
+			setCoordinatorOnRelay(sdkClient, manifest.ID, coordAlias)
 		}
 	}))
 

@@ -22,10 +22,7 @@ func main() {
 	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "agent-claude"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	port := 8082
 	if v := os.Getenv("AGENT_CLAUDE_PORT"); v != "" {
@@ -35,11 +32,12 @@ func main() {
 	}
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         port,
-		Capabilities: []string{"ai:chat", "ai:chat:anthropic"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
+		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"CLAUDE_BACKEND":     {Type: "select", Label: "Backend", Default: "cli", Options: []string{"cli", "api_key"}, HelpText: "Choose how to interact with Claude", Order: 1},
 			"ANTHROPIC_API_KEY":  {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://console.anthropic.com/settings/keys", VisibleWhen: &pluginsdk.VisibleWhen{Field: "CLAUDE_BACKEND", Value: "api_key"}, Order: 2},

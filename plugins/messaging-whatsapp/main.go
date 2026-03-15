@@ -25,20 +25,17 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname := getHostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "messaging-whatsapp"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const httpPort = 8091
 
 	// Create plugin SDK client for kernel registration + heartbeats.
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         httpPort,
-		Capabilities: []string{"messaging:whatsapp"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"WHATSAPP_ACCESS_TOKEN":    {Type: "string", Label: "Access Token", Required: true, Secret: true, HelpText: "Permanent access token from Meta developer portal", Order: 1},
 			"WHATSAPP_PHONE_NUMBER_ID": {Type: "string", Label: "Phone Number ID", Required: true, HelpText: "WhatsApp Business phone number ID from Meta developer portal", Order: 2},
@@ -85,7 +82,7 @@ func main() {
 	wa := waClient.NewClient(accessToken, phoneNumberID, debug)
 
 	// Bot handler.
-	b := bot.NewBot(wa, kernelClient, pluginID, debug, aliases)
+	b := bot.NewBot(wa, kernelClient, manifest.ID, debug, aliases)
 	b.SetSDK(sdkClient)
 
 	router := gin.Default()
@@ -153,14 +150,14 @@ func main() {
 	sdkClient.OnEvent("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Received webhook:ready — sending route update to network-webhook-ingress")
 		payload := map[string]interface{}{
-			"plugin_id":   pluginID,
-			"prefix":      "/" + pluginID,
+			"plugin_id":   manifest.ID,
+			"prefix":      "/" + manifest.ID,
 			"target_host": hostname,
 			"target_port": httpPort,
 		}
 		data, _ := json.Marshal(payload)
 		sdkClient.ReportAddressedEvent("webhook:api:update", string(data), "network-webhook-ingress")
-		log.Printf("Sent webhook:api:update to network-webhook-ingress: prefix=/%s", pluginID)
+		log.Printf("Sent webhook:api:update to network-webhook-ingress: prefix=/%s", manifest.ID)
 	}))
 
 	// When network-webhook-ingress sends us our full webhook URL, log it.

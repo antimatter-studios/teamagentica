@@ -25,10 +25,7 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname := getHostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "messaging-chat"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const httpPort = 8092
 
@@ -50,11 +47,11 @@ func main() {
 
 	// Create plugin SDK client for kernel registration + heartbeats.
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         httpPort,
-		Capabilities: []string{"system:chat"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"DEFAULT_AGENT": {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator. Leave empty to require manual agent selection.", Order: 1},
 			"PLUGIN_DEBUG":  {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},

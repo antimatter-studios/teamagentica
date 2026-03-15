@@ -26,19 +26,16 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "network-ngrok"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 9100
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"tunnel:ngrok"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"NGROK_AUTHTOKEN":     {Type: "string", Label: "ngrok Auth Token", Required: true, Secret: true, HelpText: "Your ngrok authentication token from https://dashboard.ngrok.com"},
 			"NGROK_DOMAIN":        {Type: "string", Label: "Custom Domain", HelpText: "Optional static ngrok domain (e.g. my-app.ngrok-free.app). Leave empty for a random URL."},

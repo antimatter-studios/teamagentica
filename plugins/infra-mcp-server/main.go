@@ -26,20 +26,17 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 
 	hostname, _ := os.Hostname()
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "infra-mcp-server"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8081
 
 	// Create plugin SDK client and register with kernel.
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
-		Capabilities: []string{"mcp:server"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"MCP_SERVER_PORT": {Type: "number", Label: "Listen Port", Default: "8081", HelpText: "Port the MCP server listens on"},
 			"PLUGIN_DEBUG":    {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed MCP protocol traffic", Order: 99},
@@ -66,7 +63,7 @@ func main() {
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 
 	router := gin.Default()
-	h := handlers.NewHandler(pluginID, debug)
+	h := handlers.NewHandler(manifest.ID, debug)
 
 	// Register routes.
 	router.GET("/health", h.Health)

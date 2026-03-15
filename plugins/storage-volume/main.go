@@ -26,20 +26,17 @@ func main() {
 	// Load SDK config from env and register with kernel.
 	sdkCfg := pluginsdk.LoadConfig()
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "storage-volume"
-	}
+	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8090
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Name:         "Volume Storage",
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"storage:block", "storage:api", "tool:storage", "discord:command"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		DiscordCommands: []pluginsdk.DiscordCommand{
 			{
 				Name:        "volume",

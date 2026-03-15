@@ -17,20 +17,16 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	pluginID := os.Getenv("TEAMAGENTICA_PLUGIN_ID")
-	if pluginID == "" {
-		pluginID = "tool-stability"
-	}
-
 	const defaultPort = 8081
 
 	sdkCfg := pluginsdk.LoadConfig()
+	manifest := pluginsdk.LoadManifest()
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
-		ID:           pluginID,
+		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         defaultPort,
-		Capabilities: []string{"tool:image", "tool:image:stability"},
-		Version:      pluginsdk.DevVersion("1.0.0"),
+		Capabilities: manifest.Capabilities,
+		Version:      pluginsdk.DevVersion(manifest.Version),
 		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
 			"STABILITY_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.stability.ai — 25 free credits on signup", Order: 1},
 			"STABILITY_MODEL":  {Type: "select", Label: "Model", Default: "sd3-medium", Dynamic: true, Order: 2},
