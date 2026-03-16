@@ -26,7 +26,7 @@ func newTestHandler(t *testing.T) (*PluginHandler, *gorm.DB) {
 		&models.Plugin{},
 		&models.Event{},
 		&models.EventSubscription{},
-		&models.PluginConfig{},
+		&models.Config{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}

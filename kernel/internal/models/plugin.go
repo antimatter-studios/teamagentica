@@ -17,6 +17,7 @@ type Plugin struct {
 	HTTPPort     int       `json:"http_port"`
 	EventPort    int       `json:"event_port"` // ephemeral port for SDK event callbacks (0 = use HTTPPort)
 	Capabilities JSONStringList `json:"capabilities" gorm:"type:json"`
+	Dependencies JSONStringList `json:"dependencies,omitempty" gorm:"type:json"` // required capability strings
 	Marketplace  string    `json:"marketplace" gorm:"default:'local'"`
 	Enabled      bool      `json:"enabled" gorm:"default:false"`
 	System       bool      `json:"system" gorm:"default:false"` // system plugins are auto-installed and cannot be uninstalled
@@ -27,6 +28,8 @@ type Plugin struct {
 
 	// Candidate fields — a dev or new-build container running alongside the primary.
 	CandidateContainerID string    `json:"-"`
+	CandidateImage       string    `json:"candidate_image,omitempty"`
+	CandidateVersion     string    `json:"candidate_version,omitempty"`
 	CandidateHost        string    `json:"candidate_host,omitempty"`
 	CandidatePort        int       `json:"candidate_port,omitempty"`
 	CandidateEventPort   int       `json:"-"`
@@ -69,6 +72,8 @@ func (p *Plugin) HasCandidate() bool {
 // ClearCandidate resets all candidate fields.
 func (p *Plugin) ClearCandidate() {
 	p.CandidateContainerID = ""
+	p.CandidateImage = ""
+	p.CandidateVersion = ""
 	p.CandidateHost = ""
 	p.CandidatePort = 0
 	p.CandidateEventPort = 0
@@ -95,6 +100,7 @@ type ConfigSchemaField struct {
 	Dynamic     bool         `json:"dynamic,omitempty"`       // Fetch options at runtime from plugin
 	HelpText    string       `json:"help_text,omitempty"`     // Tooltip/description
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`  // Show only when another field matches a value
+	Order       int          `json:"order,omitempty"`         // Display order (lower = first)
 }
 
 // GetConfigSchema parses the ConfigSchema into a map of field name to ConfigSchemaField.
@@ -163,4 +169,17 @@ func (p *Plugin) GetCapabilities() []string {
 // SetCapabilities stores a string slice as capabilities.
 func (p *Plugin) SetCapabilities(caps []string) {
 	p.Capabilities = JSONStringList(caps)
+}
+
+// GetDependencies returns the required capabilities as a string slice.
+func (p *Plugin) GetDependencies() []string {
+	if p.Dependencies == nil {
+		return nil
+	}
+	return []string(p.Dependencies)
+}
+
+// SetDependencies stores required capability strings.
+func (p *Plugin) SetDependencies(deps []string) {
+	p.Dependencies = JSONStringList(deps)
 }

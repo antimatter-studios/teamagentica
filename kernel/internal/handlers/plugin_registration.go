@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,10 +50,15 @@ type pluginSelfRegisterRequest struct {
 	Port         int                    `json:"port"`
 	EventPort    int                    `json:"event_port,omitempty"`
 	Capabilities []string               `json:"capabilities"`
+	Dependencies *pluginDependencies    `json:"dependencies,omitempty"`
 	Version      string                 `json:"version"`
 	Candidate    bool                   `json:"candidate,omitempty"` // true if this is a candidate container
 	ConfigSchema    map[string]interface{} `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{} `json:"workspace_schema,omitempty"`
+}
+
+type pluginDependencies struct {
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type pluginHeartbeatRequest struct {
@@ -92,6 +98,9 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 			"candidate_healthy":     true,
 			"candidate_last_seen":   now,
 		}
+		if req.Version != "" {
+			updates["candidate_version"] = req.Version
+		}
 		h.db.Model(&plugin).Updates(updates)
 
 		h.Events.Emit(events.DebugEvent{
@@ -126,8 +135,44 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		updates["capabilities"] = plugin.Capabilities
 	}
 
-	// Schema is NOT stored in the DB — it's served live by the plugin on GET /schema.
-	// The kernel proxies schema requests to the running plugin at runtime.
+	if req.Dependencies != nil && len(req.Dependencies.Capabilities) > 0 {
+		plugin.SetDependencies(req.Dependencies.Capabilities)
+		updates["dependencies"] = plugin.Dependencies
+
+		// Auto-enable dependency plugins when a plugin registers with deps.
+		go func() {
+			var allEnabled []string
+			visited := map[string]bool{req.ID: true}
+			for _, cap := range req.Dependencies.Capabilities {
+				var allPlugins []models.Plugin
+				h.db.Find(&allPlugins)
+				for i := range allPlugins {
+					for _, c := range allPlugins[i].GetCapabilities() {
+						if c == cap {
+							if err := h.enablePlugin(context.Background(), &allPlugins[i], visited, &allEnabled); err != nil {
+								log.Printf("plugins: auto-enable dep %s for %s failed: %v", allPlugins[i].ID, req.ID, err)
+							}
+							break
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	// Cache schema sent at registration time so config/schema endpoints work
+	// even when the plugin is temporarily unreachable. The plugin always pushes
+	// its current schema on startup, keeping the cached version in sync.
+	if req.ConfigSchema != nil {
+		if data, err := json.Marshal(req.ConfigSchema); err == nil {
+			updates["config_schema"] = models.JSONRawString(data)
+		}
+	}
+	if req.WorkspaceSchema != nil {
+		if data, err := json.Marshal(req.WorkspaceSchema); err == nil {
+			updates["workspace_schema"] = models.JSONRawString(data)
+		}
+	}
 
 	h.db.Model(&plugin).Updates(updates)
 
@@ -566,15 +611,7 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 		return
 	}
 
-	// Route to candidate if healthy, otherwise fall back to primary.
-	routeHost := plugin.Host
-	routePort := plugin.HTTPPort
-	if plugin.HasCandidate() && plugin.CandidateHealthy {
-		routeHost = plugin.CandidateHost
-		routePort = plugin.CandidatePort
-	}
-
-	target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), routeHost, routePort))
+	target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), plugin.Host, plugin.HTTPPort))
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	// Use mTLS transport if configured.

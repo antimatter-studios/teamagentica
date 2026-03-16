@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +28,7 @@ import (
 // PluginHandler holds dependencies for plugin management endpoints.
 type PluginHandler struct {
 	db           *gorm.DB
-	runtime      *runtime.DockerRuntime
+	runtime      runtime.ContainerRuntime
 	cfg          *config.Config
 	clientTLS    *tls.Config
 	Events       *events.Hub
@@ -40,7 +42,7 @@ type PluginHandler struct {
 
 // NewPluginHandler creates a new PluginHandler.
 // clientTLS is optional; pass nil to disable mTLS for proxied requests.
-func NewPluginHandler(db *gorm.DB, rt *runtime.DockerRuntime, cfg *config.Config, clientTLS *tls.Config) *PluginHandler {
+func NewPluginHandler(db *gorm.DB, rt runtime.ContainerRuntime, cfg *config.Config, clientTLS *tls.Config) *PluginHandler {
 	return &PluginHandler{db: db, runtime: rt, cfg: cfg, clientTLS: clientTLS, Events: events.NewHub(), Subs: events.NewPersistentSubscriptionManager(db)}
 }
 
@@ -177,7 +179,7 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 	h.StopManagedContainersByPlugin(c.Request.Context(), id)
 
 	// Remove config entries.
-	h.db.Where("plugin_id = ?", id).Delete(&models.PluginConfig{})
+	h.db.Where("owner_id = ?", id).Delete(&models.Config{})
 
 	// Remove aliases owned by this plugin.
 	h.db.Where("plugin_id = ?", id).Delete(&models.Alias{})
@@ -212,74 +214,17 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 		return
 	}
 
-	// Metadata-only plugins have no runtime — just mark enabled.
-	if plugin.IsMetadataOnly() {
-		h.db.Model(&plugin).Updates(map[string]interface{}{
-			"status":  "enabled",
-			"enabled": true,
-		})
-		h.Events.Emit(events.DebugEvent{
-			Type:     "enable",
-			PluginID: id,
-			Detail:   "metadata-only plugin enabled",
-		})
-
-		if al := getAudit(c); al != nil {
-			userID, _ := c.Get("user_id")
-			uid, _ := userID.(uint)
-			al.LogUserAction(uid, "plugin.enable", "plugin:"+id, "", c.ClientIP(), true)
-		}
-
-		c.JSON(http.StatusOK, gin.H{"message": "plugin enabled (metadata-only)"})
-		return
-	}
-
-	if h.runtime == nil {
+	if h.runtime == nil && !plugin.IsMetadataOnly() {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
 		return
 	}
 
-	// Build env from config table.
-	env := h.buildEnv(id)
-
-	// Inject kernel host/port.
-	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
-
-	// Resolve image tag for dev mode.
-	plugin.Image = h.cfg.ResolveImage(plugin.Image)
-
-	// Pull image (non-fatal — image may be local-only).
-	if err := h.runtime.PullImage(c.Request.Context(), plugin.Image); err != nil {
-		h.Events.Emit(events.DebugEvent{
-			Type:     "warning",
-			PluginID: id,
-			Detail:   "image pull skipped (may be local): " + err.Error(),
-		})
-	}
-
-	containerID, err := h.runtime.StartPlugin(c.Request.Context(), &plugin, env)
-	if err != nil {
-		h.Events.Emit(events.DebugEvent{
-			Type:     "error",
-			PluginID: id,
-			Detail:   "start failed: " + err.Error(),
-		})
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start plugin: " + err.Error()})
+	var allEnabled []string
+	visited := map[string]bool{}
+	if err := h.enablePlugin(c.Request.Context(), &plugin, visited, &allEnabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enable plugin: " + err.Error()})
 		return
 	}
-
-	h.db.Model(&plugin).Updates(map[string]interface{}{
-		"container_id": containerID,
-		"status":       "running",
-		"enabled":      true,
-	})
-
-	h.Events.Emit(events.DebugEvent{
-		Type:     "enable",
-		PluginID: id,
-		Detail:   "container=" + containerID,
-	})
 
 	if al := getAudit(c); al != nil {
 		userID, _ := c.Get("user_id")
@@ -287,7 +232,99 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 		al.LogUserAction(uid, "plugin.enable", "plugin:"+id, "", c.ClientIP(), true)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "plugin enabled", "container_id": containerID})
+	c.JSON(http.StatusOK, gin.H{"message": "plugin enabled", "enabled": allEnabled})
+}
+
+// enablePlugin is the single enable path for both user-requested and
+// dependency plugins. The visited map prevents infinite dependency loops.
+func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin, visited map[string]bool, allEnabled *[]string) error {
+	if visited[plugin.ID] {
+		return nil
+	}
+	visited[plugin.ID] = true
+
+	// Already running with a live container — nothing to do.
+	// If enabled=true but container_id is empty, the container failed to start
+	// previously and we should retry rather than silently skip it.
+	if plugin.Enabled && plugin.ContainerID != "" {
+		return nil
+	}
+
+	// Recursively enable dependencies first.
+	for _, cap := range plugin.GetDependencies() {
+		var allPlugins []models.Plugin
+		h.db.Find(&allPlugins)
+		var dep *models.Plugin
+		for i := range allPlugins {
+			for _, c := range allPlugins[i].GetCapabilities() {
+				if c == cap {
+					dep = &allPlugins[i]
+					break
+				}
+			}
+			if dep != nil {
+				break
+			}
+		}
+		if dep == nil {
+			return fmt.Errorf("no installed plugin provides capability %q", cap)
+		}
+		if err := h.enablePlugin(ctx, dep, visited, allEnabled); err != nil {
+			return fmt.Errorf("dependency %s: %w", dep.ID, err)
+		}
+	}
+
+	// Metadata-only plugins have no runtime — just mark enabled.
+	if plugin.IsMetadataOnly() {
+		h.db.Model(plugin).Updates(map[string]interface{}{"status": "enabled", "enabled": true})
+		h.Events.Emit(events.DebugEvent{
+			Type:     "enable",
+			PluginID: plugin.ID,
+			Detail:   "metadata-only plugin enabled",
+		})
+		*allEnabled = append(*allEnabled, plugin.ID)
+		return nil
+	}
+
+	// Build env from config table.
+	env := h.buildEnv(plugin.ID)
+	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
+
+	// Pull image (non-fatal — image may be local-only).
+	if err := h.runtime.PullImage(ctx, plugin.Image); err != nil {
+		h.Events.Emit(events.DebugEvent{
+			Type:     "warning",
+			PluginID: plugin.ID,
+			Detail:   "image pull skipped (may be local): " + err.Error(),
+		})
+	}
+
+	containerID, err := h.runtime.StartPlugin(ctx, plugin, env)
+	if err != nil {
+		h.Events.Emit(events.DebugEvent{
+			Type:     "error",
+			PluginID: plugin.ID,
+			Detail:   "start failed: " + err.Error(),
+		})
+		return fmt.Errorf("start %s: %w", plugin.ID, err)
+	}
+
+	h.db.Model(plugin).Updates(map[string]interface{}{
+		"container_id": containerID,
+		"status":       "running",
+		"enabled":      true,
+	})
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "enable",
+		PluginID: plugin.ID,
+		Detail:   "container=" + containerID,
+	})
+
+	*allEnabled = append(*allEnabled, plugin.ID)
+	log.Printf("plugins: enabled %s (container=%s)", plugin.ID, containerID[:12])
+	return nil
 }
 
 // DisablePlugin handles POST /api/plugins/:id/disable.
@@ -384,9 +421,6 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
 	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
 
-	// Resolve image tag for dev mode.
-	plugin.Image = h.cfg.ResolveImage(plugin.Image)
-
 	h.Events.Emit(events.DebugEvent{
 		Type:     "start",
 		PluginID: id,
@@ -475,8 +509,8 @@ func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 		return
 	}
 
-	var configs []models.PluginConfig
-	h.db.Where("plugin_id = ?", id).Find(&configs)
+	var configs []models.Config
+	h.db.Where("owner_id = ?", id).Find(&configs)
 
 	result := make(map[string]string, len(configs))
 	for _, cfg := range configs {
@@ -499,22 +533,104 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 		return
 	}
 
-	var configs []models.PluginConfig
-	h.db.Where("plugin_id = ?", id).Find(&configs)
+	var configs []models.Config
+	h.db.Where("owner_id = ?", id).Find(&configs)
 
-	// Mask secrets.
+	// Build map of stored values.
+	stored := make(map[string]models.Config, len(configs))
+	for _, cfg := range configs {
+		stored[cfg.Key] = cfg
+	}
+
 	type configItem struct {
 		Key      string `json:"key"`
 		Value    string `json:"value"`
 		IsSecret bool   `json:"is_secret"`
+		Default  string `json:"default,omitempty"`
+		Label    string `json:"label,omitempty"`
+		Required bool   `json:"required,omitempty"`
+		ReadOnly bool   `json:"readonly,omitempty"`
 	}
-	var items []configItem
-	for _, cfg := range configs {
-		val := cfg.Value
-		if cfg.IsSecret {
-			val = "********"
+
+	// Use DB-cached schema (pushed by plugin on every startup) as primary source.
+	// Fall back to live fetch for plugins that predate schema caching.
+	schema, _ := plugin.GetConfigSchema()
+	if schema == nil && plugin.Status == "running" && plugin.Host != "" {
+		if schemaBody, err := h.fetchPluginSchema(plugin); err == nil {
+			var full struct {
+				Config map[string]models.ConfigSchemaField `json:"config"`
+			}
+			if json.Unmarshal(schemaBody, &full) == nil && full.Config != nil {
+				schema = full.Config
+			}
 		}
-		items = append(items, configItem{Key: cfg.Key, Value: val, IsSecret: cfg.IsSecret})
+	}
+
+	var items []configItem
+
+	if schema != nil {
+		// Enumerate all schema fields, merged with stored values.
+		// Skip readonly fields — they are internal, not user-settable.
+		// Sort by Order field to preserve logical grouping defined in the manifest.
+		type schemaEntry struct {
+			key   string
+			field models.ConfigSchemaField
+		}
+		entries := make([]schemaEntry, 0, len(schema))
+		for k, f := range schema {
+			entries = append(entries, schemaEntry{k, f})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].field.Order != entries[j].field.Order {
+				return entries[i].field.Order < entries[j].field.Order
+			}
+			return entries[i].key < entries[j].key
+		})
+
+		seen := make(map[string]bool, len(entries))
+		for _, e := range entries {
+			key, field := e.key, e.field
+			if field.ReadOnly {
+				continue
+			}
+			seen[key] = true
+			val := ""
+			isSecret := field.Secret
+			if cfg, ok := stored[key]; ok {
+				val = cfg.Value
+				if cfg.IsSecret {
+					val = "********"
+				}
+			}
+			items = append(items, configItem{
+				Key:      key,
+				Value:    val,
+				IsSecret: isSecret,
+				Default:  field.Default,
+				Label:    field.Label,
+				Required: field.Required,
+			})
+		}
+		// Include any stored values not present in schema.
+		for key, cfg := range stored {
+			if seen[key] {
+				continue
+			}
+			val := cfg.Value
+			if cfg.IsSecret {
+				val = "********"
+			}
+			items = append(items, configItem{Key: key, Value: val, IsSecret: cfg.IsSecret})
+		}
+	} else {
+		// No schema — fall back to stored values only.
+		for _, cfg := range configs {
+			val := cfg.Value
+			if cfg.IsSecret {
+				val = "********"
+			}
+			items = append(items, configItem{Key: cfg.Key, Value: val, IsSecret: cfg.IsSecret})
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"config": items})
@@ -562,18 +678,18 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 			continue
 		}
 
-		pc := models.PluginConfig{
-			PluginID: id,
+		pc := models.Config{
+			OwnerID:  id,
 			Key:      key,
 			Value:    entry.Value,
 			IsSecret: entry.IsSecret,
 		}
 		// Upsert: update if exists, create if not.
-		result := h.db.Where("plugin_id = ? AND key = ?", id, key).First(&models.PluginConfig{})
+		result := h.db.Where("owner_id = ? AND key = ?", id, key).First(&models.Config{})
 		if result.Error != nil {
 			h.db.Create(&pc)
 		} else {
-			h.db.Model(&models.PluginConfig{}).Where("plugin_id = ? AND key = ?", id, key).Updates(map[string]interface{}{
+			h.db.Model(&models.Config{}).Where("owner_id = ? AND key = ?", id, key).Updates(map[string]interface{}{
 				"value":     entry.Value,
 				"is_secret": entry.IsSecret,
 			})
@@ -629,7 +745,6 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 			env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
 			env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
 
-			plugin.Image = h.cfg.ResolveImage(plugin.Image)
 			containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
 			if err != nil {
 				h.db.Model(&plugin).Updates(map[string]interface{}{
@@ -705,7 +820,11 @@ func (h *PluginHandler) GetPluginSchema(c *gin.Context) {
 	}
 
 	if plugin.Status != "running" || plugin.Host == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin not running"})
+		msg := "plugin not running"
+		if plugin.Status == "running" && plugin.Host == "" {
+			msg = "plugin is starting — container is up but not yet registered with kernel"
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": msg})
 		return
 	}
 
@@ -789,12 +908,13 @@ func (h *PluginHandler) fetchPluginSchema(plugin models.Plugin) ([]byte, error) 
 
 // buildEnv reads PluginConfig rows for a plugin and returns them as a map.
 // Config defaults are handled by the plugin itself (it knows its own schema).
+
 func (h *PluginHandler) buildEnv(pluginID string) map[string]string {
 	var plugin models.Plugin
 	h.db.First(&plugin, "id = ?", pluginID)
 
-	var configs []models.PluginConfig
-	h.db.Where("plugin_id = ?", pluginID).Find(&configs)
+	var configs []models.Config
+	h.db.Where("owner_id = ?", pluginID).Find(&configs)
 
 	env := make(map[string]string, len(configs))
 	for _, cfg := range configs {
