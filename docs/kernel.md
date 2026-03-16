@@ -248,7 +248,6 @@ When `TEAMAGENTICA_MTLS_ENABLED=true` (default):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TEAMAGENTICA_JWT_SECRET` | **required** | JWT signing secret |
 | `APP_NAME` | `TeamAgentica` | Brand name |
 | `TEAMAGENTICA_KERNEL_HOST` | `0.0.0.0` | Bind host |
 | `TEAMAGENTICA_KERNEL_PORT` | `8080` | Bind port |
