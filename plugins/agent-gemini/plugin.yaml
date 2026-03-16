@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-agent-gemini:latest"
 author: teamagentica
 tags: [chat, ai, agent, gemini, google]
+dependencies: ["cost:tracking"]
 config_schema:
   GEMINI_API_KEY:
     type: string

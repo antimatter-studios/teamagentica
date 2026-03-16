@@ -95,8 +95,7 @@ func (h *Handler) Tools(c *gin.Context) {
 				"properties": gin.H{
 					"plugin_id": gin.H{"type": "string", "description": "Plugin ID to deploy a candidate for"},
 					"image":     gin.H{"type": "string", "description": "Docker image to deploy (for prod candidates)"},
-					"dev_mode":  gin.H{"type": "boolean", "description": "Use dev image with source mounts (for dev candidates)"},
-				},
+					},
 				"required": []string{"plugin_id"},
 			},
 		},
@@ -348,14 +347,13 @@ func (h *Handler) ToolDeployPlugin(c *gin.Context) {
 	var req struct {
 		PluginID string `json:"plugin_id" binding:"required"`
 		Image    string `json:"image"`
-		DevMode  bool   `json:"dev_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.sdk.DeployCandidate(context.Background(), req.PluginID, req.Image, req.DevMode); err != nil {
+	if err := h.sdk.DeployCandidate(context.Background(), req.PluginID, req.Image); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "deploy failed: " + err.Error()})
 		return
 	}

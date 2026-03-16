@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-messaging-telegram:latest"
 author: teamagentica
 tags: [chat, telegram, bot]
+dependencies: ["infra:agent-relay"]
 config_schema:
   TELEGRAM_BOT_TOKEN:
     type: string

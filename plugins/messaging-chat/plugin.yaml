@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-messaging-chat:latest"
 author: teamagentica
 tags: [system, chat, ui]
+dependencies: ["infra:agent-relay"]
 config_schema:
   DEFAULT_AGENT:
     type: select

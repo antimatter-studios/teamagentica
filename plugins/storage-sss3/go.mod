@@ -3,7 +3,7 @@ module github.com/antimatter-studios/teamagentica/plugins/storage-sss3
 go 1.24
 
 require (
-	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.1.0
 	github.com/aws/aws-sdk-go-v2 v1.41.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.11
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.5
@@ -48,3 +48,5 @@ require (
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk

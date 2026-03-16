@@ -6,3 +6,4 @@ version: "1.0.0"
 author: teamagentica
 image: teamagentica-user-codex-terminal:latest
 tags: [workspace:environment, terminal, codex, ai, openai]
+dependencies: ["workspace:manager"]

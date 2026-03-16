@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-messaging-whatsapp:latest"
 author: teamagentica
 tags: [chat, whatsapp, bot, messaging]
+dependencies: ["infra:agent-relay"]
 config_schema:
   WHATSAPP_ACCESS_TOKEN:
     type: string

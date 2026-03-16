@@ -2,16 +2,15 @@
 FROM golang:1.25-alpine AS dev
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
+ENV CGO_ENABLED=1
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git gcc musl-dev
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app
-
-COPY . .
-
-# The catalog.yaml file is pre-built on the host before starting.
-# It is bind-mounted into the container via the dev source mount.
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY plugins/builtin-provider/ plugins/builtin-provider/
+WORKDIR /build/plugins/builtin-provider
 
 RUN go mod download
 
@@ -22,24 +21,24 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
-RUN apk add --no-cache git
-WORKDIR /app
-COPY . .
-RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /builtin-provider .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /build-catalog ./cmd/build-catalog
-
-# Generate the catalog from all plugin.yaml manifests.
-RUN /build-catalog /app/plugins /catalog.yaml
+RUN apk add --no-cache git gcc musl-dev
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY plugins/builtin-provider/ plugins/builtin-provider/
+WORKDIR /build/plugins/builtin-provider
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /builtin-provider .
 
 # ── Prod stage ──
 FROM alpine:3.19 AS prod
 
 RUN apk add --no-cache ca-certificates \
-    && adduser -D -u 1000 appuser
+    && adduser -D -u 10001 teamagentica \
+    && mkdir -p /data && chown teamagentica:teamagentica /data
 
 COPY --from=builder /builtin-provider /usr/local/bin/builtin-provider
-COPY --from=builder /catalog.yaml /app/plugins/builtin-provider/catalog.yaml
 
-USER appuser
+RUN mkdir -p /usr/local/etc/teamagentica
+COPY plugins/builtin-provider/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+USER teamagentica
 EXPOSE 8083
 CMD ["builtin-provider"]

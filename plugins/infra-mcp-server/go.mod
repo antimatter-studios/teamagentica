@@ -3,7 +3,7 @@ module github.com/antimatter-studios/teamagentica/plugins/infra-mcp-server
 go 1.22
 
 require (
-	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.0.0
+	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.1.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/uuid v1.6.0
 )
@@ -36,3 +36,5 @@ require (
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk

@@ -6,3 +6,4 @@ version: "1.0.0"
 author: teamagentica
 image: teamagentica-user-opencode-terminal:latest
 tags: [workspace:environment, terminal, opencode, ai]
+dependencies: ["workspace:manager"]

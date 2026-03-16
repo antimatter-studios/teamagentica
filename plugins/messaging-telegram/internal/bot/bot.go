@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"net/http"
 	"strings"
@@ -36,6 +38,7 @@ type Bot struct {
 	aliases     *alias.AliasMap
 	relayClient *relay.Client
 	msgBuffer   *msgbuffer.Buffer
+	dataDir     string // persistent storage directory
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -47,11 +50,13 @@ type Bot struct {
 	pollStopCh    chan struct{}
 	shutdownCh    chan struct{}
 	shutdownOnce  sync.Once
+
+	knownGroups map[int64]bool // tracked group chat IDs
 }
 
 // New creates a new Bot instance and validates the token via GetMe().
 // The default agent must be set via the plugin config UI (config:update event).
-func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginID string, allowedUsers map[int64]bool, pollTimeout int, debug bool, aliases *alias.AliasMap) (*Bot, error) {
+func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginID string, allowedUsers map[int64]bool, pollTimeout int, debug bool, aliases *alias.AliasMap, dataDir string) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("creating telegram bot: %w", err)
@@ -74,11 +79,15 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		pollTimeout:  pollTimeout,
 		debug:        debug,
 		aliases:      aliases,
+		dataDir:      dataDir,
 		ctx:          childCtx,
 		cancel:       cancel,
 		pollStopCh:   make(chan struct{}),
 		shutdownCh:   make(chan struct{}),
+		knownGroups:  make(map[int64]bool),
 	}
+
+	b.loadKnownGroups()
 
 	b.msgBuffer = msgbuffer.New(1*time.Second, func(channelID string, text string, mediaURLs []string) {
 		chatID, _ := strconv.ParseInt(channelID, 10, 64)
@@ -130,6 +139,8 @@ func (b *Bot) StartPolling() {
 
 	b.emitEvent("poll_start", fmt.Sprintf("started polling with timeout=%ds", b.pollTimeout))
 	log.Println("Telegram bot is now running (long polling)")
+
+	b.sendStartupAnnouncement("Online and ready.")
 
 	b.wg.Add(1)
 	go func() {
@@ -452,6 +463,11 @@ func (b *Bot) registerCommands() {
 // handleMessage processes an incoming Telegram message.
 // Commands are handled immediately; all other messages are buffered per-chat.
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
+	// Track group chats for startup announcements.
+	if msg.Chat != nil && (msg.Chat.IsGroup() || msg.Chat.IsSuperGroup()) {
+		b.trackGroup(msg.Chat.ID)
+	}
+
 	// Ignore messages from bots.
 	if msg.From != nil && msg.From.IsBot {
 		if b.debug {
@@ -975,4 +991,107 @@ func splitMessage(text string, maxLen int) []string {
 	}
 
 	return chunks
+}
+
+// --- Known groups tracking & startup announcements ---
+
+const knownGroupsFile = "known_groups.json"
+
+// knownGroupsPath returns the path to the known groups JSON file.
+func (b *Bot) knownGroupsPath() string {
+	return filepath.Join(b.dataDir, knownGroupsFile)
+}
+
+// loadKnownGroups reads tracked group IDs from disk.
+func (b *Bot) loadKnownGroups() {
+	data, err := os.ReadFile(b.knownGroupsPath())
+	if err != nil {
+		return // file doesn't exist yet — that's fine
+	}
+	var ids []int64
+	if err := json.Unmarshal(data, &ids); err != nil {
+		log.Printf("[groups] failed to parse known_groups.json: %v", err)
+		return
+	}
+	for _, id := range ids {
+		b.knownGroups[id] = true
+	}
+	log.Printf("Loaded %d known group(s)", len(b.knownGroups))
+}
+
+// saveKnownGroups writes tracked group IDs to disk.
+func (b *Bot) saveKnownGroups() {
+	var ids []int64
+	for id := range b.knownGroups {
+		ids = append(ids, id)
+	}
+	data, _ := json.Marshal(ids)
+	if err := os.WriteFile(b.knownGroupsPath(), data, 0644); err != nil {
+		log.Printf("[groups] failed to save known_groups.json: %v", err)
+	}
+}
+
+// trackGroup records a group chat ID. Persists to disk if new.
+func (b *Bot) trackGroup(chatID int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.knownGroups[chatID] {
+		return
+	}
+	b.knownGroups[chatID] = true
+	log.Printf("[groups] tracking new group chat %d (total: %d)", chatID, len(b.knownGroups))
+	b.saveKnownGroups()
+}
+
+// sendStartupAnnouncement sends a status message to all known group chats.
+func (b *Bot) sendStartupAnnouncement(status string) {
+	b.mu.Lock()
+	groups := make([]int64, 0, len(b.knownGroups))
+	for id := range b.knownGroups {
+		groups = append(groups, id)
+	}
+	b.mu.Unlock()
+
+	if len(groups) == 0 {
+		log.Println("[announce] no known groups to announce to")
+		return
+	}
+
+	msg := b.buildStartupMessage(status)
+	sent := 0
+	for _, chatID := range groups {
+		tgMsg := tgbotapi.NewMessage(chatID, msg)
+		if _, err := b.api.Send(tgMsg); err != nil {
+			log.Printf("[announce] group %d: %v", chatID, err)
+			// If the bot was removed from the group, untrack it.
+			if strings.Contains(err.Error(), "Forbidden") || strings.Contains(err.Error(), "chat not found") {
+				b.mu.Lock()
+				delete(b.knownGroups, chatID)
+				b.saveKnownGroups()
+				b.mu.Unlock()
+				log.Printf("[announce] removed stale group %d", chatID)
+			}
+		} else {
+			sent++
+		}
+	}
+	log.Printf("[announce] sent to %d/%d group(s)", sent, len(groups))
+}
+
+// buildStartupMessage constructs the announcement text.
+func (b *Bot) buildStartupMessage(status string) string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("*%s*", status))
+
+	if !b.aliases.IsEmpty() {
+		var aliasNames []string
+		for _, entry := range b.aliases.List() {
+			aliasNames = append(aliasNames, "@"+entry.Alias)
+		}
+		lines = append(lines, fmt.Sprintf("Aliases: %s", strings.Join(aliasNames, ", ")))
+	}
+
+	lines = append(lines, "Commands: /help, /clear, /aliases")
+	lines = append(lines, "Send me a message to get started.")
+	return strings.Join(lines, "\n")
 }

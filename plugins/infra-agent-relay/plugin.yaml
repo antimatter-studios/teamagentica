@@ -6,6 +6,7 @@ version: "0.1.0"
 image: "teamagentica-infra-agent-relay:latest"
 author: teamagentica
 tags: [infra:agent-relay, infrastructure]
+capabilities: ["infra:agent-relay"]
 config_schema:
   PLUGIN_DEBUG:
     type: boolean

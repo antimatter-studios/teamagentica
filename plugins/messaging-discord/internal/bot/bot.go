@@ -34,6 +34,8 @@ type Bot struct {
 	msgBuffer    *msgbuffer.Buffer
 	callbacks    *channels.CallbackStore
 	cmdOwners    map[string]commandOwner // slash command name → owning plugin
+
+	disconnectedAt atomic.Int64 // unix timestamp of last disconnect (0 = never)
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -151,6 +153,8 @@ func (b *Bot) Start() error {
 	b.session.AddHandler(b.onReady)
 	b.session.AddHandler(b.onMessageCreate)
 	b.session.AddHandler(b.onInteraction)
+	b.session.AddHandler(b.onDisconnect)
+	b.session.AddHandler(b.onResumed)
 
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("opening discord connection: %w", err)
@@ -158,6 +162,29 @@ func (b *Bot) Start() error {
 
 	log.Println("Discord bot is now running")
 	return nil
+}
+
+// onDisconnect records when the bot loses connection.
+func (b *Bot) onDisconnect(s *discordgo.Session, d *discordgo.Disconnect) {
+	b.disconnectedAt.Store(time.Now().Unix())
+	log.Println("Discord connection lost")
+	b.emitEvent("disconnected", "websocket disconnected")
+}
+
+// onResumed fires when the bot reconnects after a disconnect.
+func (b *Bot) onResumed(s *discordgo.Session, r *discordgo.Resumed) {
+	disconnectedUnix := b.disconnectedAt.Swap(0)
+	if disconnectedUnix == 0 {
+		return
+	}
+	downtime := time.Since(time.Unix(disconnectedUnix, 0)).Round(time.Second)
+	log.Printf("Discord connection resumed after %v", downtime)
+	b.emitEvent("reconnected", fmt.Sprintf("resumed after %v", downtime))
+
+	// Announce reconnection if downtime was significant (>1 min).
+	if downtime > 1*time.Minute {
+		b.sendStartupAnnouncement(fmt.Sprintf("Back online after %v downtime.", downtime))
+	}
 }
 
 // Stop gracefully closes the Discord connection.
@@ -187,11 +214,73 @@ func (b *Bot) discoverCommandsWithRetry(appID string) {
 		owners := b.discoverAndRegisterCommands(appID)
 		if len(owners) > 0 {
 			b.cmdOwners = owners
+			b.sendStartupAnnouncement("Online and ready.")
 			return
 		}
 		log.Printf("Slash command discovery attempt %d/%d: no commands found", i+1, len(delays))
 	}
 	log.Printf("Slash command discovery gave up after %d attempts", len(delays))
+	// Still announce even if no commands were discovered.
+	b.sendStartupAnnouncement("Online and ready.")
+}
+
+// sendStartupAnnouncement posts a status message to all text channels in the guild.
+func (b *Bot) sendStartupAnnouncement(status string) {
+	if b.guildID == "" || b.session == nil {
+		return
+	}
+
+	channels, err := b.session.GuildChannels(b.guildID)
+	if err != nil {
+		log.Printf("startup announce: failed to fetch channels: %v", err)
+		return
+	}
+
+	msg := b.buildStartupMessage(status)
+	sent := 0
+	for _, ch := range channels {
+		if ch.Type != discordgo.ChannelTypeGuildText {
+			continue
+		}
+		if _, err := b.session.ChannelMessageSend(ch.ID, msg); err != nil {
+			log.Printf("startup announce: channel %s (%s): %v", ch.Name, ch.ID, err)
+		} else {
+			sent++
+		}
+	}
+	log.Printf("Startup announcement sent to %d channel(s)", sent)
+}
+
+// buildStartupMessage constructs the announcement text.
+func (b *Bot) buildStartupMessage(status string) string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("**%s**", status))
+
+	// List available slash commands.
+	if len(b.cmdOwners) > 0 {
+		cmds := make(map[string]bool)
+		for key := range b.cmdOwners {
+			parts := strings.SplitN(key, "/", 2)
+			cmds["/"+parts[0]] = true
+		}
+		var cmdList []string
+		for cmd := range cmds {
+			cmdList = append(cmdList, fmt.Sprintf("`%s`", cmd))
+		}
+		lines = append(lines, fmt.Sprintf("Slash commands: %s", strings.Join(cmdList, ", ")))
+	}
+
+	// List aliases if configured.
+	if !b.aliases.IsEmpty() {
+		var aliasNames []string
+		for _, entry := range b.aliases.List() {
+			aliasNames = append(aliasNames, "@"+entry.Alias)
+		}
+		lines = append(lines, fmt.Sprintf("Aliases: %s", strings.Join(aliasNames, ", ")))
+	}
+
+	lines = append(lines, "Mention me or use a slash command to get started.")
+	return strings.Join(lines, "\n")
 }
 
 // onMessageCreate handles incoming messages.

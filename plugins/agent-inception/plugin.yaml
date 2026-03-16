@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-agent-inception:latest"
 author: teamagentica
 tags: [chat, ai, agent, inception, mercury, diffusion, code]
+dependencies: ["cost:tracking"]
 config_schema:
   INCEPTION_API_KEY:
     type: string

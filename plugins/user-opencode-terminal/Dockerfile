@@ -6,9 +6,10 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app
-
-COPY . .
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY plugins/user-opencode-terminal/ plugins/user-opencode-terminal/
+WORKDIR /build/plugins/user-opencode-terminal
 
 RUN go mod download
 
@@ -20,18 +21,22 @@ FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
-WORKDIR /app
-COPY . .
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY plugins/user-opencode-terminal/ plugins/user-opencode-terminal/
+WORKDIR /build/plugins/user-opencode-terminal
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /user-opencode-terminal .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod
 
 RUN apk add --no-cache ca-certificates \
-    && adduser -D -u 1000 appuser
+    && adduser -D -u 10001 teamagentica
 
 COPY --from=builder /user-opencode-terminal /usr/local/bin/user-opencode-terminal
 
-USER appuser
+RUN mkdir -p /usr/local/etc/teamagentica
+COPY plugins/user-opencode-terminal/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+USER teamagentica
 EXPOSE 8090
 CMD ["user-opencode-terminal"]

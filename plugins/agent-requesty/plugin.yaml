@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-agent-requesty:latest"
 author: teamagentica
 tags: [chat, ai, agent, requesty, router]
+dependencies: ["cost:tracking"]
 config_schema:
   REQUESTY_API_KEY:
     type: string

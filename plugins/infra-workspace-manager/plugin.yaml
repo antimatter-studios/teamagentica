@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-infra-workspace-manager:latest"
 author: teamagentica
 tags: [workspace:manager, infrastructure]
+capabilities: ["workspace:manager"]
 config_schema:
   PLUGIN_DEBUG:
     type: boolean

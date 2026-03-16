@@ -6,3 +6,4 @@ version: "1.0.0"
 author: teamagentica
 image: teamagentica-user-claude-terminal:latest
 tags: [workspace:environment, terminal, claude, ai]
+dependencies: ["workspace:manager"]

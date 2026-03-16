@@ -385,7 +385,7 @@ func (h *Handler) Chat(c *gin.Context) {
 	}
 }
 
-// emitUsage sends a usage report via the SDK for guaranteed delivery to infra-cost-explorer.
+// emitUsage sends a usage report via the SDK for guaranteed delivery to infra-cost-tracking.
 func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, totalTokens, cachedTokens int, durationMs int64, userID string) {
 	if h.sdk == nil {
 		return

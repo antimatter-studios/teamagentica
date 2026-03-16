@@ -6,3 +6,4 @@ version: "1.0.0"
 author: teamagentica
 image: teamagentica-user-vscode-server:latest
 tags: [workspace:environment, editor, ide, vscode]
+dependencies: ["workspace:manager"]

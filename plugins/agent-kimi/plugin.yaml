@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-agent-kimi:latest"
 author: teamagentica
 tags: [chat, ai, agent, kimi, moonshot]
+dependencies: ["cost:tracking"]
 config_schema:
   KIMI_API_KEY:
     type: string

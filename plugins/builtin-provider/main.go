@@ -10,20 +10,22 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/builtin-provider/internal/catalog"
+	"github.com/antimatter-studios/teamagentica/plugins/builtin-provider/internal/store"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Load the pre-built catalog file.
-	catalogPath := os.Getenv("CATALOG_PATH")
-	if catalogPath == "" {
-		catalogPath = "/app/plugins/builtin-provider/catalog.yaml"
+	// Open the catalog database.
+	dbPath := os.Getenv("CATALOG_DB")
+	if dbPath == "" {
+		dbPath = "/data/catalog.db"
 	}
-	if err := catalog.LoadFile(catalogPath); err != nil {
-		log.Printf("warning: failed to load catalog from %s: %v", catalogPath, err)
+	catalog, err := store.Open(dbPath)
+	if err != nil {
+		log.Fatalf("failed to open catalog db: %v", err)
 	}
+	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
 
 	port := os.Getenv("PROVIDER_PORT")
 	if port == "" {
@@ -52,13 +54,57 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// Browse catalog — returns entries for marketplace UI.
 	r.GET("/plugins", func(c *gin.Context) {
 		q := c.Query("q")
 		results := catalog.Search(q)
+		if results == nil {
+			results = []store.Entry{}
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"plugins": results,
-			"groups":  catalog.Groups,
+			"groups":  store.Groups,
 		})
+	})
+
+	// Full manifest for install — returns everything from plugin.yaml.
+	r.GET("/plugins/:id/manifest", func(c *gin.Context) {
+		id := c.Param("id")
+		manifest, ok := catalog.GetManifest(id)
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found: " + id})
+			return
+		}
+		c.JSON(http.StatusOK, manifest)
+	})
+
+	// Submit a plugin manifest — upserts by plugin_id + version.
+	r.POST("/manifests", func(c *gin.Context) {
+		var data map[string]interface{}
+		if err := c.ShouldBindJSON(&data); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		pluginID, _ := data["id"].(string)
+		if pluginID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "manifest must have an 'id' field"})
+			return
+		}
+
+		version, _ := data["version"].(string)
+		if version == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "manifest must have a 'version' field"})
+			return
+		}
+
+		if err := catalog.Upsert(pluginID, version, data); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store manifest: " + err.Error()})
+			return
+		}
+
+		log.Printf("catalog: upserted %s@%s", pluginID, version)
+		c.JSON(http.StatusOK, gin.H{"message": "manifest stored", "plugin_id": pluginID, "version": version})
 	})
 
 	server := &http.Server{

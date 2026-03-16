@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-agent-openrouter:latest"
 author: teamagentica
 tags: [chat, ai, agent, openrouter, router]
+dependencies: ["cost:tracking"]
 config_schema:
   OPENROUTER_API_KEY:
     type: string

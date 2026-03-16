@@ -6,6 +6,7 @@ version: "1.0.0"
 image: "teamagentica-agent-openai:latest"
 author: teamagentica
 tags: [chat, ai, agent, codex]
+dependencies: ["cost:tracking"]
 config_schema:
   OPENAI_BACKEND:
     type: select
