@@ -1,0 +1,23 @@
+{
+  "name": "@teamagentica/security-testing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:auth": "vitest run src/auth/",
+    "test:fuzz": "vitest run src/fuzzing/",
+    "test:injection": "vitest run src/injection/",
+    "test:enum": "vitest run src/enumeration/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@teamagentica/api-client": "file:../packages/api-client"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
