@@ -28,15 +28,13 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o kernel .
 # ── Prod stage ──
 FROM alpine:3.19 AS prod
 
-RUN apk add --no-cache ca-certificates \
-    && adduser -D -u 1000 appuser
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 COPY --from=builder /app/kernel .
 
-RUN mkdir -p /data && chown appuser:appuser /data
+RUN mkdir -p /data
 
-USER appuser
 EXPOSE 8080
 
 ENTRYPOINT ["./kernel"]

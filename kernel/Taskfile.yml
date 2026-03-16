@@ -1,71 +1,69 @@
 version: '3'
 
-vars:
-  BINARY_NAME: kernel
-  BUILD_DIR: ./build
-
 tasks:
-  default:
-    desc: Show available tasks
-    cmds:
-      - task --list
-
-  dev:
-    desc: Run in dev mode with hot reload (Air)
-    env:
-      TEAMAGENTICA_JWT_SECRET: dev-secret-change-me
-      TEAMAGENTICA_DB_PATH: ./dev.db
-    cmds:
-      - air
-
   build:
-    desc: Build production binary
+    desc: Build production kernel image via Docker Compose
     cmds:
-      - mkdir -p {{.BUILD_DIR}}
-      - CGO_ENABLED=1 go build -ldflags="-s -w" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
-    sources:
-      - "**/*.go"
-      - go.mod
-      - go.sum
-    generates:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+      - docker compose -f docker-compose.yml --profile prod build
 
-  run:
-    desc: Run production binary
-    deps: [build]
+  start:
+    desc: Start production kernel container
     cmds:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+      - docker compose -f docker-compose.yml --profile prod up -d
+
+  stop:
+    desc: Stop production kernel container
+    cmds:
+      - docker compose -f docker-compose.yml --profile prod down
+
+  restart:
+    desc: Restart production kernel container
+    cmds:
+      - task: stop
+      - task: start
+
+  logs:
+    desc: Follow kernel container logs
+    cmds:
+      - docker compose -f docker-compose.yml logs -f
+
+  dev:build:
+    desc: Build dev kernel image via Docker Compose
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev build
+
+  dev:start:
+    desc: Start dev kernel container (hot reload with Air)
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev up -d
+
+  dev:stop:
+    desc: Stop dev kernel container
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev down
+
+  dev:restart:
+    desc: Restart dev kernel container
+    cmds:
+      - task: dev:stop
+      - task: dev:start
+
+  dev:logs:
+    desc: Follow dev kernel container logs
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev logs -f
 
   test:
-    desc: Run tests
+    desc: Run tests inside container
     cmds:
-      - go test ./... -v
+      - docker compose -f docker-compose.yml --profile dev run --rm --no-deps kernel-dev go test ./... -v
 
   lint:
-    desc: Run linter
+    desc: Run linter inside container
     cmds:
-      - golangci-lint run ./...
+      - docker compose -f docker-compose.yml --profile dev run --rm --no-deps kernel-dev golangci-lint run ./...
 
   clean:
     desc: Clean build artifacts
     cmds:
-      - rm -rf {{.BUILD_DIR}} dev.db
-
-  migrate:
-    desc: Run database migrations (auto-migrate on startup)
-    env:
-      TEAMAGENTICA_JWT_SECRET: dev-secret-change-me
-      TEAMAGENTICA_DB_PATH: ./dev.db
-    cmds:
-      - echo "Migrations run automatically on startup via GORM AutoMigrate"
-
-  docker:build:
-    desc: Build Docker image
-    cmds:
-      - docker build -t teamagentica-kernel:latest .
-
-  docker:run:
-    desc: Run Docker container
-    deps: [docker:build]
-    cmds:
-      - docker run -p 8080:8080 -e TEAMAGENTICA_JWT_SECRET=change-me teamagentica-kernel:latest
+      - rm -rf ./build

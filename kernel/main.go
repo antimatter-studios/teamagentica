@@ -7,14 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/kernel/internal/audit"
-	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/certs"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/config"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
@@ -23,6 +21,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/kernel/internal/middleware"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/orchestrator"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime/runtimecfg"
 )
 
 const version = "0.1.0"
@@ -31,12 +30,12 @@ func main() {
 	cfg := config.Load()
 
 	// Ensure kernel data subdirectory exists.
-	kernelDataDir := filepath.Join(cfg.DataDir, "kernel")
+	// The kernel container always has its data at /data (bind-mounted from DataDir on the host).
+	kernelDataDir := "/data/kernel"
 	if err := os.MkdirAll(kernelDataDir, 0o755); err != nil {
 		log.Fatalf("failed to create kernel data dir: %v", err)
 	}
 
-	auth.InitJWT(cfg.JWTSecret)
 	database.Init(cfg.DBPath)
 
 	// SQLite online backups.
@@ -145,8 +144,14 @@ func main() {
 		extUserGroup.DELETE("/:id", extUserHandler.Delete)
 	}
 
+	// Load runtime config (dev vs prod mounts, env vars, etc.).
+	rtCfg, err := runtimecfg.Load()
+	if err != nil {
+		log.Fatalf("failed to load runtime config: %v", err)
+	}
+
 	// Docker runtime (gracefully degrades if Docker unavailable).
-	dockerRT, err := runtime.NewDockerRuntime(cfg.DockerNetwork, certManager, cfg.DevMode, cfg.BaseDomain)
+	dockerRT, err := runtime.NewDockerRuntime(cfg.DockerNetwork, cfg.DataDir, certManager, rtCfg, cfg.BaseDomain)
 	if err != nil {
 		log.Fatalf("failed to init docker runtime: %v", err)
 	}
@@ -188,8 +193,11 @@ func main() {
 		marketplaceGroup.GET("/providers", marketplaceHandler.ListProviders)
 		marketplaceGroup.POST("/providers", marketplaceHandler.AddProvider)
 		marketplaceGroup.DELETE("/providers/:id", marketplaceHandler.DeleteProvider)
+		marketplaceGroup.GET("/providers/:name/plugins", marketplaceHandler.ProviderPlugins)
 		marketplaceGroup.GET("/plugins", marketplaceHandler.BrowsePlugins)
+		marketplaceGroup.POST("/manifests", marketplaceHandler.SubmitManifest)
 		marketplaceGroup.POST("/install", marketplaceHandler.InstallPlugin)
+		marketplaceGroup.POST("/upgrade", marketplaceHandler.UpgradePlugin)
 	}
 
 	// Alias routes — read available to plugin tokens, mutations require admin.
@@ -229,9 +237,9 @@ func main() {
 		pluginRegGroup.GET("/containers/:cid/logs", pluginHandler.GetManagedContainerLogs)
 
 		// Deploy/promote/rollback (plugin-callable for automation).
-		pluginRegGroup.POST("/:id/deploy", pluginHandler.DeployCandidate)
-		pluginRegGroup.POST("/:id/promote", pluginHandler.PromoteCandidate)
-		pluginRegGroup.POST("/:id/rollback", pluginHandler.RollbackCandidate)
+		pluginRegGroup.POST("/deploy/:id", pluginHandler.DeployCandidate)
+		pluginRegGroup.POST("/promote/:id", pluginHandler.PromoteCandidate)
+		pluginRegGroup.POST("/rollback/:id", pluginHandler.RollbackCandidate)
 	}
 
 	// Admin managed-container routes.

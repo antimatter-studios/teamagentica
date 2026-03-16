@@ -1,0 +1,47 @@
+plugin_env:
+  GOMODCACHE: /go/pkg/mod
+  GOCACHE: /root/.cache/go-build
+  GOWORK: /pkg/pluginsdk/go.work
+
+data_mount:
+  type: bind
+  source: "${DATA_DIR}/${PLUGIN_ID}"
+  workspace_manager_source: "${DATA_DIR}/storage-volume"
+
+storage_cross_mount:
+  type: bind
+  source: "${DATA_DIR}/storage-volume"
+
+plugin_mounts:
+  - type: bind
+    source: "${PROJECT_ROOT}/plugins/${PLUGIN_DIR}"
+    target: /app
+  - type: bind
+    source: "${PROJECT_ROOT}/pkg/pluginsdk"
+    target: /pkg/pluginsdk
+    readonly: true
+  - type: volume
+    source: "${NETWORK}-gomodcache"
+    target: /go/pkg/mod
+  - type: volume
+    source: "${NETWORK}-gobuildcache"
+    target: /root/.cache/go-build
+
+managed_volume_mount:
+  type: bind
+  source: "${DATA_DIR}/storage-volume/volumes/${VOLUME_NAME}"
+
+managed_extra_mount:
+  type: bind
+  source: "${DATA_DIR}/storage-volume/volumes/${VOLUME_NAME}"
+
+managed_plugin_source:
+  enabled: true
+  source: "${PROJECT_ROOT}/plugins/${PLUGIN_SOURCE}"
+  extra_mounts:
+    - type: volume
+      source: "${NETWORK}-gomodcache"
+      target: /go/pkg/mod
+    - type: volume
+      source: "${NETWORK}-gobuildcache"
+      target: /root/.cache/go-build

@@ -21,14 +21,16 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/kernel/internal/certs"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime/runtimecfg"
 )
 
 // DockerRuntime manages plugin containers via the Docker API.
 type DockerRuntime struct {
 	client      *client.Client
 	network     string
+	dataDir     string // host-side path bind-mounted at /data in the kernel container
 	certManager *certs.CertManager
-	devMode     bool
+	rtCfg       *runtimecfg.Config
 	baseDomain  string
 }
 
@@ -36,7 +38,7 @@ type DockerRuntime struct {
 // network exists. Returns nil runtime (not an error) if Docker is unavailable,
 // so the kernel can still start without Docker.
 // The certManager parameter is optional; pass nil to disable mTLS cert injection.
-func NewDockerRuntime(networkName string, certManager *certs.CertManager, devMode bool, baseDomain string) (*DockerRuntime, error) {
+func NewDockerRuntime(networkName, dataDir string, certManager *certs.CertManager, rtCfg *runtimecfg.Config, baseDomain string) (*DockerRuntime, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		log.Printf("WARNING: docker client init failed: %v — plugin runtime disabled", err)
@@ -53,8 +55,9 @@ func NewDockerRuntime(networkName string, certManager *certs.CertManager, devMod
 	rt := &DockerRuntime{
 		client:      cli,
 		network:     networkName,
+		dataDir:     dataDir,
 		certManager: certManager,
-		devMode:     devMode,
+		rtCfg:       rtCfg,
 		baseDomain:  baseDomain,
 	}
 
@@ -83,14 +86,69 @@ func (d *DockerRuntime) ensureNetwork(ctx context.Context) error {
 	return err
 }
 
-// projectRoot returns the host path to the project root, read fresh from
-// the environment each time so it always reflects the current value.
-func (d *DockerRuntime) projectRoot() string {
-	return os.Getenv("TEAMAGENTICA_PROJECT_ROOT")
+// pluginDir derives the plugin directory name from its Docker image tag.
+// e.g. "teamagentica-agent-claude:dev" → "agent-claude"
+func pluginDir(imageRef string) string {
+	name := imageRef
+	if i := strings.LastIndex(name, ":"); i >= 0 {
+		name = name[:i]
+	}
+	return strings.TrimPrefix(name, "teamagentica-")
 }
 
-// PullImage pulls a Docker image by reference.
+// templateVars builds the variable map for config template substitution.
+func (d *DockerRuntime) templateVars(pluginID, pluginDirName string) map[string]string {
+	return map[string]string{
+		"DATA_DIR":   d.dataDir,
+		"PLUGIN_ID":  pluginID,
+		"PLUGIN_DIR": pluginDirName,
+		"NETWORK":    d.network,
+	}
+}
+
+// resolveMount converts a MountSpec into a Docker mount.Mount using resolved source/subpath strings.
+func resolveMount(spec runtimecfg.MountSpec, source, target, subpath string) mount.Mount {
+	m := mount.Mount{
+		Target:   target,
+		ReadOnly: spec.ReadOnly,
+	}
+	if spec.Type == "bind" {
+		m.Type = mount.TypeBind
+		m.Source = source
+	} else {
+		m.Type = mount.TypeVolume
+		m.Source = source
+		if subpath != "" {
+			m.VolumeOptions = &mount.VolumeOptions{Subpath: subpath}
+		}
+	}
+	return m
+}
+
+// ensureBindDir creates the local directory for a bind mount if needed.
+// hostSource is the host-side path Docker will bind mount. The kernel container
+// has dataDir mounted at /data, so we translate hostSource to a kernel-local
+// path by replacing the dataDir prefix with /data, then mkdir there.
+func ensureBindDir(mountType, hostSource, dataDir string) {
+	if mountType != "bind" || dataDir == "" {
+		return
+	}
+	localPath := strings.Replace(hostSource, dataDir, "/data", 1)
+	if localPath == hostSource {
+		return // hostSource doesn't start with dataDir — nothing to do
+	}
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		log.Printf("warning: create dir %s: %v", localPath, err)
+	}
+}
+
+// PullImage pulls a Docker image if it doesn't exist locally.
 func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
+	// Check if image exists locally first.
+	if _, _, err := d.client.ImageInspectWithRaw(ctx, imageRef); err == nil {
+		return nil
+	}
+
 	reader, err := d.client.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", imageRef, err)
@@ -104,7 +162,6 @@ func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 // StartPlugin creates and starts a container for the given plugin.
 func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, env map[string]string) (string, error) {
 	containerName := "teamagentica-plugin-" + plugin.ID
-	volumeName := "teamagentica-data-" + plugin.ID
 
 	// Remove any stale container with the same name (crashed, orphaned, etc.).
 	d.client.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
@@ -132,15 +189,19 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		}
 	}
 
-	// In dev mode, share Go caches across plugin containers.
-	if d.devMode {
-		env["GOMODCACHE"] = "/go/pkg/mod"
-		env["GOCACHE"] = "/root/.cache/go-build"
+	// Inject extra env vars from runtime config (e.g. Go cache paths in dev).
+	for k, v := range d.rtCfg.PluginEnv {
+		env[k] = v
+	}
+
+	// Group plugin containers with the kernel in Docker Desktop.
+	labels := map[string]string{
+		"com.docker.compose.project": "teamagentica",
+		"com.docker.compose.service": plugin.ID,
 	}
 
 	// Assign a public subdomain for plugins that need direct browser access
 	// (e.g. code-server iframes that can't work behind a sub-path proxy).
-	var labels map[string]string
 	if hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:editor") && d.baseDomain != "" {
 		subdomain := "code." + d.baseDomain
 		proxyName := "teamagentica-" + plugin.ID
@@ -149,10 +210,8 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		if pluginPort == "" {
 			pluginPort = "8092"
 		}
-		labels = map[string]string{
-			"docker-proxy." + proxyName + ".host": subdomain,
-			"docker-proxy." + proxyName + ".port": pluginPort,
-		}
+		labels["docker-proxy."+proxyName+".host"] = subdomain
+		labels["docker-proxy."+proxyName+".port"] = pluginPort
 		env["TEAMAGENTICA_PUBLIC_HOST"] = subdomain
 		env["TEAMAGENTICA_BASE_DOMAIN"] = d.baseDomain
 	}
@@ -170,54 +229,23 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		Labels:   labels,
 	}
 
-	projectRoot := d.projectRoot()
+	// Build template vars for config resolution.
+	vars := d.templateVars(plugin.ID, pluginDir(plugin.Image))
 
-	var dataMount mount.Mount
+	// Data mount — strategy (bind vs volume) comes from runtime config.
 	isWorkspaceManager := hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:manager")
+	var dataSource string
 	if isWorkspaceManager {
-		// workspace:manager uses storage-volume's data dir as /data so volumes are at /data/volumes.
-		if d.devMode && projectRoot != "" {
-			hostVolume := filepath.Join(projectRoot, "data", "storage-volume")
-			localDir := filepath.Join("/data", "storage-volume")
-			if err := os.MkdirAll(localDir, 0o755); err != nil {
-				log.Printf("warning: create storage-volume dir: %v", err)
-			}
-			dataMount = mount.Mount{
-				Type:   mount.TypeBind,
-				Source: hostVolume,
-				Target: "/data",
-			}
-		} else {
-			dataMount = mount.Mount{
-				Type:   mount.TypeVolume,
-				Source: "teamagentica-data-storage-volume",
-				Target: "/data",
-			}
-		}
+		dataSource = runtimecfg.Resolve(d.rtCfg.DataMount.WorkspaceManagerSource, vars)
 		log.Printf("workspace:manager plugin %s using storage-volume data at /data", plugin.ID)
-	} else if d.devMode && projectRoot != "" {
-		// Dev mode: bind mount plugin data from host for persistence and visibility.
-		hostPluginData := filepath.Join(projectRoot, "data", plugin.ID)
-
-		// Create via our own /data mount (which maps to the same host directory).
-		localPluginData := filepath.Join("/data", plugin.ID)
-		if err := os.MkdirAll(localPluginData, 0o755); err != nil {
-			return "", fmt.Errorf("create plugin data dir: %w", err)
-		}
-
-		dataMount = mount.Mount{
-			Type:   mount.TypeBind,
-			Source: hostPluginData,
-			Target: "/data",
-		}
 	} else {
-		// Production: named Docker volume.
-		dataMount = mount.Mount{
-			Type:   mount.TypeVolume,
-			Source: volumeName,
-			Target: "/data",
-		}
+		dataSource = runtimecfg.Resolve(d.rtCfg.DataMount.Source, vars)
 	}
+	ensureBindDir(d.rtCfg.DataMount.Type, dataSource, d.dataDir)
+	dataMount := resolveMount(
+		runtimecfg.MountSpec{Type: d.rtCfg.DataMount.Type},
+		dataSource, "/data", "",
+	)
 
 	mounts := []mount.Mount{dataMount}
 	if certMount != nil {
@@ -228,60 +256,22 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	// workspace:manager is excluded — it already has storage-volume data at /data.
 	if !isWorkspaceManager && (hasCapabilityPrefix(plugin.GetCapabilities(), "ai:chat") ||
 		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:")) {
-		if d.devMode && projectRoot != "" {
-			hostVolume := filepath.Join(projectRoot, "data", "storage-volume")
-			localDir := filepath.Join("/data", "storage-volume")
-			if err := os.MkdirAll(localDir, 0o755); err != nil {
-				log.Printf("warning: create storage-volume dir: %v", err)
-			}
-			mounts = append(mounts, mount.Mount{
-				Type:   mount.TypeBind,
-				Source: hostVolume,
-				Target: "/workspaces",
-			})
-		} else {
-			mounts = append(mounts, mount.Mount{
-				Type:   mount.TypeVolume,
-				Source: "teamagentica-data-storage-volume",
-				Target: "/workspaces",
-			})
-		}
+		src := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Source, vars)
+		sub := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Subpath, vars)
+		ensureBindDir(d.rtCfg.StorageCrossMount.Type, src, d.dataDir)
+		mounts = append(mounts, resolveMount(d.rtCfg.StorageCrossMount, src, "/workspaces", sub))
 		log.Printf("cross-mounting workspace volume into plugin %s at /workspaces", plugin.ID)
 	}
 
-	// In dev mode, mount plugin source code and shared SDK for hot reload.
-	if d.devMode && projectRoot != "" {
-		// Derive plugin dir name from image (e.g. "teamagentica-telegram:dev" -> "telegram").
-		imageName := plugin.Image
-		if i := strings.LastIndex(imageName, ":"); i >= 0 {
-			imageName = imageName[:i]
-		}
-		pluginDir := strings.TrimPrefix(imageName, "teamagentica-")
-
-		mounts = append(mounts,
-			mount.Mount{
-				Type:   mount.TypeBind,
-				Source: filepath.Join(projectRoot, "plugins", pluginDir),
-				Target: "/app",
-			},
-		)
-		log.Printf("dev mode: mounting source for plugin %s from %s", plugin.ID, filepath.Join(projectRoot, "plugins", pluginDir))
-
-		// Named volumes for shared Go module + build caches.
-		goModVol := d.network + "-gomodcache"
-		goBuildVol := d.network + "-gobuildcache"
-		mounts = append(mounts,
-			mount.Mount{
-				Type:   mount.TypeVolume,
-				Source: goModVol,
-				Target: "/go/pkg/mod",
-			},
-			mount.Mount{
-				Type:   mount.TypeVolume,
-				Source: goBuildVol,
-				Target: "/root/.cache/go-build",
-			},
-		)
+	// Extra mounts from runtime config (source code, SDK, Go caches in dev; empty in prod).
+	for _, pm := range d.rtCfg.PluginMounts {
+		src := runtimecfg.Resolve(pm.Source, vars)
+		tgt := pm.Target
+		sub := runtimecfg.Resolve(pm.Subpath, vars)
+		mounts = append(mounts, resolveMount(pm, src, tgt, sub))
+	}
+	if len(d.rtCfg.PluginMounts) > 0 {
+		log.Printf("mounting %d extra mount(s) for plugin %s", len(d.rtCfg.PluginMounts), plugin.ID)
 	}
 
 	// Plugins with build:docker capability get access to the Docker socket.
@@ -327,10 +317,6 @@ func (d *DockerRuntime) StartCandidatePlugin(ctx context.Context, plugin *models
 	plugin.ID = origID + "-candidate"
 	defer func() { plugin.ID = origID }()
 
-	// Ensure the TEAMAGENTICA_PLUGIN_ID env var still uses the original ID
-	// so the candidate registers with the same plugin identity.
-	env["TEAMAGENTICA_PLUGIN_ID"] = origID
-
 	return d.StartPlugin(ctx, plugin, env)
 }
 
@@ -356,9 +342,8 @@ func (d *DockerRuntime) StopPlugin(ctx context.Context, containerID string) erro
 }
 
 // StartManagedContainer creates and starts a container on behalf of a plugin.
-// Unlike StartPlugin, managed containers have no mTLS, no SDK env vars, no
-// dev-mode source mounts — just a single volume mounted at /workspace and
-// docker-proxy labels for subdomain routing.
+// Unlike StartPlugin, managed containers have no mTLS or plugin SDK env vars —
+// just volume mounts and docker-proxy labels for subdomain routing.
 func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string) (string, error) {
 	containerName := "teamagentica-mc-" + mc.ID
 
@@ -380,14 +365,16 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 	// The workspace image's entrypoint decides how to use it.
 	envSlice = append(envSlice, "PROXY_BASE_PATH=/ws/"+mc.ID)
 
+	// Group managed containers with the kernel in Docker Desktop.
+	labels := map[string]string{
+		"com.docker.compose.project": "teamagentica",
+		"com.docker.compose.service": "mc-" + mc.ID,
+	}
 	// Docker-proxy labels for subdomain routing.
-	var labels map[string]string
 	if mc.Subdomain != "" && baseDomain != "" {
 		proxyName := "teamagentica-mc-" + mc.ID
-		labels = map[string]string{
-			"docker-proxy." + proxyName + ".host": mc.Subdomain + "." + baseDomain,
-			"docker-proxy." + proxyName + ".port": fmt.Sprintf("%d", mc.Port),
-		}
+		labels["docker-proxy."+proxyName+".host"] = mc.Subdomain + "." + baseDomain
+		labels["docker-proxy."+proxyName+".port"] = fmt.Sprintf("%d", mc.Port)
 	}
 
 	cfg := &container.Config{
@@ -403,84 +390,47 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		cfg.User = mc.DockerUser
 	}
 
-	// Single volume mount: storage-volume's volumes/{name} → /workspace.
+	// Template vars for managed container config resolution.
+	vars := d.templateVars("", "")
+
+	// Primary volume mount: storage-volume's volumes/{name} → /workspace.
 	var mounts []mount.Mount
 	if mc.VolumeName != "" {
-		projectRoot := d.projectRoot()
-		if d.devMode && projectRoot != "" {
-			hostVolume := filepath.Join(projectRoot, "data", "storage-volume", "volumes", mc.VolumeName)
-			if err := os.MkdirAll(hostVolume, 0o755); err != nil {
-				return "", fmt.Errorf("create volume dir: %w", err)
-			}
-			mounts = append(mounts, mount.Mount{
-				Type:   mount.TypeBind,
-				Source: hostVolume,
-				Target: "/workspace",
-			})
-		} else {
-			mounts = append(mounts, mount.Mount{
-				Type:   mount.TypeVolume,
-				Source: "teamagentica-data-storage-volume",
-				Target: "/workspace",
-				VolumeOptions: &mount.VolumeOptions{
-					Subpath: filepath.Join("volumes", mc.VolumeName),
-				},
-			})
-		}
+		vars["VOLUME_NAME"] = mc.VolumeName
+		src := runtimecfg.Resolve(d.rtCfg.ManagedVolumeMount.Source, vars)
+		sub := runtimecfg.Resolve(d.rtCfg.ManagedVolumeMount.Subpath, vars)
+		ensureBindDir(d.rtCfg.ManagedVolumeMount.Type, src, d.dataDir)
+		mounts = append(mounts, resolveMount(d.rtCfg.ManagedVolumeMount, src, "/workspace", sub))
 	}
 
-	// Extra mounts: additional volumes requested by the plugin (e.g. shared
-	// extension directories). Same convention as the primary volume — names
-	// resolve relative to the storage-volume volumes dir.
+	// Extra mounts: additional volumes requested by the plugin.
 	for _, em := range mc.GetExtraMounts() {
 		if em.VolumeName == "" || em.Target == "" {
 			continue
 		}
-		projectRoot := d.projectRoot()
-		if d.devMode && projectRoot != "" {
-			hostPath := filepath.Join(projectRoot, "data", "storage-volume", "volumes", em.VolumeName)
-			if err := os.MkdirAll(hostPath, 0o755); err != nil {
-				return "", fmt.Errorf("create extra mount dir %s: %w", em.VolumeName, err)
-			}
-			mounts = append(mounts, mount.Mount{
-				Type:     mount.TypeBind,
-				Source:   hostPath,
-				Target:   em.Target,
-				ReadOnly: em.ReadOnly,
-			})
-		} else {
-			mounts = append(mounts, mount.Mount{
-				Type:   mount.TypeVolume,
-				Source: "teamagentica-data-storage-volume",
-				Target: em.Target,
-				VolumeOptions: &mount.VolumeOptions{
-					Subpath: filepath.Join("volumes", em.VolumeName),
-				},
-				ReadOnly: em.ReadOnly,
-			})
-		}
+		vars["VOLUME_NAME"] = em.VolumeName
+		src := runtimecfg.Resolve(d.rtCfg.ManagedExtraMount.Source, vars)
+		sub := runtimecfg.Resolve(d.rtCfg.ManagedExtraMount.Subpath, vars)
+		ensureBindDir(d.rtCfg.ManagedExtraMount.Type, src, d.dataDir)
+		m := resolveMount(d.rtCfg.ManagedExtraMount, src, em.Target, sub)
+		m.ReadOnly = em.ReadOnly
+		mounts = append(mounts, m)
 	}
 
-	// Plugin source mounting: bind-mount a plugin's source directory into the
-	// workspace so edits propagate to the plugin container via shared host dir.
-	if mc.PluginSource != "" {
-		projectRoot := d.projectRoot()
-		if d.devMode && projectRoot != "" {
-			pluginSrc := filepath.Join(projectRoot, "plugins", mc.PluginSource)
-			mounts = append(mounts, mount.Mount{
-				Type:   mount.TypeBind,
-				Source: pluginSrc,
-				Target: "/plugin-source",
-			})
-			log.Printf("managed container %s: mounting plugin source %s at /plugin-source", mc.ID, mc.PluginSource)
+	// Plugin source mounting for managed containers.
+	if mc.PluginSource != "" && d.rtCfg.ManagedPluginSource.Enabled {
+		vars["PLUGIN_SOURCE"] = mc.PluginSource
+		src := runtimecfg.Resolve(d.rtCfg.ManagedPluginSource.Source, vars)
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: src,
+			Target: "/plugin-source",
+		})
+		log.Printf("managed container %s: mounting plugin source %s at /plugin-source", mc.ID, mc.PluginSource)
 
-			// Share Go module + build caches so builds inside the workspace are fast.
-			goModVol := d.network + "-gomodcache"
-			goBuildVol := d.network + "-gobuildcache"
-			mounts = append(mounts,
-				mount.Mount{Type: mount.TypeVolume, Source: goModVol, Target: "/go/pkg/mod"},
-				mount.Mount{Type: mount.TypeVolume, Source: goBuildVol, Target: "/root/.cache/go-build"},
-			)
+		for _, em := range d.rtCfg.ManagedPluginSource.ExtraMounts {
+			esrc := runtimecfg.Resolve(em.Source, vars)
+			mounts = append(mounts, resolveMount(em, esrc, em.Target, ""))
 		}
 	}
 
