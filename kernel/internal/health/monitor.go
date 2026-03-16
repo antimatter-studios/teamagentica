@@ -20,7 +20,7 @@ type Restarter interface {
 // Monitor periodically checks the health of running plugin containers.
 type Monitor struct {
 	db        *gorm.DB
-	runtime   *runtime.DockerRuntime
+	runtime   runtime.ContainerRuntime
 	events    *events.Hub
 	interval  time.Duration
 	restarter Restarter
@@ -34,7 +34,7 @@ type Monitor struct {
 const restartThreshold = 4
 
 // NewMonitor creates a health monitor with the given check interval.
-func NewMonitor(db *gorm.DB, rt *runtime.DockerRuntime, evts *events.Hub, interval time.Duration) *Monitor {
+func NewMonitor(db *gorm.DB, rt runtime.ContainerRuntime, evts *events.Hub, interval time.Duration) *Monitor {
 	return &Monitor{
 		db:              db,
 		runtime:         rt,
@@ -161,8 +161,23 @@ func (m *Monitor) checkPlugins(ctx context.Context) {
 			m.setStatus(p, "error")
 			m.unhealthyCounts[p.ID]++
 		} else if running {
-			m.setStatus(p, "running")
-			m.unhealthyCounts[p.ID] = 0
+			if p.Host == "" {
+				// Container is running but hasn't registered yet — treat as stuck.
+				m.unhealthyCounts[p.ID]++
+				if m.unhealthyCounts[p.ID] >= restartThreshold {
+					log.Printf("health monitor: plugin %s container running but never registered after %d checks — restart",
+						p.ID, m.unhealthyCounts[p.ID])
+					m.emitEvent(p.ID, "warning", "container running but not registered — force restart")
+					m.db.Model(p).Updates(map[string]interface{}{
+						"status": "stopped",
+						"host":   "",
+					})
+					m.tryRestart(ctx, p)
+				}
+			} else {
+				m.setStatus(p, "running")
+				m.unhealthyCounts[p.ID] = 0
+			}
 		} else {
 			m.unhealthyCounts[p.ID]++
 			m.setStatus(p, "unhealthy")
