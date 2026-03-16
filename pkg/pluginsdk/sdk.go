@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+
+	"gopkg.in/yaml.v3"
 )
 
 // DevVersion returns version with a build timestamp appended when running
@@ -29,6 +31,51 @@ func DevVersion(base string) string {
 		return base + "-" + time.Now().Format("20060102_150405")
 	}
 	return base
+}
+
+// Manifest represents the plugin.yaml file — the single source of truth
+// for a plugin's identity, capabilities, and dependencies.
+type Manifest struct {
+	ID           string   `yaml:"id"`
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	Group        string   `yaml:"group"`
+	Version      string   `yaml:"version"`
+	Image        string   `yaml:"image"`
+	Author       string   `yaml:"author"`
+	Tags         []string `yaml:"tags"`
+	Capabilities []string `yaml:"capabilities"`
+	Dependencies []string `yaml:"dependencies"`
+}
+
+// LoadManifest reads plugin.yaml from the current working directory (or the
+// standard system config path) and returns the parsed manifest.
+func LoadManifest() Manifest {
+	candidates := []string{
+		"plugin.yaml",                                    // dev mode (air, local run)
+		"/usr/local/etc/teamagentica/plugin.yaml",        // production containers
+	}
+
+	var data []byte
+	var err error
+	for _, path := range candidates {
+		data, err = os.ReadFile(path)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		log.Fatalf("pluginsdk: failed to load plugin.yaml (tried %v): %v", candidates, err)
+	}
+
+	var m Manifest
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		log.Fatalf("pluginsdk: failed to parse plugin.yaml: %v", err)
+	}
+	if m.ID == "" {
+		log.Fatalf("pluginsdk: plugin.yaml missing required 'id' field")
+	}
+	return m
 }
 
 // ConfigSchemaField describes a single configuration field for a plugin.
@@ -104,6 +151,11 @@ type DiscordEmbedFieldResponse struct {
 	Inline bool   `json:"inline,omitempty"`
 }
 
+// PluginDependencies declares what a plugin requires to function.
+type PluginDependencies struct {
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+}
+
 // Registration holds the plugin's self-description sent to the kernel on boot.
 type Registration struct {
 	ID           string                       `json:"id"`
@@ -114,6 +166,7 @@ type Registration struct {
 	Capabilities []string                     `json:"capabilities"`
 	Version      string                       `json:"version"`
 	Candidate    bool                         `json:"candidate,omitempty"` // true if running as a candidate container
+	Dependencies    PluginDependencies           `json:"dependencies,omitempty"`
 	Schema          map[string]interface{}       `json:"schema,omitempty"`
 	ConfigSchema    map[string]ConfigSchemaField `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{}       `json:"workspace_schema,omitempty"`
@@ -137,7 +190,6 @@ type EventHandler func(event EventCallback)
 type Config struct {
 	KernelHost  string // TEAMAGENTICA_KERNEL_HOST
 	KernelPort  string // TEAMAGENTICA_KERNEL_PORT
-	PluginID    string // TEAMAGENTICA_PLUGIN_ID
 	PluginToken string // TEAMAGENTICA_PLUGIN_TOKEN (service token for auth)
 	TLSCert     string // TEAMAGENTICA_TLS_CERT
 	TLSKey      string // TEAMAGENTICA_TLS_KEY
@@ -151,7 +203,6 @@ func LoadConfig() Config {
 	return Config{
 		KernelHost:  os.Getenv("TEAMAGENTICA_KERNEL_HOST"),
 		KernelPort:  os.Getenv("TEAMAGENTICA_KERNEL_PORT"),
-		PluginID:    os.Getenv("TEAMAGENTICA_PLUGIN_ID"),
 		PluginToken: os.Getenv("TEAMAGENTICA_PLUGIN_TOKEN"),
 		TLSCert:     os.Getenv("TEAMAGENTICA_TLS_CERT"),
 		TLSKey:      os.Getenv("TEAMAGENTICA_TLS_KEY"),
@@ -1131,12 +1182,12 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 }
 
 // DeployCandidate tells the kernel to start a candidate container for the given plugin.
-func (c *Client) DeployCandidate(ctx context.Context, pluginID string, image string, devMode bool) error {
-	payload := map[string]interface{}{"image": image, "dev_mode": devMode}
+func (c *Client) DeployCandidate(ctx context.Context, pluginID string, image string) error {
+	payload := map[string]interface{}{"image": image}
 	body, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s/api/plugins/%s/deploy", c.kernelURL(), pluginID),
+		fmt.Sprintf("%s/api/plugins/deploy/%s", c.kernelURL(), pluginID),
 		bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -1169,7 +1220,7 @@ func (c *Client) RollbackCandidate(ctx context.Context, pluginID string) error {
 
 func (c *Client) pluginAction(ctx context.Context, pluginID, action string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s/api/plugins/%s/%s", c.kernelURL(), pluginID, action),
+		fmt.Sprintf("%s/api/plugins/%s/%s", c.kernelURL(), action, pluginID),
 		bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return err

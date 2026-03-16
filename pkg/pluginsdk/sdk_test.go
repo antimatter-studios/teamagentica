@@ -22,7 +22,6 @@ func testEnv(t *testing.T, handler http.Handler) (*Client, *httptest.Server) {
 	cfg := Config{
 		KernelHost:  u.Hostname(),
 		KernelPort:  u.Port(),
-		PluginID:    "test-plugin",
 		PluginToken: "tok-abc",
 		TLSEnabled:  false,
 	}
@@ -64,7 +63,6 @@ func TestLoadConfig(t *testing.T) {
 	envs := map[string]string{
 		"TEAMAGENTICA_KERNEL_HOST":  "myhost",
 		"TEAMAGENTICA_KERNEL_PORT":  "9999",
-		"TEAMAGENTICA_PLUGIN_ID":    "plug-1",
 		"TEAMAGENTICA_PLUGIN_TOKEN": "secret",
 		"TEAMAGENTICA_TLS_CERT":     "/cert.pem",
 		"TEAMAGENTICA_TLS_KEY":      "/key.pem",
@@ -83,9 +81,6 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.KernelPort != "9999" {
 		t.Errorf("KernelPort = %q, want %q", cfg.KernelPort, "9999")
-	}
-	if cfg.PluginID != "plug-1" {
-		t.Errorf("PluginID = %q, want %q", cfg.PluginID, "plug-1")
 	}
 	if cfg.PluginToken != "secret" {
 		t.Errorf("PluginToken = %q, want %q", cfg.PluginToken, "secret")
