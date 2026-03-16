@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -41,30 +42,19 @@ type installRequest struct {
 	ProviderID *uint  `json:"provider_id"`
 }
 
-// CatalogPricingEntry holds default pricing for a model (from provider catalog).
-type CatalogPricingEntry struct {
-	Provider    string  `json:"provider"`
-	Model       string  `json:"model"`
-	InputPer1M  float64 `json:"input_per_1m"`
-	OutputPer1M float64 `json:"output_per_1m"`
-	CachedPer1M float64 `json:"cached_per_1m"`
-	PerRequest  float64 `json:"per_request"`
-	Currency    string  `json:"currency"`
-}
-
 // CatalogEntry is the shape returned by provider /plugins endpoints.
+// This is a reference index only — enough for the marketplace UI to display
+// what's installable. All plugin data comes from the plugin itself after boot.
 type CatalogEntry struct {
-	PluginID       string                 `json:"plugin_id"`
-	Name           string                 `json:"name"`
-	Description    string                 `json:"description"`
-	Group          string                 `json:"group,omitempty"`
-	Version        string                 `json:"version"`
-	Image          string                 `json:"image"`
-	Author         string                 `json:"author"`
-	Tags           []string               `json:"tags"`
-	ConfigSchema   map[string]interface{} `json:"config_schema,omitempty"`
-	DefaultPricing []CatalogPricingEntry `json:"default_pricing,omitempty"`
-	Provider       string                 `json:"provider,omitempty"`
+	PluginID    string   `json:"plugin_id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Group       string   `json:"group,omitempty"`
+	Version     string   `json:"version"`
+	Image       string   `json:"image"`
+	Author      string   `json:"author"`
+	Tags        []string `json:"tags"`
+	Provider    string   `json:"provider,omitempty"`
 }
 
 // CatalogGroup holds display metadata for a plugin group.
@@ -133,6 +123,33 @@ func (h *MarketplaceHandler) DeleteProvider(c *gin.Context) {
 
 // --- Catalog browsing ---
 
+// ProviderPlugins handles GET /api/marketplace/providers/:name/plugins.
+// Returns plugins from a single named provider.
+func (h *MarketplaceHandler) ProviderPlugins(c *gin.Context) {
+	name := c.Param("name")
+
+	var provider models.Provider
+	if err := h.db.Where("name = ? AND enabled = ?", name, true).First(&provider).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found or disabled", name)})
+		return
+	}
+
+	entries, groups, err := fetchProviderCatalog(provider.URL, provider.Name, c.Query("q"))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch from provider: " + err.Error()})
+		return
+	}
+
+	if entries == nil {
+		entries = []CatalogEntry{}
+	}
+	if groups == nil {
+		groups = []CatalogGroup{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"plugins": entries, "groups": groups, "provider": provider.Name})
+}
+
 // BrowsePlugins handles GET /api/marketplace/plugins?q=...
 func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 	q := c.Query("q")
@@ -170,9 +187,11 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 	var all []CatalogEntry
 	groupsSeen := map[string]bool{}
 	var allGroups []CatalogGroup
-	for _, r := range results {
+	var fetchErrors []string
+	for i, r := range results {
 		if r.err != nil {
 			log.Printf("marketplace: provider fetch error: %v", r.err)
+			fetchErrors = append(fetchErrors, fmt.Sprintf("%s: %v", providers[i].Name, r.err))
 			continue
 		}
 		all = append(all, r.entries...)
@@ -191,7 +210,11 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 		allGroups = []CatalogGroup{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"plugins": all, "groups": allGroups})
+	resp := gin.H{"plugins": all, "groups": allGroups}
+	if len(fetchErrors) > 0 {
+		resp["errors"] = fetchErrors
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // fetchProviderCatalog fetches the plugin catalog from a provider URL.
@@ -231,6 +254,36 @@ func fetchProviderCatalog(providerURL, providerName, query string) ([]CatalogEnt
 	}
 
 	return result.Plugins, result.Groups, nil
+}
+
+// --- Manifest submission ---
+
+// SubmitManifest handles POST /api/marketplace/manifests.
+// Forwards the manifest directly to the first enabled provider's /manifests endpoint.
+// Does not require the provider plugin to be registered or running.
+func (h *MarketplaceHandler) SubmitManifest(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		return
+	}
+
+	var provider models.Provider
+	if err := h.db.Where("enabled = ?", true).First(&provider).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no providers configured"})
+		return
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(provider.URL+"/manifests", "application/json", bytes.NewReader(body))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach provider: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	c.Data(resp.StatusCode, "application/json", respBody)
 }
 
 // --- Install ---
@@ -284,80 +337,13 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 		return
 	}
 
-	// Create plugin record.
-	plugin := models.Plugin{
-		ID:      entry.PluginID,
-		Name:    entry.Name,
-		Version: entry.Version,
-		Image:   entry.Image,
-	}
-	if entry.Tags != nil {
-		plugin.SetCapabilities(entry.Tags)
-	}
-	if entry.ConfigSchema != nil {
-		schemaJSON, _ := json.Marshal(entry.ConfigSchema)
-		plugin.ConfigSchema = models.JSONRawString(schemaJSON)
-	}
-	// workspace_schema is NOT stored at install time — it comes from
-	// the plugin's live registration on every boot.
-
-	// Metadata-only plugins auto-enable — no container to start.
-	if plugin.IsMetadataOnly() {
-		plugin.Enabled = true
-		plugin.Status = "enabled"
-	}
-
-	if err := h.db.Create(&plugin).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create plugin record"})
-		return
-	}
-
-	// Generate service token (10 years).
-	expiry := 10 * 365 * 24 * time.Hour
-	token, err := auth.GenerateServiceToken(entry.PluginID, []string{"plugins:search"}, expiry)
+	var allInstalled []models.Plugin
+	visited := map[string]bool{}
+	plugin, err := h.installPlugin(provider, entry, visited, &allInstalled)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate service token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	hash := sha256.Sum256([]byte(token))
-	tokenHash := fmt.Sprintf("%x", hash)
-	capsJSON, _ := json.Marshal([]string{"plugins:search"})
-
-	st := models.ServiceToken{
-		Name:         entry.PluginID,
-		TokenHash:    tokenHash,
-		Capabilities: string(capsJSON),
-		IssuedBy:     0,
-		ExpiresAt:    time.Now().Add(expiry),
-	}
-	if err := h.db.Create(&st).Error; err != nil {
-		log.Printf("marketplace: failed to create service token for %s: %v", entry.PluginID, err)
-	}
-
-	// Store token on the plugin record (internal, not user config).
-	h.db.Model(&plugin).Update("service_token", token)
-
-	// Seed default pricing from catalog (only for models not yet priced).
-	if len(entry.DefaultPricing) > 0 {
-		for _, p := range entry.DefaultPricing {
-			var count int64
-			h.db.Model(&models.ModelPrice{}).
-				Where("provider = ? AND model = ?", p.Provider, p.Model).Count(&count)
-			if count == 0 {
-				if _, err := SavePriceRecord(h.db, p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, p.Currency); err != nil {
-					log.Printf("marketplace: failed to seed price for %s/%s: %v", p.Provider, p.Model, err)
-				}
-			}
-		}
-		log.Printf("marketplace: seeded default pricing for %s (%d models)", entry.PluginID, len(entry.DefaultPricing))
-	}
-
-	h.Events.Emit(events.DebugEvent{
-		Type:     "install",
-		PluginID: entry.PluginID,
-		Detail:   fmt.Sprintf("installed from %s (image=%s, version=%s)", provider.Name, entry.Image, entry.Version),
-	})
 
 	if al := getAudit(c); al != nil {
 		userID, _ := c.Get("user_id")
@@ -368,7 +354,266 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message": "plugin installed",
-		"plugin":  plugin,
+		"message":   "plugin installed",
+		"plugin":    plugin,
+		"installed": allInstalled,
 	})
 }
+
+// installPlugin installs a plugin and its dependencies. Already-installed
+// plugins are skipped (use UpgradePlugin to update an installed plugin).
+// The visited map prevents infinite dependency loops.
+func (h *MarketplaceHandler) installPlugin(provider models.Provider, entry *CatalogEntry, visited map[string]bool, allInstalled *[]models.Plugin) (*models.Plugin, error) {
+	if visited[entry.PluginID] {
+		return nil, nil
+	}
+	visited[entry.PluginID] = true
+
+	// If already installed (e.g. as a dependency), skip — use upgrade to update.
+	var existing models.Plugin
+	if h.db.First(&existing, "id = ?", entry.PluginID).Error == nil {
+		return &existing, nil
+	}
+
+	// Create plugin record.
+	plugin := models.Plugin{
+		ID:      entry.PluginID,
+		Name:    entry.Name,
+		Version: entry.Version,
+		Image:   entry.Image,
+	}
+	if err := h.db.Create(&plugin).Error; err != nil {
+		return nil, fmt.Errorf("failed to create plugin %s: %w", plugin.ID, err)
+	}
+
+	// Generate service token (10 years).
+	expiry := 10 * 365 * 24 * time.Hour
+	token, err := auth.GenerateServiceToken(entry.PluginID, []string{"plugins:search"}, expiry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate service token for %s: %w", entry.PluginID, err)
+	}
+	hash := sha256.Sum256([]byte(token))
+	tokenHash := fmt.Sprintf("%x", hash)
+	capsJSON, _ := json.Marshal([]string{"plugins:search"})
+	st := models.ServiceToken{
+		Name:         entry.PluginID,
+		TokenHash:    tokenHash,
+		Capabilities: string(capsJSON),
+		IssuedBy:     0,
+		ExpiresAt:    time.Now().Add(expiry),
+	}
+	if err := h.db.Create(&st).Error; err != nil {
+		log.Printf("marketplace: failed to create service token for %s: %v", entry.PluginID, err)
+	}
+	h.db.Model(&plugin).Update("service_token", token)
+
+	// Fetch manifest to get capabilities and dependencies.
+	manifest, err := fetchPluginManifest(provider.URL, entry.PluginID)
+	if err != nil {
+		log.Printf("marketplace: could not fetch manifest for %s: %v (deps won't be resolved)", entry.PluginID, err)
+	}
+
+	if manifest != nil {
+		updates := map[string]interface{}{}
+		if deps, ok := manifest["dependencies"].([]interface{}); ok && len(deps) > 0 {
+			var depStrings []string
+			for _, d := range deps {
+				if s, ok := d.(string); ok {
+					depStrings = append(depStrings, s)
+				}
+			}
+			plugin.SetDependencies(depStrings)
+			updates["dependencies"] = plugin.Dependencies
+		}
+		if caps, ok := manifest["capabilities"].([]interface{}); ok && len(caps) > 0 {
+			var capStrings []string
+			for _, c := range caps {
+				if s, ok := c.(string); ok {
+					capStrings = append(capStrings, s)
+				}
+			}
+			plugin.SetCapabilities(capStrings)
+			updates["capabilities"] = plugin.Capabilities
+		}
+		if cs, ok := manifest["config_schema"]; ok && cs != nil {
+			if b, err := json.Marshal(cs); err == nil {
+				plugin.ConfigSchema = models.JSONRawString(b)
+				updates["config_schema"] = plugin.ConfigSchema
+			}
+		}
+		if len(updates) > 0 {
+			h.db.Model(&plugin).Updates(updates)
+		}
+	}
+
+	*allInstalled = append(*allInstalled, plugin)
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "install",
+		PluginID: entry.PluginID,
+		Detail:   fmt.Sprintf("installed from %s (image=%s, version=%s)", provider.Name, entry.Image, entry.Version),
+	})
+
+	// Recursively install dependencies.
+	for _, cap := range plugin.GetDependencies() {
+		depEntry := h.findProviderPluginByCapability(provider, cap)
+		if depEntry == nil {
+			log.Printf("marketplace: no provider plugin found for capability %q", cap)
+			continue
+		}
+		if _, err := h.installPlugin(provider, depEntry, visited, allInstalled); err != nil {
+			log.Printf("marketplace: failed to install dependency %s: %v", depEntry.PluginID, err)
+		}
+	}
+
+	return &plugin, nil
+}
+
+// fetchPluginManifest fetches the full plugin.yaml manifest from a provider.
+func fetchPluginManifest(providerURL, pluginID string) (map[string]interface{}, error) {
+	url := providerURL + "/plugins/" + pluginID + "/manifest"
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("manifest endpoint returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read manifest body: %w", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+// UpgradePlugin handles POST /api/marketplace/upgrade.
+// Updates an already-installed plugin's metadata (version, image, capabilities, dependencies)
+// from the provider catalog manifest. Fails if the plugin is NOT already installed.
+func (h *MarketplaceHandler) UpgradePlugin(c *gin.Context) {
+	var req installRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var existing models.Plugin
+	if err := h.db.First(&existing, "id = ?", req.PluginID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not installed — use install first"})
+		return
+	}
+
+	var provider models.Provider
+	if req.ProviderID != nil {
+		if err := h.db.First(&provider, "id = ?", *req.ProviderID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
+			return
+		}
+	} else {
+		if err := h.db.Where("enabled = ?", true).First(&provider).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no providers configured"})
+			return
+		}
+	}
+
+	plugin, err := h.upgradePlugin(provider, req.PluginID, &existing)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "marketplace.upgrade", "plugin:"+req.PluginID,
+			fmt.Sprintf(`{"provider":%q,"version":%q}`, provider.Name, plugin.Version),
+			c.ClientIP(), true)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "plugin upgraded", "plugin": plugin})
+}
+
+// upgradePlugin fetches the latest manifest from the provider and updates
+// version, image, capabilities, and dependencies in the database.
+func (h *MarketplaceHandler) upgradePlugin(provider models.Provider, pluginID string, plugin *models.Plugin) (*models.Plugin, error) {
+	manifest, err := fetchPluginManifest(provider.URL, pluginID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch manifest for %s: %w", pluginID, err)
+	}
+
+	updates := map[string]interface{}{}
+
+	if v, ok := manifest["version"].(string); ok && v != "" {
+		updates["version"] = v
+		plugin.Version = v
+	}
+	if img, ok := manifest["image"].(string); ok && img != "" {
+		updates["image"] = img
+		plugin.Image = img
+	}
+	if caps, ok := manifest["capabilities"].([]interface{}); ok {
+		var capStrings []string
+		for _, c := range caps {
+			if s, ok := c.(string); ok {
+				capStrings = append(capStrings, s)
+			}
+		}
+		plugin.SetCapabilities(capStrings)
+		updates["capabilities"] = plugin.Capabilities
+	}
+	if deps, ok := manifest["dependencies"].([]interface{}); ok {
+		var depStrings []string
+		for _, d := range deps {
+			if s, ok := d.(string); ok {
+				depStrings = append(depStrings, s)
+			}
+		}
+		plugin.SetDependencies(depStrings)
+		updates["dependencies"] = plugin.Dependencies
+	}
+
+	if len(updates) > 0 {
+		if err := h.db.Model(plugin).Updates(updates).Error; err != nil {
+			return nil, fmt.Errorf("failed to update %s: %w", pluginID, err)
+		}
+	}
+
+	log.Printf("marketplace: upgraded %s (version=%s, caps=%v, deps=%v)", pluginID, plugin.Version, plugin.GetCapabilities(), plugin.GetDependencies())
+	return plugin, nil
+}
+
+// findProviderPluginByCapability searches the provider catalog for a plugin
+// that declares a given capability in its manifest.
+func (h *MarketplaceHandler) findProviderPluginByCapability(provider models.Provider, capability string) *CatalogEntry {
+	entries, _, err := fetchProviderCatalog(provider.URL, provider.Name, "")
+	if err != nil {
+		log.Printf("marketplace: failed to fetch catalog for dep resolution: %v", err)
+		return nil
+	}
+
+	for _, e := range entries {
+		manifest, err := fetchPluginManifest(provider.URL, e.PluginID)
+		if err != nil {
+			continue
+		}
+		caps, ok := manifest["capabilities"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, c := range caps {
+			if s, ok := c.(string); ok && s == capability {
+				return &e
+			}
+		}
+	}
+	return nil
+}
+
