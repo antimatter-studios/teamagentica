@@ -18,13 +18,13 @@ import (
 // Orchestrator manages plugin lifecycle at kernel startup and shutdown.
 type Orchestrator struct {
 	db      *gorm.DB
-	runtime *runtime.DockerRuntime
+	runtime runtime.ContainerRuntime
 	config  *config.Config
 	events  *events.Hub
 }
 
 // NewOrchestrator creates a new Orchestrator.
-func NewOrchestrator(db *gorm.DB, rt *runtime.DockerRuntime, cfg *config.Config, hub *events.Hub) *Orchestrator {
+func NewOrchestrator(db *gorm.DB, rt runtime.ContainerRuntime, cfg *config.Config, hub *events.Hub) *Orchestrator {
 	return &Orchestrator{
 		db:      db,
 		runtime: rt,
@@ -48,7 +48,7 @@ func (o *Orchestrator) emit(eventType, pluginID, detail string) {
 // For each plugin:
 // 1. Read plugin config from PluginConfig table
 // 2. Build env vars map from config
-// 3. Inject kernel connection info (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_KERNEL_PORT, TEAMAGENTICA_PLUGIN_ID, TEAMAGENTICA_PLUGIN_TOKEN)
+// 3. Inject kernel connection info (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_KERNEL_PORT, TEAMAGENTICA_PLUGIN_TOKEN)
 // 4. Call runtime.PullImage (skip if already present -- don't fail if pull fails, image might be local)
 // 5. Call runtime.StartPlugin with env vars
 // 6. Update plugin status in DB
@@ -71,6 +71,10 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 		log.Printf("orchestrator: failed to query enabled plugins: %v", err)
 		return err
 	}
+
+	// Also start any dep plugins declared by enabled plugins that aren't enabled yet.
+	// Handles cases where a plugin was enabled before its deps were declared.
+	plugins = o.resolveDependencies(plugins)
 
 	if len(plugins) == 0 {
 		log.Println("orchestrator: no enabled plugins to start")
@@ -122,7 +126,6 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 	// Inject kernel connection info.
 	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
 	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
-	env["TEAMAGENTICA_PLUGIN_ID"] = plugin.ID
 
 	// Inject the service token stored on the plugin record.
 	if plugin.ServiceToken != "" {
@@ -132,22 +135,24 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		o.emit("warning", plugin.ID, "no service token on plugin record")
 	}
 
-	// Stop existing container if still running.
+	// Stop existing container and clear stale registration data before starting
+	// the new container. Clearing host/last_seen here (not after StartPlugin)
+	// prevents a race where the new container registers before the DB update runs.
 	if plugin.ContainerID != "" {
 		o.emit("stop", plugin.ID, fmt.Sprintf("stopping old container=%s", plugin.ContainerID[:12]))
 		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
 	}
+	o.db.Model(plugin).Updates(map[string]interface{}{
+		"container_id": "",
+		"status":       "running",
+		"host":         "",
+		"last_seen":    time.Time{},
+	})
 
-	// Resolve image tag for dev mode.
-	plugin.Image = o.config.ResolveImage(plugin.Image)
-
-	// In dev mode, skip pulling — images are always built locally.
-	if !o.config.DevMode {
-		o.emit("start", plugin.ID, fmt.Sprintf("pulling image=%s", plugin.Image))
-		if err := o.runtime.PullImage(ctx, plugin.Image); err != nil {
-			log.Printf("orchestrator: pull image %s for plugin %s failed (continuing, image may be local): %v", plugin.Image, plugin.ID, err)
-			o.emit("warning", plugin.ID, fmt.Sprintf("image pull failed (may be local): %v", err))
-		}
+	o.emit("start", plugin.ID, fmt.Sprintf("pulling image=%s", plugin.Image))
+	if err := o.runtime.PullImage(ctx, plugin.Image); err != nil {
+		log.Printf("orchestrator: pull image %s for plugin %s failed (continuing, image may be local): %v", plugin.Image, plugin.ID, err)
+		o.emit("warning", plugin.ID, fmt.Sprintf("image pull failed (may be local): %v", err))
 	}
 
 	// Start the container.
@@ -163,15 +168,7 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		return
 	}
 
-	// Update plugin status and clear stale registration data so the health
-	// monitor uses Docker-level checks (not heartbeat staleness) while the
-	// plugin is still building/booting.
-	o.db.Model(plugin).Updates(map[string]interface{}{
-		"container_id": containerID,
-		"status":       "running",
-		"host":         "",
-		"last_seen":    time.Time{},
-	})
+	o.db.Model(plugin).Update("container_id", containerID)
 
 	log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
 	o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
@@ -205,13 +202,10 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	env := o.buildEnv(pluginID)
 	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
 	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
-	env["TEAMAGENTICA_PLUGIN_ID"] = plugin.ID
 
 	if plugin.ServiceToken != "" {
 		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
 	}
-
-	plugin.Image = o.config.ResolveImage(plugin.Image)
 
 	o.emit("start", pluginID, fmt.Sprintf("starting container image=%s", plugin.Image))
 	containerID, err := o.runtime.StartPlugin(ctx, &plugin, env)
@@ -329,6 +323,42 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 	return nil
 }
 
+// resolveDependencies expands a plugin list with any dep plugins not yet enabled.
+// Dep plugins are marked enabled in the DB so they persist across restarts.
+func (o *Orchestrator) resolveDependencies(plugins []models.Plugin) []models.Plugin {
+	seen := map[string]bool{}
+	for _, p := range plugins {
+		seen[p.ID] = true
+	}
+
+	var allPlugins []models.Plugin
+	o.db.Find(&allPlugins)
+
+	capMap := map[string]*models.Plugin{}
+	for i := range allPlugins {
+		for _, c := range allPlugins[i].GetCapabilities() {
+			capMap[c] = &allPlugins[i]
+		}
+	}
+
+	result := make([]models.Plugin, len(plugins))
+	copy(result, plugins)
+
+	for _, p := range plugins {
+		for _, cap := range p.GetDependencies() {
+			dep, ok := capMap[cap]
+			if !ok || seen[dep.ID] {
+				continue
+			}
+			seen[dep.ID] = true
+			o.db.Model(dep).Updates(map[string]interface{}{"enabled": true})
+			log.Printf("orchestrator: auto-enabling dep %s (provides %q required by %s)", dep.ID, cap, p.ID)
+			result = append(result, *dep)
+		}
+	}
+	return result
+}
+
 // buildEnv reads PluginConfig rows for a plugin and returns them as a map.
 // It also injects default values from the plugin's config_schema for any keys
 // that don't have an explicit PluginConfig entry.
@@ -336,8 +366,8 @@ func (o *Orchestrator) buildEnv(pluginID string) map[string]string {
 	var plugin models.Plugin
 	o.db.First(&plugin, "id = ?", pluginID)
 
-	var configs []models.PluginConfig
-	o.db.Where("plugin_id = ?", pluginID).Find(&configs)
+	var configs []models.Config
+	o.db.Where("owner_id = ?", pluginID).Find(&configs)
 
 	env := make(map[string]string, len(configs))
 	for _, cfg := range configs {

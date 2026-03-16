@@ -12,18 +12,20 @@ import (
 )
 
 // DeployCandidate handles POST /api/plugins/:id/deploy.
-// Starts a candidate container alongside the primary.
+// Starts a candidate container alongside the running stable. The candidate is
+// isolated — no traffic is routed to it until PromoteCandidate is called.
 func (h *PluginHandler) DeployCandidate(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
+		return
+	}
+
 	id := c.Param("id")
 
 	var req struct {
-		Image   string `json:"image"`   // new image to deploy (prod candidate)
-		DevMode bool   `json:"dev_mode"` // use dev image + source mounts
+		Image string `json:"image"` // new image to test as candidate
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+	_ = c.ShouldBindJSON(&req)
 
 	var plugin models.Plugin
 	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
@@ -31,38 +33,28 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 		return
 	}
 
-	if plugin.HasCandidate() {
-		c.JSON(http.StatusConflict, gin.H{"error": "candidate already deployed — promote or rollback first"})
+	if plugin.IsMetadataOnly() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "metadata-only plugins cannot have candidates"})
 		return
 	}
 
-	if h.runtime == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
+	// Use CandidateContainerID (not CandidateHost) to detect an existing candidate —
+	// the host is empty until the candidate registers, so HasCandidate() would be false.
+	if plugin.CandidateContainerID != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "candidate already deployed — promote or rollback first"})
 		return
 	}
 
 	// Determine candidate image.
 	candidateImage := req.Image
-	if req.DevMode {
-		candidateImage = h.cfg.ResolveImage(plugin.Image)
-	}
 	if candidateImage == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "image or dev_mode required"})
-		return
+		candidateImage = plugin.Image
 	}
 
-	// Build env — same as primary but with candidate flag.
-	env := h.buildEnv(id)
-	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
-	env["TEAMAGENTICA_CANDIDATE"] = "true"
+	ctx := c.Request.Context()
 
-	// Use a temporary plugin struct for StartPlugin with candidate naming.
-	candidatePlugin := plugin
-	candidatePlugin.Image = candidateImage
-
-	// Pull image.
-	if err := h.runtime.PullImage(c.Request.Context(), candidateImage); err != nil {
+	// Pull image (non-fatal — may be local).
+	if err := h.runtime.PullImage(ctx, candidateImage); err != nil {
 		h.Events.Emit(events.DebugEvent{
 			Type:     "warning",
 			PluginID: id,
@@ -70,18 +62,31 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 		})
 	}
 
-	containerID, err := h.runtime.StartCandidatePlugin(c.Request.Context(), &candidatePlugin, env)
+	// Build env same as stable, plus candidate flag so the SDK registers as candidate.
+	env := h.buildEnv(id)
+	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
+	env["TEAMAGENTICA_CANDIDATE"] = "true"
+
+	candidatePlugin := plugin
+	candidatePlugin.Image = candidateImage
+
+	containerID, err := h.runtime.StartCandidatePlugin(ctx, &candidatePlugin, env)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start candidate: " + err.Error()})
 		return
 	}
 
-	// Update plugin with candidate fields.
-	now := time.Now()
 	h.db.Model(&plugin).Updates(map[string]interface{}{
 		"candidate_container_id": containerID,
-		"candidate_deployed_at":  now,
-		"candidate_healthy":      false, // will become true on first heartbeat
+		"candidate_image":        candidateImage,
+		"candidate_version":      "",
+		"candidate_host":         "",
+		"candidate_port":         0,
+		"candidate_event_port":   0,
+		"candidate_healthy":      false,
+		"candidate_deployed_at":  time.Now(),
+		"candidate_last_seen":    time.Time{},
 	})
 
 	h.Events.Emit(events.DebugEvent{
@@ -98,7 +103,8 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 }
 
 // PromoteCandidate handles POST /api/plugins/:id/promote.
-// Stops the primary, makes the candidate the new primary.
+// Stops the stable container and makes the candidate the new stable.
+// The old stable image/version are saved so RollbackCandidate can restore them.
 func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 	id := c.Param("id")
 
@@ -108,30 +114,40 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 		return
 	}
 
-	if !plugin.HasCandidate() {
+	if plugin.CandidateContainerID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no candidate deployed"})
 		return
 	}
-
-	// Stop the old primary container.
-	if h.runtime != nil && plugin.ContainerID != "" {
-		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID)
+	if plugin.CandidateHost == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "candidate not yet registered — it may still be starting"})
+		return
 	}
 
-	// Promote candidate to primary.
+	ctx := c.Request.Context()
+
+	// Stop old stable.
+	if h.runtime != nil && plugin.ContainerID != "" {
+		_ = h.runtime.StopPlugin(ctx, plugin.ContainerID)
+	}
+
+	// Promote: candidate → stable, stable → previous.
 	h.db.Model(&plugin).Updates(map[string]interface{}{
-		// Save previous for potential future rollback info.
+		// Save old stable for rollback.
 		"previous_image":   plugin.Image,
 		"previous_version": plugin.Version,
-		// Candidate becomes primary.
-		"host":       plugin.CandidateHost,
-		"http_port":  plugin.CandidatePort,
-		"event_port": plugin.CandidateEventPort,
+		// Candidate becomes stable.
 		"container_id": plugin.CandidateContainerID,
-		"status":     "running",
-		"last_seen":  time.Now(),
-		// Clear candidate fields.
+		"image":        plugin.CandidateImage,
+		"version":      plugin.CandidateVersion,
+		"host":         plugin.CandidateHost,
+		"http_port":    plugin.CandidatePort,
+		"event_port":   plugin.CandidateEventPort,
+		"status":       "running",
+		"last_seen":    time.Now(),
+		// Clear candidate.
 		"candidate_container_id": "",
+		"candidate_image":        "",
+		"candidate_version":      "",
 		"candidate_host":         "",
 		"candidate_port":         0,
 		"candidate_event_port":   0,
@@ -143,14 +159,17 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 	h.Events.Emit(events.DebugEvent{
 		Type:     "promote",
 		PluginID: id,
-		Detail:   "candidate promoted to primary",
+		Detail:   fmt.Sprintf("promoted image=%s previous=%s", plugin.CandidateImage, plugin.Image),
 	})
 
-	c.JSON(http.StatusOK, gin.H{"message": "candidate promoted to primary"})
+	c.JSON(http.StatusOK, gin.H{"message": "candidate promoted to stable"})
 }
 
 // RollbackCandidate handles POST /api/plugins/:id/rollback.
-// Stops the candidate, traffic returns to primary.
+//
+// Two scenarios:
+//   - Candidate deployed but not yet promoted: stop the candidate, stable keeps running.
+//   - Already promoted (previous_image set): stop current stable, restart from previous image.
 func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 	id := c.Param("id")
 
@@ -160,20 +179,75 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 		return
 	}
 
-	if !plugin.HasCandidate() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no candidate deployed"})
+	if plugin.CandidateContainerID == "" && plugin.PreviousImage == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nothing to roll back"})
 		return
 	}
 
-	// Stop candidate container.
-	if h.runtime != nil && plugin.CandidateContainerID != "" {
-		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.CandidateContainerID)
+	ctx := c.Request.Context()
+
+	// Scenario 1: candidate exists but hasn't been promoted yet — just discard it.
+	if plugin.CandidateContainerID != "" && plugin.PreviousImage == "" {
+		if h.runtime != nil {
+			_ = h.runtime.StopPlugin(ctx, plugin.CandidateContainerID)
+		}
+		h.db.Model(&plugin).Updates(map[string]interface{}{
+			"candidate_container_id": "",
+			"candidate_image":        "",
+			"candidate_version":      "",
+			"candidate_host":         "",
+			"candidate_port":         0,
+			"candidate_event_port":   0,
+			"candidate_healthy":      false,
+			"candidate_deployed_at":  time.Time{},
+			"candidate_last_seen":    time.Time{},
+		})
+		h.Events.Emit(events.DebugEvent{
+			Type:     "rollback",
+			PluginID: id,
+			Detail:   "candidate discarded — stable unchanged",
+		})
+		c.JSON(http.StatusOK, gin.H{"message": "candidate discarded"})
+		return
 	}
 
-	// Clear candidate fields — traffic falls back to primary automatically.
-	plugin.ClearCandidate()
-	h.db.Model(&models.Plugin{}).Where("id = ?", id).Updates(map[string]interface{}{
+	// Scenario 2: already promoted — stop current stable, restart from previous image.
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
+		return
+	}
+
+	if plugin.ContainerID != "" {
+		_ = h.runtime.StopPlugin(ctx, plugin.ContainerID)
+	}
+	if plugin.CandidateContainerID != "" {
+		_ = h.runtime.StopPlugin(ctx, plugin.CandidateContainerID)
+	}
+
+	env := h.buildEnv(id)
+	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
+
+	plugin.Image = plugin.PreviousImage
+	containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
+	if err != nil {
+		h.db.Model(&plugin).Updates(map[string]interface{}{"container_id": "", "status": "error"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "rollback failed: " + err.Error()})
+		return
+	}
+
+	h.db.Model(&plugin).Updates(map[string]interface{}{
+		"container_id": containerID,
+		"image":        plugin.PreviousImage,
+		"version":      plugin.PreviousVersion,
+		"status":       "running",
+		"host":         "",
+		"last_seen":    time.Time{},
+		"previous_image":         "",
+		"previous_version":       "",
 		"candidate_container_id": "",
+		"candidate_image":        "",
+		"candidate_version":      "",
 		"candidate_host":         "",
 		"candidate_port":         0,
 		"candidate_event_port":   0,
@@ -185,8 +259,8 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 	h.Events.Emit(events.DebugEvent{
 		Type:     "rollback",
 		PluginID: id,
-		Detail:   "candidate rolled back — traffic returns to primary",
+		Detail:   fmt.Sprintf("restored image=%s", plugin.PreviousImage),
 	})
 
-	c.JSON(http.StatusOK, gin.H{"message": "candidate rolled back"})
+	c.JSON(http.StatusOK, gin.H{"message": "rolled back to previous version"})
 }
