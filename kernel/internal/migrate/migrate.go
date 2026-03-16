@@ -58,12 +58,15 @@ func Run(db *gorm.DB) error {
 	}
 
 	// Apply pending migrations.
+	pending := 0
 	for _, m := range registry {
 		if appliedSet[m.name] {
+			log.Printf("migrations: skip %s (already applied)", m.name)
 			continue
 		}
+		pending++
 
-		log.Printf("migrations: applying %s", m.name)
+		log.Printf("migrations: applying %s ...", m.name)
 
 		err := db.Transaction(func(tx *gorm.DB) error {
 			if err := m.fn(tx); err != nil {
@@ -78,8 +81,9 @@ func Run(db *gorm.DB) error {
 			return fmt.Errorf("migration %s failed: %w", m.name, err)
 		}
 
-		log.Printf("migrations: applied %s", m.name)
+		log.Printf("migrations: applied %s ✓", m.name)
 	}
 
+	log.Printf("migrations: %d registered, %d already applied, %d newly applied", len(registry), len(registry)-pending, pending)
 	return nil
 }

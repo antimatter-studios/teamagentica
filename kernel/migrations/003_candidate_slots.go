@@ -8,10 +8,8 @@ import (
 )
 
 func init() {
-	migrate.Register("008_managed_container_cmd", func(db *gorm.DB) error {
-		if err := db.AutoMigrate(&models.ManagedContainer{}); err != nil {
-			return err
-		}
+	migrate.Register("003_candidate_slots", func(db *gorm.DB) error {
+		// Adds candidate_image, candidate_version columns to plugins.
 		return db.AutoMigrate(&models.Plugin{})
 	})
 }

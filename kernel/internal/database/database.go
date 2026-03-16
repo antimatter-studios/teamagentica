@@ -1,11 +1,11 @@
 package database
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"gorm.io/driver/sqlite"
@@ -45,11 +45,9 @@ func Init(path string) {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
+	bootstrapJWTSecret(DB)
 	seedDefaultProvider(DB)
 	seedSystemPlugins(DB)
-	migratePluginTokens(DB)
-	migrateAliasConfig(DB)
-	repairMissingTokens(DB)
 
 	log.Println("database initialized at", dbPath)
 }
@@ -73,50 +71,34 @@ func Reinit() error {
 	return nil
 }
 
-const defaultProviderName = "Builtin Plugin Provider"
-
-// seedDefaultProvider idempotently creates the default provider record.
-// Migrates legacy names (roboslop, plugwerk, teamagentica) to the current name.
+// seedDefaultProvider idempotently creates the default marketplace provider
+// record, deriving the URL from the builtin-provider system plugin definition.
 func seedDefaultProvider(db *gorm.DB) {
-	providerURL := os.Getenv("TEAMAGENTICA_PROVIDER_URL")
-
-	// Remove stale legacy providers that duplicate the builtin one.
-	for _, oldName := range []string{"plugwerk", "roboslop"} {
-		var old models.Provider
-		if db.First(&old, "name = ?", oldName).Error == nil {
-			db.Delete(&old)
-			log.Printf("database: removed legacy provider %q", oldName)
+	var sp *systemPlugin
+	for i := range systemPlugins {
+		if systemPlugins[i].ID == "builtin-provider" {
+			sp = &systemPlugins[i]
+			break
 		}
 	}
-
-	// Rename "teamagentica" → current display name if it still has the old name.
-	var existing models.Provider
-	if db.First(&existing, "name = ?", "teamagentica").Error == nil {
-		updates := map[string]interface{}{"name": defaultProviderName}
-		if providerURL != "" && existing.URL != providerURL {
-			updates["url"] = providerURL
-		}
-		db.Model(&existing).Updates(updates)
-		log.Printf("database: renamed provider 'teamagentica' → %q", defaultProviderName)
+	if sp == nil {
+		log.Println("database: no builtin-provider in systemPlugins, skipping default provider seed")
 		return
 	}
 
-	if db.First(&existing, "name = ?", defaultProviderName).Error == nil {
-		// Already exists with correct name — update URL if env changed.
-		if providerURL != "" && existing.URL != providerURL {
+	providerURL := fmt.Sprintf("http://teamagentica-plugin-%s:%d", sp.ID, sp.HTTPPort)
+
+	var existing models.Provider
+	if db.First(&existing, "name = ?", sp.Name).Error == nil {
+		if existing.URL != providerURL {
 			db.Model(&existing).Update("url", providerURL)
 			log.Printf("database: updated default provider url to %s", providerURL)
 		}
 		return
 	}
 
-	if providerURL == "" {
-		log.Println("database: TEAMAGENTICA_PROVIDER_URL not set, skipping default provider seed")
-		return
-	}
-
 	provider := models.Provider{
-		Name:    defaultProviderName,
+		Name:    sp.Name,
 		URL:     providerURL,
 		System:  true,
 		Enabled: true,
@@ -149,29 +131,11 @@ var systemPlugins = []systemPlugin{
 		HTTPPort:     8083,
 		Capabilities: []string{"marketplace:provider"},
 	},
-	{
-		ID:           "infra-cost-explorer",
-		Name:         "Cost Explorer",
-		Version:      "1.0.0",
-		Image:        "teamagentica-infra-cost-explorer:latest",
-		HTTPPort:     8090,
-		Capabilities: []string{"system:infra-cost-explorer"},
-	},
 }
 
 // seedSystemPlugins ensures all system plugins exist in the DB, are enabled,
 // and have valid service tokens. Runs idempotently on every boot.
 func seedSystemPlugins(db *gorm.DB) {
-	// Migrate old plugin IDs.
-	for _, oldID := range []string{"teamagentica-provider", "provider"} {
-		var old models.Plugin
-		if db.First(&old, "id = ?", oldID).Error == nil {
-			db.Delete(&old)
-			db.Where("name = ? AND revoked = ?", oldID, false).Delete(&models.ServiceToken{})
-			log.Printf("database: removed old system plugin %s", oldID)
-		}
-	}
-
 	for _, sp := range systemPlugins {
 		var existing models.Plugin
 		if db.First(&existing, "id = ?", sp.ID).Error == nil {
@@ -181,13 +145,11 @@ func seedSystemPlugins(db *gorm.DB) {
 				"system":  true,
 				"name":    sp.Name,
 			}
-			// Update image if changed.
 			if existing.Image != sp.Image {
 				updates["image"] = sp.Image
 			}
 			db.Model(&existing).Updates(updates)
 
-			// Ensure service token exists.
 			if existing.ServiceToken == "" {
 				ensureServiceToken(db, sp.ID)
 			}
@@ -250,92 +212,41 @@ func ensureServiceToken(db *gorm.DB, pluginID string) {
 	db.Model(&models.Plugin{}).Where("id = ?", pluginID).Update("service_token", token)
 }
 
-// migratePluginTokens moves TEAMAGENTICA_PLUGIN_TOKEN from plugin_configs to the plugin's service_token field.
-func migratePluginTokens(db *gorm.DB) {
-	var configs []models.PluginConfig
-	db.Where("key = ?", "TEAMAGENTICA_PLUGIN_TOKEN").Find(&configs)
-	for _, cfg := range configs {
-		db.Model(&models.Plugin{}).Where("id = ? AND (service_token IS NULL OR service_token = '')", cfg.PluginID).
-			Update("service_token", cfg.Value)
-		db.Delete(&cfg)
-	}
-	if len(configs) > 0 {
-		log.Printf("database: migrated %d plugin token(s) from config to plugin record", len(configs))
+// upsertConfig sets a single config row, creating or updating as needed.
+func upsertConfig(db *gorm.DB, ownerID, key, value string, isSecret bool) {
+	var row models.Config
+	if db.Where("owner_id = ? AND key = ?", ownerID, key).First(&row).Error == nil {
+		db.Model(&row).Updates(map[string]interface{}{"value": value, "is_secret": isSecret})
+	} else {
+		db.Create(&models.Config{OwnerID: ownerID, Key: key, Value: value, IsSecret: isSecret})
 	}
 }
 
-// migrateAliasConfig converts old PLUGIN_ALIAS/PLUGIN_ALIAS_TARGET config entries
-// into the new PLUGIN_ALIASES JSON array format and sets PluginID on matching aliases.
-func migrateAliasConfig(db *gorm.DB) {
-	var aliasConfigs []models.PluginConfig
-	db.Where("key = ?", "PLUGIN_ALIAS").Find(&aliasConfigs)
-	if len(aliasConfigs) == 0 {
+// bootstrapJWTSecret loads the JWT secret from the configs table (owner_id="kernel", key="jwt_secret").
+// If no secret exists yet, a random one is generated and persisted.
+func bootstrapJWTSecret(db *gorm.DB) {
+	const ownerID = "kernel"
+	const key = "jwt_secret"
+
+	var row models.Config
+	if db.Where("owner_id = ? AND key = ?", ownerID, key).First(&row).Error == nil {
+		auth.InitJWT(row.Value)
+		log.Println("database: JWT secret loaded from configs table")
 		return
 	}
 
-	migrated := 0
-	for _, ac := range aliasConfigs {
-		pluginID := ac.PluginID
-		aliasName := ac.Value
-		if aliasName == "" {
-			continue
-		}
+	// Generate a new secret.
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("database: failed to generate JWT secret: %v", err)
+	}
+	secret := hex.EncodeToString(b)
 
-		// Find the target (defaults to plugin ID).
-		aliasTarget := pluginID
-		var targetCfg models.PluginConfig
-		if db.Where("plugin_id = ? AND key = ?", pluginID, "PLUGIN_ALIAS_TARGET").First(&targetCfg).Error == nil {
-			if targetCfg.Value != "" {
-				aliasTarget = targetCfg.Value
-			}
-		}
-
-		// Build PLUGIN_ALIASES JSON.
-		entry := []map[string]string{{"name": aliasName, "target": aliasTarget}}
-		aliasJSON, _ := json.Marshal(entry)
-
-		// Check if PLUGIN_ALIASES already exists.
-		var existing models.PluginConfig
-		if db.Where("plugin_id = ? AND key = ?", pluginID, "PLUGIN_ALIASES").First(&existing).Error != nil {
-			db.Create(&models.PluginConfig{
-				PluginID: pluginID,
-				Key:      "PLUGIN_ALIASES",
-				Value:    string(aliasJSON),
-			})
-		}
-
-		// Set PluginID on matching alias in the aliases table.
-		db.Model(&models.Alias{}).Where("name = ? AND plugin_id = ''", aliasName).
-			Update("plugin_id", pluginID)
-
-		// Delete old config entries.
-		db.Where("plugin_id = ? AND key = ?", pluginID, "PLUGIN_ALIAS").Delete(&models.PluginConfig{})
-		db.Where("plugin_id = ? AND key = ?", pluginID, "PLUGIN_ALIAS_TARGET").Delete(&models.PluginConfig{})
-
-		migrated++
+	row = models.Config{OwnerID: ownerID, Key: key, Value: secret, IsSecret: true}
+	if err := db.Create(&row).Error; err != nil {
+		log.Fatalf("database: failed to persist JWT secret: %v", err)
 	}
 
-	if migrated > 0 {
-		log.Printf("database: migrated %d plugin(s) from PLUGIN_ALIAS to PLUGIN_ALIASES", migrated)
-	}
+	auth.InitJWT(secret)
+	log.Println("database: new JWT secret generated and persisted")
 }
-
-// repairMissingTokens generates service tokens for any enabled plugin that is
-// missing either its service_token field or its service_tokens table entry.
-// This handles cases where plugins were renamed and their token associations were lost.
-func repairMissingTokens(db *gorm.DB) {
-	var plugins []models.Plugin
-	db.Where("enabled = ?", true).Find(&plugins)
-
-	for _, p := range plugins {
-		// Check if the service_tokens table entry exists.
-		var st models.ServiceToken
-		hasTableEntry := db.Where("name = ? AND revoked = ?", p.ID, false).First(&st).Error == nil
-
-		if p.ServiceToken == "" || !hasTableEntry {
-			ensureServiceToken(db, p.ID)
-			log.Printf("database: repaired missing service token for plugin %s", p.ID)
-		}
-	}
-}
-
