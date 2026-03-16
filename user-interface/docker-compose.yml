@@ -1,0 +1,40 @@
+name: teamagentica-ui
+
+services:
+  user-interface:
+    profiles: [prod]
+    container_name: teamagentica-ui
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    labels:
+      docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
+      docker-proxy.teamagentica-ui.port: 3000
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - VITE_APP_NAME=${APP_NAME:-TeamAgentica}
+      - VITE_TEAMAGENTICA_KERNEL_HOST=${TEAMAGENTICA_KERNEL_HOST:-api.teamagentica.localhost}
+      - VITE_TEAMAGENTICA_KERNEL_PORT=${TEAMAGENTICA_KERNEL_PORT:-9741}
+
+  user-interface-dev:
+    profiles: [dev]
+    container_name: teamagentica-ui-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    labels:
+      docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
+      docker-proxy.teamagentica-ui.port: 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - VITE_APP_NAME=${APP_NAME:-TeamAgentica}
+      - VITE_TEAMAGENTICA_KERNEL_HOST=${TEAMAGENTICA_KERNEL_HOST:-api.teamagentica.localhost}
+      - VITE_TEAMAGENTICA_KERNEL_PORT=${TEAMAGENTICA_KERNEL_PORT:-9741}

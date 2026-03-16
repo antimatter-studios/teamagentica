@@ -1,0 +1,44 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build production UI image via Docker Compose
+    cmds:
+      - docker compose -f docker-compose.yml --profile prod build
+
+  start:
+    desc: Start production UI container
+    cmds:
+      - docker compose -f docker-compose.yml --profile prod up -d
+
+  stop:
+    desc: Stop production UI container
+    cmds:
+      - docker compose -f docker-compose.yml --profile prod down
+
+  restart:
+    desc: Restart production UI container
+    cmds:
+      - task: stop
+      - task: start
+
+  dev:build:
+    desc: Build dev UI image via Docker Compose
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev build
+
+  dev:start:
+    desc: Start dev UI container (hot reload on port 3000)
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev up -d
+
+  dev:stop:
+    desc: Stop dev UI container
+    cmds:
+      - docker compose -f docker-compose.yml --profile dev down
+
+  dev:restart:
+    desc: Restart dev UI container
+    cmds:
+      - task: dev:stop
+      - task: dev:start
