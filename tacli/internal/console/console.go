@@ -1,7 +1,9 @@
 package console
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -11,165 +13,333 @@ import (
 	"github.com/antimatter-studios/teamagentica/tacli/internal/client"
 )
 
-// refreshMsg triggers a data refresh.
-type refreshMsg struct{}
+const (
+	tabPlugins = 0
+	tabEvents  = 1
+	tabLogs    = 2
+	tabMarket  = 3
+)
 
-// dataMsg carries fetched data.
-type dataMsg struct {
-	health  *client.HealthResponse
+var tabNames = []string{"Plugins", "Events", "Logs", "Marketplace"}
+
+// ── shared messages ───────────────────────────────────────────────────────────
+
+type healthMsg struct {
+	health *client.HealthResponse
+	err    error
+}
+
+// pluginsMsg is handled by tabs via the default fan-out branch.
+type pluginsMsg struct {
 	plugins []client.PluginSummary
 	err     error
 }
 
-// Model is the bubbletea model for the console dashboard.
+type refreshTickMsg struct{}
+type clockTickMsg time.Time
+type sseStartedMsg struct{}
+type sseEventMsg client.SSEEvent
+type logTickMsg struct{}
+
+// ── model ─────────────────────────────────────────────────────────────────────
+
+// Model is the top-level bubbletea model for the multi-panel console.
 type Model struct {
-	client  *client.Client
-	health  *client.HealthResponse
-	plugins []client.PluginSummary
-	err     error
-	width   int
-	height  int
-	cursor  int
-	quit    bool
+	c         *client.Client
+	activeTab int
+	health    *client.HealthResponse
+	connErr   error
+	now       time.Time
+	width     int
+	height    int
+	quit      bool
+
+	plugTab pluginsTab
+	evtTab  eventsTab
+	logTab  logsTab
+	mktTab  marketplaceTab
+
+	evtCh chan client.SSEEvent
 }
 
-// New creates a new console model.
+// New creates the console model.
 func New(c *client.Client) Model {
-	return Model{client: c}
+	evtCh := make(chan client.SSEEvent, 256)
+	return Model{
+		c:     c,
+		now:   time.Now(),
+		evtCh: evtCh,
+
+		plugTab: newPluginsTab(c),
+		evtTab:  newEventsTab(),
+		logTab:  newLogsTab(c),
+		mktTab:  newMarketplaceTab(c),
+	}
 }
 
-// Init starts the first data fetch.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		fetchData(m.client),
 		tea.SetWindowTitle("tacli console"),
+		doFetchHealth(m.c),
+		doFetchPlugins(m.c),
+		scheduleRefresh(),
+		scheduleClock(),
+		scheduleLogPoll(),
+		startSSEStream(m.c, m.evtCh),
 	)
 }
 
-// Update handles messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("q", "ctrl+c"))):
 			m.quit = true
 			return m, tea.Quit
-		case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
-			return m, fetchData(m.client)
-		case key.Matches(msg, key.NewBinding(key.WithKeys("j", "down"))):
-			if m.cursor < len(m.plugins)-1 {
-				m.cursor++
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("1"))):
+			m.activeTab = tabPlugins
+		case key.Matches(msg, key.NewBinding(key.WithKeys("2"))):
+			m.activeTab = tabEvents
+		case key.Matches(msg, key.NewBinding(key.WithKeys("3"))):
+			m.activeTab = tabLogs
+		case key.Matches(msg, key.NewBinding(key.WithKeys("4"))):
+			m.activeTab = tabMarket
+		case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
+			m.activeTab = (m.activeTab + 1) % 4
+		case key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))):
+			m.activeTab = (m.activeTab + 3) % 4
+
+		default:
+			// non-global keys → active tab only
+			var cmd tea.Cmd
+			switch m.activeTab {
+			case tabPlugins:
+				m.plugTab, cmd = m.plugTab.update(msg)
+			case tabEvents:
+				m.evtTab, cmd = m.evtTab.update(msg)
+			case tabLogs:
+				m.logTab, cmd = m.logTab.update(msg)
+			case tabMarket:
+				m.mktTab, cmd = m.mktTab.update(msg)
 			}
-		case key.Matches(msg, key.NewBinding(key.WithKeys("k", "up"))):
-			if m.cursor > 0 {
-				m.cursor--
+			if cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 		}
 
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-
-	case dataMsg:
+	case healthMsg:
 		m.health = msg.health
-		m.plugins = msg.plugins
-		m.err = msg.err
-		return m, scheduleRefresh()
+		m.connErr = msg.err
 
-	case refreshMsg:
-		return m, fetchData(m.client)
+	case clockTickMsg:
+		m.now = time.Time(msg)
+		cmds = append(cmds, scheduleClock())
+
+	case refreshTickMsg:
+		cmds = append(cmds, doFetchHealth(m.c), doFetchPlugins(m.c), scheduleRefresh())
+
+	case sseStartedMsg:
+		cmds = append(cmds, waitForSSEEvent(m.evtCh))
+
+	case sseEventMsg:
+		m.evtTab = m.evtTab.addEvent(client.SSEEvent(msg))
+		cmds = append(cmds, waitForSSEEvent(m.evtCh))
+
+	default:
+		// all other messages fan out to all tabs (async responses)
+		var cmd tea.Cmd
+
+		m.plugTab, cmd = m.plugTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.evtTab, cmd = m.evtTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.logTab, cmd = m.logTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.mktTab, cmd = m.mktTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
-	return m, nil
+	return m, tea.Batch(cmds...)
 }
 
-// View renders the dashboard.
 func (m Model) View() string {
 	if m.quit {
 		return ""
 	}
-
-	// Styles.
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("12")).
-		MarginBottom(1)
-
-	ok := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	selected := lipgloss.NewStyle().Background(lipgloss.Color("8")).Foreground(lipgloss.Color("15"))
-	header := lipgloss.NewStyle().Bold(true).Underline(true).MarginTop(1).MarginBottom(1)
-
-	var s string
-
-	// Header.
-	if m.health != nil {
-		s += title.Render(fmt.Sprintf("┃ %s v%s", m.health.App, m.health.Version))
-		s += "\n"
-		s += ok.Render("  ● connected") + "  " + dim.Render(m.client.BaseURL)
-		s += "\n"
-	} else if m.err != nil {
-		s += title.Render("┃ tacli console")
-		s += "\n"
-		s += errStyle.Render("  ✗ " + m.err.Error())
-		s += "\n"
-	} else {
-		s += title.Render("┃ tacli console")
-		s += "\n"
-		s += dim.Render("  connecting...")
-		s += "\n"
+	if m.width == 0 {
+		return "loading…"
+	}
+	if m.width < 60 || m.height < 12 {
+		return "terminal too small (need ≥60×12)"
 	}
 
-	// Plugins.
-	s += header.Render("  Plugins")
-	s += "\n"
-
-	if len(m.plugins) == 0 {
-		s += dim.Render("  no plugins")
-		s += "\n"
-	} else {
-		for i, p := range m.plugins {
-			indicator := errStyle.Render("○")
-			if p.Enabled {
-				indicator = ok.Render("●")
-			}
-
-			line := fmt.Sprintf("  %s %-28s %s", indicator, p.Name, p.Status)
-			if i == m.cursor {
-				line = selected.Render(line)
-			}
-			s += line + "\n"
-		}
-	}
-
-	// Footer.
-	s += "\n"
-	s += dim.Render("  r: refresh  q: quit  ↑/↓: navigate")
-	s += "\n"
-
-	return s
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.renderHeader(),
+		m.renderTabBar(),
+		m.renderContent(),
+		m.renderFooter(),
+	)
 }
 
-func fetchData(c *client.Client) tea.Cmd {
+// ── rendering ─────────────────────────────────────────────────────────────────
+
+func (m Model) renderHeader() string {
+	w := m.width
+
+	var appLabel string
+	if m.health != nil {
+		appLabel = sBold.Render(m.health.App) + " " + sDim.Render("v"+m.health.Version)
+	} else {
+		appLabel = sBold.Render("TeamAgentica")
+	}
+
+	var connLabel string
+	if m.connErr != nil {
+		connLabel = sErr.Render("✗ disconnected") + "  " + sDim.Render(m.c.BaseURL)
+	} else if m.health != nil {
+		connLabel = sOK.Render("● connected") + "  " + sDim.Render(m.c.BaseURL)
+	} else {
+		connLabel = sDim.Render("◌ connecting…")
+	}
+
+	clockLabel := sDim.Render(m.now.Format("15:04:05"))
+
+	// spread across full width
+	lw := lipgloss.Width(appLabel)
+	mw := lipgloss.Width(connLabel)
+	rw := lipgloss.Width(clockLabel)
+	space := w - 2 - lw - mw - rw
+	if space < 2 {
+		space = 2
+	}
+	lpad := space / 2
+	rpad := space - lpad
+
+	line := " " + appLabel +
+		strings.Repeat(" ", lpad) +
+		connLabel +
+		strings.Repeat(" ", rpad) +
+		clockLabel
+
+	return line + "\n" + " " + sDim.Render(strings.Repeat("─", w-2))
+}
+
+func (m Model) renderTabBar() string {
+	parts := make([]string, len(tabNames))
+	for i, name := range tabNames {
+		label := fmt.Sprintf("[%d] %s", i+1, name)
+		if i == m.activeTab {
+			parts[i] = sBlue.Bold(true).Render(label)
+		} else {
+			parts[i] = sDim.Render(label)
+		}
+	}
+	return "  " + strings.Join(parts, "  ")
+}
+
+func (m Model) renderContent() string {
+	h := m.contentHeight()
+	w := m.width
+	switch m.activeTab {
+	case tabPlugins:
+		return m.plugTab.view(w, h)
+	case tabEvents:
+		return m.evtTab.view(w, h)
+	case tabLogs:
+		return m.logTab.view(w, h)
+	case tabMarket:
+		return m.mktTab.view(w, h)
+	}
+	return ""
+}
+
+func (m Model) renderFooter() string {
+	w := m.width
+	var tabHelp string
+	switch m.activeTab {
+	case tabPlugins:
+		tabHelp = m.plugTab.helpLine()
+	case tabEvents:
+		tabHelp = m.evtTab.helpLine()
+	case tabLogs:
+		tabHelp = m.logTab.helpLine()
+	case tabMarket:
+		tabHelp = m.mktTab.helpLine()
+	}
+	global := "1-4/Tab: switch  q: quit"
+	sep := "  │  "
+	line := tabHelp + sep + global
+	return sDim.Render(strings.Repeat("─", w)) + "\n  " + sDim.Render(line)
+}
+
+// contentHeight is the lines available for tab content.
+// header=2  tabbar=1  footer=2  → subtract 5
+func (m Model) contentHeight() int {
+	h := m.height - 5
+	if h < 4 {
+		h = 4
+	}
+	return h
+}
+
+// ── background commands ───────────────────────────────────────────────────────
+
+func doFetchHealth(c *client.Client) tea.Cmd {
 	return func() tea.Msg {
 		h, err := c.Health()
-		if err != nil {
-			return dataMsg{err: err}
-		}
+		return healthMsg{health: h, err: err}
+	}
+}
 
+func doFetchPlugins(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
 		plugins, err := c.ListPlugins()
-		if err != nil {
-			// Health OK but plugins failed (auth issue) — show what we can.
-			return dataMsg{health: h, err: err}
-		}
-
-		return dataMsg{health: h, plugins: plugins}
+		return pluginsMsg{plugins: plugins, err: err}
 	}
 }
 
 func scheduleRefresh() tea.Cmd {
-	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
-		return refreshMsg{}
-	})
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return refreshTickMsg{} })
+}
+
+func scheduleClock() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return clockTickMsg(t) })
+}
+
+func scheduleLogPoll() tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return logTickMsg{} })
+}
+
+func startSSEStream(c *client.Client, ch chan client.SSEEvent) tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			for {
+				_ = c.StreamEvents(context.Background(), ch)
+				time.Sleep(3 * time.Second)
+			}
+		}()
+		return sseStartedMsg{}
+	}
+}
+
+func waitForSSEEvent(ch chan client.SSEEvent) tea.Cmd {
+	return func() tea.Msg {
+		return sseEventMsg(<-ch)
+	}
 }

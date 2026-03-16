@@ -1,6 +1,8 @@
 package client
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -555,4 +557,110 @@ func (c *Client) doSimple(method, path string) error {
 	}
 	resp.Body.Close()
 	return nil
+}
+
+// ── plugin detail ─────────────────────────────────────────────────────────────
+
+// PluginDetail is the full plugin record returned by GET /api/plugins/:id.
+type PluginDetail struct {
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Group            string   `json:"group"`
+	Version          string   `json:"version"`
+	Image            string   `json:"image"`
+	Status           string   `json:"status"`
+	Enabled          bool     `json:"enabled"`
+	System           bool     `json:"system"`
+	Host             string   `json:"host"`
+	Capabilities     []string `json:"capabilities"`
+	Dependencies     []string `json:"dependencies"`
+	CandidateImage   string   `json:"candidate_image"`
+	CandidateVersion string   `json:"candidate_version"`
+}
+
+// GetPlugin calls GET /api/plugins/:id and returns the full plugin record.
+func (c *Client) GetPlugin(id string) (*PluginDetail, error) {
+	resp, err := c.get("/api/plugins/" + id)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var wrapper struct {
+		Plugin PluginDetail `json:"plugin"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	return &wrapper.Plugin, nil
+}
+
+// GetPluginLogs calls GET /api/plugins/:id/logs and returns plain-text log output.
+func (c *Client) GetPluginLogs(id string, tail int) (string, error) {
+	resp, err := c.get(fmt.Sprintf("/api/plugins/%s/logs?tail=%d", id, tail))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read: %w", err)
+	}
+	return string(b), nil
+}
+
+// ── SSE event streaming ───────────────────────────────────────────────────────
+
+// SSEEvent is a parsed server-sent event from the kernel debug stream.
+type SSEEvent struct {
+	Channel string
+	Data    json.RawMessage
+}
+
+// StreamEvents connects to GET /api/debug/events and sends parsed events to ch
+// until ctx is cancelled or the connection drops.
+func (c *Client) StreamEvents(ctx context.Context, ch chan<- SSEEvent) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/api/debug/events", nil)
+	if err != nil {
+		return err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+
+	// Use a client with no timeout for the streaming connection.
+	sseClient := &http.Client{}
+	resp, err := sseClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	var eventType, data string
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			eventType = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			data = strings.TrimPrefix(line, "data: ")
+		case line == "" && eventType != "" && data != "":
+			select {
+			case ch <- SSEEvent{Channel: eventType, Data: json.RawMessage(data)}:
+			case <-ctx.Done():
+				return nil
+			}
+			eventType, data = "", ""
+		}
+	}
+	return scanner.Err()
 }
