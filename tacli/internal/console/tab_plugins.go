@@ -2,9 +2,9 @@ package console
 
 import (
 	"fmt"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/antimatter-studios/teamagentica/tacli/internal/client"
 )
@@ -148,10 +148,7 @@ func (t pluginsTab) view(width, height int) string {
 	leftPanel := renderBox(leftContent, leftW-2, t.activeLeft())
 	rightPanel := renderBox(rightContent, rightW-2, false)
 
-	return strings.Join([]string{
-		"",
-		" " + leftPanel + rightPanel,
-	}, "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel)
 }
 
 func (t pluginsTab) activeLeft() bool { return true }
@@ -163,7 +160,7 @@ func (t pluginsTab) renderList(w, h int) []string {
 	}
 
 	if len(t.plugins) == 0 {
-		lines = append(lines, sDim.Render(" no plugins"))
+		lines = append(lines, sMuted.Render(" no plugins"))
 		return lines
 	}
 
@@ -171,7 +168,7 @@ func (t pluginsTab) renderList(w, h int) []string {
 		icon := pluginIcon(p.Status, p.Enabled)
 		badge := ""
 		if p.System {
-			badge = sDim.Render(" sys")
+			badge = sMuted.Render(" sys")
 		}
 		name := trunc(p.Name, w-16)
 		line := fmt.Sprintf(" %s %-*s %s%s", icon, w-16, name, statusColor(p.Status, p.Enabled), badge)
@@ -203,7 +200,7 @@ func (t pluginsTab) renderDetail(w, h int) []string {
 
 	p := t.selected()
 	if p == nil {
-		return []string{sDim.Render(" select a plugin")}
+		return []string{sMuted.Render(" select a plugin")}
 	}
 
 	lines := []string{
@@ -220,9 +217,9 @@ func (t pluginsTab) renderDetail(w, h int) []string {
 	add("Version", sMuted.Render(p.Version))
 
 	if t.detail != nil {
-		add("Image", sDim.Render(trunc(t.detail.Image, w-18)))
+		add("Image", trunc(t.detail.Image, w-18))
 		if t.detail.Host != "" {
-			add("Host", sDim.Render(t.detail.Host))
+			add("Host", t.detail.Host)
 		}
 	}
 
@@ -238,22 +235,22 @@ func (t pluginsTab) renderDetail(w, h int) []string {
 		lines = append(lines, "")
 		lines = append(lines, "  "+sBold.Render("Dependencies"))
 		for _, dep := range t.detail.Dependencies {
-			lines = append(lines, "    "+sDim.Render(dep))
+			lines = append(lines, "    "+dep)
 		}
 	}
 
 	if t.detail != nil && t.detail.CandidateImage != "" {
 		lines = append(lines, "")
 		lines = append(lines, "  "+sWarn.Render("Candidate"))
-		lines = append(lines, "    image   "+sDim.Render(trunc(t.detail.CandidateImage, w-12)))
+		lines = append(lines, "    image   "+trunc(t.detail.CandidateImage, w-12))
 		if t.detail.CandidateVersion != "" {
-			lines = append(lines, "    version "+sDim.Render(t.detail.CandidateVersion))
+			lines = append(lines, "    version "+t.detail.CandidateVersion)
 		}
 	}
 
 	if t.detail == nil {
 		lines = append(lines, "")
-		lines = append(lines, sDim.Render("  loading…"))
+		lines = append(lines, sMuted.Render("  loading…"))
 	}
 
 	return lines

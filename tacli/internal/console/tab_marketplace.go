@@ -109,7 +109,7 @@ func (t marketplaceTab) update(msg tea.Msg) (marketplaceTab, tea.Cmd) {
 }
 
 func (t marketplaceTab) view(width, height int) string {
-	innerW := width - 4
+	innerW := width - 2
 	innerH := height - 2
 
 	lines := []string{
@@ -118,11 +118,11 @@ func (t marketplaceTab) view(width, height int) string {
 	}
 
 	if t.loading && len(t.catalog) == 0 {
-		lines = append(lines, sDim.Render("  loading catalog…"))
+		lines = append(lines, sMuted.Render("  loading catalog…"))
 	} else if t.err != "" {
 		lines = append(lines, sErr.Render("  error: "+t.err))
 	} else if len(t.catalog) == 0 {
-		lines = append(lines, sDim.Render("  no plugins in catalog  (r to refresh)"))
+		lines = append(lines, sMuted.Render("  no plugins in catalog  (r to refresh)"))
 	} else {
 		nameW := innerW - 42
 		if nameW < 16 {
@@ -136,7 +136,7 @@ func (t marketplaceTab) view(width, height int) string {
 			name := trunc(p.Name, nameW)
 			desc := trunc(p.Description, 28)
 			ver := trunc(p.Version, 8)
-			line := fmt.Sprintf("  %s %-*s %-28s %s", installed, nameW, name, desc, sDim.Render(ver))
+			line := fmt.Sprintf("  %s %-*s %-28s %s", installed, nameW, name, desc, sMuted.Render(ver))
 			if i == t.cursor {
 				line = sSel.Render(pad(line, innerW))
 			}
@@ -154,12 +154,12 @@ func (t marketplaceTab) view(width, height int) string {
 
 	// loading indicator when refreshing existing catalog
 	if t.loading && len(t.catalog) > 0 {
-		hdr := " " + sBold.Render("Marketplace") + "  " + sDim.Render("refreshing…")
+		hdr := " " + sBold.Render("Marketplace") + "  " + sMuted.Render("refreshing…")
 		lines[0] = hdr
 	}
 
 	content := buildContent(lines, innerH, innerW)
-	return "\n " + renderBox(content, innerW, true)
+	return renderBox(content, innerW, true)
 }
 
 func (t marketplaceTab) selectedCatalog() *client.CatalogPlugin {

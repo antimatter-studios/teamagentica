@@ -119,7 +119,7 @@ func (t logsTab) update(msg tea.Msg) (logsTab, tea.Cmd) {
 }
 
 func (t logsTab) view(width, height int) string {
-	innerW := width - 4
+	innerW := width - 2
 	innerH := height - 2
 
 	selectorH := 3
@@ -130,18 +130,18 @@ func (t logsTab) view(width, height int) string {
 	selLines = append(selLines, sBold.Render(" Logs"))
 
 	if len(t.plugins) == 0 {
-		selLines = append(selLines, sDim.Render("  no plugins"))
+		selLines = append(selLines, sMuted.Render("  no plugins"))
 	} else {
 		p := t.plugins[t.cursor]
 		icon := pluginIcon(p.Status, p.Enabled)
 		nav := ""
 		if t.cursor > 0 {
-			nav += sDim.Render("← ")
+			nav += sMuted.Render("← ")
 		} else {
 			nav += "  "
 		}
 		if t.cursor < len(t.plugins)-1 {
-			nav += sDim.Render(" →")
+			nav += sMuted.Render(" →")
 		}
 		selLines = append(selLines, "  "+icon+" "+sBold.Render(p.Name)+" "+nav)
 	}
@@ -153,9 +153,9 @@ func (t logsTab) view(width, height int) string {
 	if t.err != "" {
 		logLines = append(logLines, sErr.Render("  error: "+t.err))
 	} else if t.loadingFor != "" && len(t.lines) == 0 {
-		logLines = append(logLines, sDim.Render("  loading…"))
+		logLines = append(logLines, sMuted.Render("  loading…"))
 	} else if len(t.lines) == 0 {
-		logLines = append(logLines, sDim.Render("  no logs"))
+		logLines = append(logLines, sMuted.Render("  no logs"))
 	} else {
 		// apply scroll window
 		visible := t.lines
@@ -174,14 +174,14 @@ func (t logsTab) view(width, height int) string {
 			visible = visible[start:bottom]
 		}
 		for _, l := range visible {
-			logLines = append(logLines, "  "+sDim.Render(trunc(l, innerW-2)))
+			logLines = append(logLines, "  "+trunc(l, innerW-2))
 		}
 	}
 
 	// combine
 	allLines := append(selLines, logLines...)
 	content := buildContent(allLines, innerH, innerW)
-	return "\n " + renderBox(content, innerW, true)
+	return renderBox(content, innerW, true)
 }
 
 func (t logsTab) helpLine() string {

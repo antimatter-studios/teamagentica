@@ -7,23 +7,24 @@ import (
 )
 
 var (
-	clrOK     = lipgloss.Color("10")  // bright green
-	clrErr    = lipgloss.Color("9")   // bright red
-	clrWarn   = lipgloss.Color("11")  // bright yellow
-	clrBlue   = lipgloss.Color("12")  // bright blue
-	clrCyan   = lipgloss.Color("14")  // bright cyan
-	clrDim    = lipgloss.Color("8")   // dark grey
-	clrMuted  = lipgloss.Color("244") // medium grey
-	clrFg     = lipgloss.Color("252") // near-white
-	clrBorder = lipgloss.Color("238") // panel border
-	clrSelBg  = lipgloss.Color("235") // selection background
+	clrOK       = lipgloss.Color("10")  // bright green
+	clrErr      = lipgloss.Color("9")   // bright red
+	clrWarn     = lipgloss.Color("11")  // bright yellow
+	clrBlue     = lipgloss.Color("12")  // bright blue
+	clrCyan     = lipgloss.Color("14")  // bright cyan
+	clrMuted    = lipgloss.Color("244") // medium grey — readable secondary text
+	clrFg       = lipgloss.Color("252") // near-white
+	clrBorder   = lipgloss.Color("238") // panel border
+	clrSelBg    = lipgloss.Color("235") // selection background
+	clrTabInBg  = lipgloss.Color("237") // inactive tab background
+	clrTabInFg  = lipgloss.Color("250") // inactive tab foreground
 
 	sOK    = lipgloss.NewStyle().Foreground(clrOK)
 	sErr   = lipgloss.NewStyle().Foreground(clrErr)
 	sWarn  = lipgloss.NewStyle().Foreground(clrWarn)
 	sBlue  = lipgloss.NewStyle().Foreground(clrBlue)
 	sCyan  = lipgloss.NewStyle().Foreground(clrCyan)
-	sDim   = lipgloss.NewStyle().Foreground(clrDim)
+	sDim   = lipgloss.NewStyle().Foreground(clrMuted) // kept for call-sites; now same as sMuted
 	sMuted = lipgloss.NewStyle().Foreground(clrMuted)
 	sBold  = lipgloss.NewStyle().Bold(true)
 	sSel   = lipgloss.NewStyle().Background(clrSelBg).Foreground(clrFg)
@@ -35,12 +36,23 @@ var (
 	sBorderActive = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(clrBlue)
+
+	sTabActive = lipgloss.NewStyle().
+			Background(clrBlue).
+			Foreground(lipgloss.Color("15")).
+			Bold(true).
+			Padding(0, 1)
+
+	sTabInactive = lipgloss.NewStyle().
+			Background(clrTabInBg).
+			Foreground(clrTabInFg).
+			Padding(0, 1)
 )
 
 // pluginIcon returns a colored status indicator.
 func pluginIcon(status string, enabled bool) string {
 	if !enabled {
-		return sDim.Render("○")
+		return sMuted.Render("○")
 	}
 	switch status {
 	case "running":
@@ -55,7 +67,7 @@ func pluginIcon(status string, enabled bool) string {
 // statusColor returns a styled status string.
 func statusColor(status string, enabled bool) string {
 	if !enabled {
-		return sDim.Render("disabled")
+		return sMuted.Render("disabled")
 	}
 	switch status {
 	case "running":

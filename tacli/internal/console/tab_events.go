@@ -81,7 +81,7 @@ func (t eventsTab) update(msg tea.Msg) (eventsTab, tea.Cmd) {
 }
 
 func (t eventsTab) view(width, height int) string {
-	innerW := width - 4 // 2 for border + 2 for margin
+	innerW := width - 2
 	innerH := height - 2
 
 	// Collect visible lines
@@ -112,7 +112,7 @@ func (t eventsTab) view(width, height int) string {
 	if !t.autoScroll {
 		scrollNote = sWarn.Render(" [paused — g: jump to end]")
 	} else if len(t.events) == 0 {
-		scrollNote = sDim.Render(" waiting for events…")
+		scrollNote = sMuted.Render(" waiting for events…")
 	}
 
 	// Build content
@@ -120,26 +120,16 @@ func (t eventsTab) view(width, height int) string {
 	contentLines = append(contentLines, pad(sBold.Render(" Events")+scrollNote, innerW))
 	contentLines = append(contentLines, sep(innerW))
 
-	eventLines := innerH - 2
 	for _, l := range lines {
 		contentLines = append(contentLines, l)
 	}
-	// pad to fill
-	for len(contentLines) < innerH {
-		contentLines = append(contentLines, pad("", innerW))
-	}
-	if len(contentLines) > innerH {
-		contentLines = contentLines[:innerH]
-	}
 
 	content := buildContent(contentLines, innerH, innerW)
-	_ = eventLines
-	box := renderBox(content, innerW, true)
-	return "\n " + box
+	return renderBox(content, innerW, true)
 }
 
 func (t eventsTab) renderEvent(e debugEvent, w int) string {
-	ts := sDim.Render(e.Timestamp.Format("15:04:05"))
+	ts := sMuted.Render(e.Timestamp.Format("15:04:05"))
 
 	var typeLabel string
 	switch e.Type {
@@ -148,7 +138,7 @@ func (t eventsTab) renderEvent(e debugEvent, w int) string {
 	case "deregister":
 		typeLabel = sWarn.Render(fmt.Sprintf("%-12s", "deregister"))
 	case "heartbeat":
-		typeLabel = sDim.Render(fmt.Sprintf("%-12s", "heartbeat"))
+		typeLabel = sMuted.Render(fmt.Sprintf("%-12s", "heartbeat"))
 	case "install":
 		typeLabel = sCyan.Render(fmt.Sprintf("%-12s", "install"))
 	case "error":
@@ -171,13 +161,13 @@ func (t eventsTab) renderEvent(e debugEvent, w int) string {
 			statusStr = sOK.Render(fmt.Sprintf("%d", e.Status))
 		}
 		detail = fmt.Sprintf("%s %s %s %s",
-			sDim.Render(e.Method),
-			sMuted.Render(trunc(e.Path, 30)),
+			e.Method,
+			trunc(e.Path, 30),
 			statusStr,
-			sDim.Render(fmt.Sprintf("%dms", e.Duration)),
+			sMuted.Render(fmt.Sprintf("%dms", e.Duration)),
 		)
 	} else if e.Detail != "" {
-		detail = sDim.Render(trunc(e.Detail, w-60))
+		detail = trunc(e.Detail, w-60)
 	}
 
 	line := strings.Join([]string{" ", ts, " ", typeLabel, " ", plugin, " ", detail}, "")

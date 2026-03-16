@@ -204,21 +204,21 @@ func (m Model) renderHeader() string {
 
 	var appLabel string
 	if m.health != nil {
-		appLabel = sBold.Render(m.health.App) + " " + sDim.Render("v"+m.health.Version)
+		appLabel = sBold.Render(m.health.App) + " " + sMuted.Render("v"+m.health.Version)
 	} else {
 		appLabel = sBold.Render("TeamAgentica")
 	}
 
 	var connLabel string
 	if m.connErr != nil {
-		connLabel = sErr.Render("✗ disconnected") + "  " + sDim.Render(m.c.BaseURL)
+		connLabel = sErr.Render("✗ disconnected") + "  " + sMuted.Render(m.c.BaseURL)
 	} else if m.health != nil {
-		connLabel = sOK.Render("● connected") + "  " + sDim.Render(m.c.BaseURL)
+		connLabel = sOK.Render("● connected") + "  " + sMuted.Render(m.c.BaseURL)
 	} else {
-		connLabel = sDim.Render("◌ connecting…")
+		connLabel = sMuted.Render("◌ connecting…")
 	}
 
-	clockLabel := sDim.Render(m.now.Format("15:04:05"))
+	clockLabel := sMuted.Render(m.now.Format("15:04:05"))
 
 	// spread across full width
 	lw := lipgloss.Width(appLabel)
@@ -237,20 +237,20 @@ func (m Model) renderHeader() string {
 		strings.Repeat(" ", rpad) +
 		clockLabel
 
-	return line + "\n" + " " + sDim.Render(strings.Repeat("─", w-2))
+	return line + "\n" + " " + sMuted.Render(strings.Repeat("─", w-2))
 }
 
 func (m Model) renderTabBar() string {
 	parts := make([]string, len(tabNames))
 	for i, name := range tabNames {
-		label := fmt.Sprintf("[%d] %s", i+1, name)
+		label := fmt.Sprintf("%d %s", i+1, name)
 		if i == m.activeTab {
-			parts[i] = sBlue.Bold(true).Render(label)
+			parts[i] = sTabActive.Render(label)
 		} else {
-			parts[i] = sDim.Render(label)
+			parts[i] = sTabInactive.Render(label)
 		}
 	}
-	return "  " + strings.Join(parts, "  ")
+	return " " + strings.Join(parts, " ")
 }
 
 func (m Model) renderContent() string {
@@ -285,7 +285,7 @@ func (m Model) renderFooter() string {
 	global := "1-4/Tab: switch  q: quit"
 	sep := "  │  "
 	line := tabHelp + sep + global
-	return sDim.Render(strings.Repeat("─", w)) + "\n  " + sDim.Render(line)
+	return sMuted.Render(strings.Repeat("─", w)) + "\n  " + line
 }
 
 // contentHeight is the lines available for tab content.
