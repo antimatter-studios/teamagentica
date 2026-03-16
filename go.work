@@ -14,7 +14,7 @@ use (
 	./plugins/messaging-chat
 	./plugins/infra-mcp-server
 	./plugins/infra-builder
-	./plugins/infra-cost-explorer
+	./plugins/infra-cost-tracking
 	./plugins/messaging-discord
 	./plugins/network-ngrok
 	./plugins/infra-cron-scheduler
@@ -33,4 +33,5 @@ use (
 	./plugins/user-claude-terminal
 	./plugins/user-codex-terminal
 	./plugins/user-opencode-terminal
+	./tacli
 )

@@ -4,12 +4,21 @@ includes:
   kernel:
     taskfile: ./kernel/Taskfile.yml
     dir: ./kernel
+  ui:
+    taskfile: ./user-interface/Taskfile.yml
+    dir: ./user-interface
   pluginsdk:
     taskfile: ./pkg/pluginsdk/Taskfile.yml
     dir: ./pkg/pluginsdk
+  agent-claude:
+    taskfile: ./plugins/agent-claude/Taskfile.yml
+    dir: ./plugins/agent-claude
   agent-gemini:
     taskfile: ./plugins/agent-gemini/Taskfile.yml
     dir: ./plugins/agent-gemini
+  agent-inception:
+    taskfile: ./plugins/agent-inception/Taskfile.yml
+    dir: ./plugins/agent-inception
   agent-kimi:
     taskfile: ./plugins/agent-kimi/Taskfile.yml
     dir: ./plugins/agent-kimi
@@ -25,18 +34,45 @@ includes:
   builtin-provider:
     taskfile: ./plugins/builtin-provider/Taskfile.yml
     dir: ./plugins/builtin-provider
-  infra-cost-explorer:
-    taskfile: ./plugins/infra-cost-explorer/Taskfile.yml
-    dir: ./plugins/infra-cost-explorer
+  infra-agent-relay:
+    taskfile: ./plugins/infra-agent-relay/Taskfile.yml
+    dir: ./plugins/infra-agent-relay
+  infra-cost-tracking:
+    taskfile: ./plugins/infra-cost-tracking/Taskfile.yml
+    dir: ./plugins/infra-cost-tracking
+  infra-cron-scheduler:
+    taskfile: ./plugins/infra-cron-scheduler/Taskfile.yml
+    dir: ./plugins/infra-cron-scheduler
+  infra-mcp-server:
+    taskfile: ./plugins/infra-mcp-server/Taskfile.yml
+    dir: ./plugins/infra-mcp-server
+  infra-workspace-manager:
+    taskfile: ./plugins/infra-workspace-manager/Taskfile.yml
+    dir: ./plugins/infra-workspace-manager
+  messaging-chat:
+    taskfile: ./plugins/messaging-chat/Taskfile.yml
+    dir: ./plugins/messaging-chat
   messaging-discord:
     taskfile: ./plugins/messaging-discord/Taskfile.yml
     dir: ./plugins/messaging-discord
-  network-ngrok:
-    taskfile: ./plugins/network-ngrok/Taskfile.yml
-    dir: ./plugins/network-ngrok
   messaging-telegram:
     taskfile: ./plugins/messaging-telegram/Taskfile.yml
     dir: ./plugins/messaging-telegram
+  messaging-whatsapp:
+    taskfile: ./plugins/messaging-whatsapp/Taskfile.yml
+    dir: ./plugins/messaging-whatsapp
+  network-ngrok:
+    taskfile: ./plugins/network-ngrok/Taskfile.yml
+    dir: ./plugins/network-ngrok
+  network-webhook-ingress:
+    taskfile: ./plugins/network-webhook-ingress/Taskfile.yml
+    dir: ./plugins/network-webhook-ingress
+  storage-sss3:
+    taskfile: ./plugins/storage-sss3/Taskfile.yml
+    dir: ./plugins/storage-sss3
+  storage-volume:
+    taskfile: ./plugins/storage-volume/Taskfile.yml
+    dir: ./plugins/storage-volume
   tool-nanobanana:
     taskfile: ./plugins/tool-nanobanana/Taskfile.yml
     dir: ./plugins/tool-nanobanana
@@ -49,51 +85,18 @@ includes:
   tool-veo:
     taskfile: ./plugins/tool-veo/Taskfile.yml
     dir: ./plugins/tool-veo
-  network-webhook-ingress:
-    taskfile: ./plugins/network-webhook-ingress/Taskfile.yml
-    dir: ./plugins/network-webhook-ingress
-  storage-sss3:
-    taskfile: ./plugins/storage-sss3/Taskfile.yml
-    dir: ./plugins/storage-sss3
-  messaging-whatsapp:
-    taskfile: ./plugins/messaging-whatsapp/Taskfile.yml
-    dir: ./plugins/messaging-whatsapp
-  user-vscode-server:
-    taskfile: ./plugins/user-vscode-server/Taskfile.yml
-    dir: ./plugins/user-vscode-server
   user-claude-terminal:
     taskfile: ./plugins/user-claude-terminal/Taskfile.yml
     dir: ./plugins/user-claude-terminal
-  agent-claude:
-    taskfile: ./plugins/agent-claude/Taskfile.yml
-    dir: ./plugins/agent-claude
-  agent-inception:
-    taskfile: ./plugins/agent-inception/Taskfile.yml
-    dir: ./plugins/agent-inception
-  messaging-chat:
-    taskfile: ./plugins/messaging-chat/Taskfile.yml
-    dir: ./plugins/messaging-chat
-  storage-volume:
-    taskfile: ./plugins/storage-volume/Taskfile.yml
-    dir: ./plugins/storage-volume
-  infra-workspace-manager:
-    taskfile: ./plugins/infra-workspace-manager/Taskfile.yml
-    dir: ./plugins/infra-workspace-manager
-  infra-cron-scheduler:
-    taskfile: ./plugins/infra-cron-scheduler/Taskfile.yml
-    dir: ./plugins/infra-cron-scheduler
-  infra-mcp-server:
-    taskfile: ./plugins/infra-mcp-server/Taskfile.yml
-    dir: ./plugins/infra-mcp-server
-  infra-agent-relay:
-    taskfile: ./plugins/infra-agent-relay/Taskfile.yml
-    dir: ./plugins/infra-agent-relay
   user-codex-terminal:
     taskfile: ./plugins/user-codex-terminal/Taskfile.yml
     dir: ./plugins/user-codex-terminal
   user-opencode-terminal:
     taskfile: ./plugins/user-opencode-terminal/Taskfile.yml
     dir: ./plugins/user-opencode-terminal
+  user-vscode-server:
+    taskfile: ./plugins/user-vscode-server/Taskfile.yml
+    dir: ./plugins/user-vscode-server
 
 tasks:
   default:
@@ -101,122 +104,8 @@ tasks:
     cmds:
       - task --list
 
-  test:all:
-    desc: Run tests for all modules
-    cmds:
-      - task: kernel:test
-      - task: pluginsdk:test
-      - task: agent-gemini:test
-      - task: agent-kimi:test
-      - task: agent-openai:test
-      - task: agent-openrouter:test
-      - task: agent-requesty:test
-      - task: builtin-provider:test
-      - task: infra-cost-explorer:test
-      - task: storage-sss3:test
-      - task: messaging-discord:test
-      - task: network-ngrok:test
-      - task: messaging-telegram:test
-      - task: tool-nanobanana:test
-      - task: tool-seedance:test
-      - task: tool-stability:test
-      - task: tool-veo:test
-      - task: network-webhook-ingress:test
-      - task: messaging-whatsapp:test
-      - task: user-vscode-server:test
-      - task: user-claude-terminal:test
-      - task: user-codex-terminal:test
-      - task: user-opencode-terminal:test
-
-  build:catalog:
-    desc: Rebuild the plugin catalog from plugin.yaml manifests
-    cmds:
-      - go run ./plugins/builtin-provider/cmd/build-catalog ./plugins ./plugins/builtin-provider/catalog.yaml
-
-  dev:start:
-    desc: Run all services in dev mode (Docker, hot reload)
-    cmds:
-      - task: build:catalog
-      - docker compose -f docker-compose.dev.yml up --build -d --remove-orphans --renew-anon-volumes
-      - |
-        echo "Waiting for services to start..."
-        for i in $(seq 1 30); do
-          if docker compose -f docker-compose.dev.yml ps --format json | grep -q '"healthy"'; then
-            echo ""
-            echo "============================================"
-            echo "  TeamAgentica is running!"
-            echo "  UI:     http://localhost:3000"
-            echo "  Kernel: http://localhost:9741"
-            echo "============================================"
-            echo ""
-            break
-          fi
-          printf "."
-          sleep 2
-        done
-      - docker compose -f docker-compose.dev.yml logs -f
-
-  dev:log:f:
-    desc: Follow dev service logs
-    cmds:
-      - docker compose -f docker-compose.dev.yml logs -f
-
-  dev:stop:
-    desc: Stop dev services
-    cmds:
-      - docker compose -f docker-compose.dev.yml down
-
-  dev:restart:
-    desc: Restart all dev services
-    cmds:
-      - task: dev:stop
-      - task: dev:start
-
-  prod:start:
-    desc: Run all services in prod mode (Docker)
-    cmds:
-      - docker compose up --build
-
-  prod:stop:
-    desc: Stop prod services
-    cmds:
-      - docker compose down
-
-  prod:restart:
-    desc: Restart all prod services
-    cmds:
-      - task: prod:stop
-      - task: prod:start
-
-  build:
-    desc: Build all services
-    deps:
-      - kernel:build
-      - agent-gemini:build
-      - agent-kimi:build
-      - agent-openai:build
-      - agent-openrouter:build
-      - agent-requesty:build
-      - builtin-provider:build
-      - infra-cost-explorer:build
-      - infra-agent-relay:build
-      - storage-sss3:build
-      - messaging-discord:build
-      - network-ngrok:build
-      - messaging-telegram:build
-      - tool-nanobanana:build
-      - tool-seedance:build
-      - tool-stability:build
-      - tool-veo:build
-      - network-webhook-ingress:build
-      - messaging-whatsapp:build
-      - user-vscode-server:build
-      - user-claude-terminal:build
-      - user-codex-terminal:build
-      - user-opencode-terminal:build
-
-  build:images:
-    desc: Build all plugin Docker images (sequential)
+  build:plugins:
+    desc: Build all plugin Docker images (prod)
     cmds:
       - task: agent-claude:docker:prod
       - task: agent-gemini:docker:prod
@@ -226,11 +115,11 @@ tasks:
       - task: agent-openrouter:docker:prod
       - task: agent-requesty:docker:prod
       - task: builtin-provider:docker:prod
-      - task: infra-cost-explorer:docker:prod
+      - task: infra-agent-relay:docker:prod
+      - task: infra-cost-tracking:docker:prod
       - task: infra-cron-scheduler:docker:prod
       - task: infra-mcp-server:docker:prod
       - task: infra-workspace-manager:docker:prod
-      - task: infra-agent-relay:docker:prod
       - task: messaging-chat:docker:prod
       - task: messaging-discord:docker:prod
       - task: messaging-telegram:docker:prod
@@ -243,15 +132,15 @@ tasks:
       - task: tool-seedance:docker:prod
       - task: tool-stability:docker:prod
       - task: tool-veo:docker:prod
-      - task: user-vscode-server:docker:prod
       - task: user-claude-terminal:docker:prod
       - task: user-codex-terminal:docker:prod
       - task: user-opencode-terminal:docker:prod
+      - task: user-vscode-server:docker:prod
       - echo "All plugin images built successfully"
       - task: restart:running
 
-  build:images:dev:
-    desc: Build all plugin Docker images for dev (sequential)
+  build:plugins:dev:
+    desc: Build all plugin Docker images (dev)
     cmds:
       - task: agent-claude:docker:dev
       - task: agent-gemini:docker:dev
@@ -261,11 +150,11 @@ tasks:
       - task: agent-openrouter:docker:dev
       - task: agent-requesty:docker:dev
       - task: builtin-provider:docker:dev
-      - task: infra-cost-explorer:docker:dev
+      - task: infra-agent-relay:docker:dev
+      - task: infra-cost-tracking:docker:dev
       - task: infra-cron-scheduler:docker:dev
       - task: infra-mcp-server:docker:dev
       - task: infra-workspace-manager:docker:dev
-      - task: infra-agent-relay:docker:dev
       - task: messaging-chat:docker:dev
       - task: messaging-discord:docker:dev
       - task: messaging-telegram:docker:dev
@@ -278,37 +167,47 @@ tasks:
       - task: tool-seedance:docker:dev
       - task: tool-stability:docker:dev
       - task: tool-veo:docker:dev
-      - task: user-vscode-server:docker:dev
       - task: user-claude-terminal:docker:dev
       - task: user-codex-terminal:docker:dev
       - task: user-opencode-terminal:docker:dev
+      - task: user-vscode-server:docker:dev
       - echo "All dev plugin images built successfully"
       - task: restart:running
 
-  build:images:workspace:devbox:
+  build:workspace:devbox:
     desc: Build all devbox workspace images (base + terminal + agent)
     cmds:
       - docker build -t teamagentica-devbox:latest images/devbox/
       - docker build -t teamagentica-devbox-terminal:latest images/devbox-terminal/
       - docker build -t teamagentica-devbox-agent:latest images/devbox-agent/
 
-  build:images:workspace:devbox-base:
+  build:workspace:devbox-base:
     desc: Build devbox base image only (tools + runtimes, no interface)
     cmds:
       - docker build -t teamagentica-devbox:latest images/devbox/
 
-  build:images:workspace:devbox-terminal:
+  build:workspace:devbox-terminal:
     desc: Build devbox terminal image (human-facing, ttyd)
     cmds:
       - docker build -t teamagentica-devbox-terminal:latest images/devbox-terminal/
 
-  build:images:workspace:devbox-agent:
+  build:workspace:devbox-agent:
     desc: Build devbox agent image (agent-driven, agent-bridge)
     cmds:
       - docker build -t teamagentica-devbox-agent:latest images/devbox-agent/
 
+  marketplace:submit:
+    desc: Submit a plugin manifest to the catalog
+    cmds:
+      - go run ./tacli marketplace --submit-catalog {{.CLI_ARGS}}
+
+  marketplace:submit-all:
+    desc: Submit all plugin.yaml manifests to the catalog
+    cmds:
+      - go run ./tacli marketplace --submit-catalog ./plugins
+
   restart:running:
-    desc: Restart any running plugin containers so they pick up new images
+    desc: Restart running plugin containers so they pick up new images
     cmds:
       - |
         containers=$(docker ps --filter "name=teamagentica-plugin-" | awk 'NR>1 {print $NF}')
@@ -328,30 +227,3 @@ tasks:
         docker restart "$kernel_id" 2>/dev/null || true
         echo "Done. Kernel will re-launch all enabled plugins on startup."
     silent: true
-
-  clean:
-    desc: Clean all build artifacts
-    deps:
-      - kernel:clean
-      - agent-gemini:clean
-      - agent-kimi:clean
-      - agent-openai:clean
-      - agent-openrouter:clean
-      - agent-requesty:clean
-      - builtin-provider:clean
-      - infra-cost-explorer:clean
-      - infra-agent-relay:clean
-      - storage-sss3:clean
-      - messaging-discord:clean
-      - network-ngrok:clean
-      - messaging-telegram:clean
-      - tool-nanobanana:clean
-      - tool-seedance:clean
-      - tool-stability:clean
-      - tool-veo:clean
-      - network-webhook-ingress:clean
-      - messaging-whatsapp:clean
-      - user-vscode-server:clean
-      - user-claude-terminal:clean
-      - user-codex-terminal:clean
-      - user-opencode-terminal:clean

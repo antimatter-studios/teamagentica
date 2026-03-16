@@ -1,0 +1,75 @@
+name: teamagentica-kernel
+
+services:
+  kernel:
+    profiles: [prod]
+    image: teamagentica-kernel:latest
+    container_name: teamagentica-kernel
+    hostname: teamagentica-kernel
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    labels:
+      docker-proxy.teamagentica-api.host: api.teamagentica.localhost
+      docker-proxy.teamagentica-api.port: 8080
+    ports:
+      - "127.0.0.1:9741:8080"
+    volumes:
+      - ../data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - APP_NAME=${APP_NAME:-TeamAgentica}
+      - TEAMAGENTICA_KERNEL_HOST=0.0.0.0
+      - TEAMAGENTICA_KERNEL_PORT=8080
+      - TEAMAGENTICA_KERNEL_ADVERTISE_HOST=teamagentica-kernel
+      - TEAMAGENTICA_DB_PATH=/data/kernel/database.db
+      - TEAMAGENTICA_DATA_DIR=${PWD}/../data
+      - TEAMAGENTICA_DOCKER_NETWORK=teamagentica-kernel_default
+      - TEAMAGENTICA_MTLS_ENABLED=false
+      - TEAMAGENTICA_BASE_DOMAIN=${TEAMAGENTICA_BASE_DOMAIN:-teamagentica.localhost}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+
+  kernel-dev:
+    profiles: [dev]
+    container_name: teamagentica-kernel-dev
+    hostname: teamagentica-kernel
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    labels:
+      docker-proxy.teamagentica-api.host: api.teamagentica.localhost
+      docker-proxy.teamagentica-api.port: 8080
+    ports:
+      - "127.0.0.1:9741:8080"
+    volumes:
+      - .:/app
+      - ../data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - APP_NAME=${APP_NAME:-TeamAgentica}
+      - TEAMAGENTICA_KERNEL_HOST=0.0.0.0
+      - TEAMAGENTICA_KERNEL_PORT=8080
+      - TEAMAGENTICA_KERNEL_ADVERTISE_HOST=teamagentica-kernel
+      - TEAMAGENTICA_DB_PATH=/data/kernel/database.db
+      - TEAMAGENTICA_DATA_DIR=${PWD}/../data
+      - TEAMAGENTICA_DOCKER_NETWORK=teamagentica-kernel_default
+      - TEAMAGENTICA_DEV_MODE=true
+      - TEAMAGENTICA_PROJECT_ROOT=${PWD}/..
+      - TEAMAGENTICA_MTLS_ENABLED=false
+      - TEAMAGENTICA_BASE_DOMAIN=${TEAMAGENTICA_BASE_DOMAIN:-teamagentica.localhost}
+      - CGO_ENABLED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 180s

@@ -4,6 +4,7 @@
 .history/
 *.swp
 *.swo
+node_modules
 
 # OS
 .DS_Store
@@ -13,6 +14,7 @@ Thumbs.db
 .env
 .env.local
 brand.env
+.taconfig*
 
 # Build artifacts (air dev + production binaries)
 **/build/
@@ -32,3 +34,4 @@ kernel/data/
 # Separate git repos checked out alongside
 agentbridge/
 portpilot/
+.task/checksum/kernel-build
