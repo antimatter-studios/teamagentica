@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { getPluginLogs } from "../api/plugins";
+import { apiClient } from "../api/client";
 
 interface Props {
   pluginId: string;
@@ -15,7 +15,7 @@ export default function PluginLogsInline({ pluginId }: Props) {
     setLoading(true);
     setError("");
     try {
-      const text = await getPluginLogs(pluginId, 200);
+      const text = await apiClient.plugins.getLogs(pluginId, 200);
       setLogs(text);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");

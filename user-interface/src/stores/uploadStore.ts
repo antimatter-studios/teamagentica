@@ -1,6 +1,31 @@
 import { create } from "zustand";
-import { uploadFileXHR, formatBytes, type XHRRef } from "../api/files";
+import { API_BASE } from "../api/client";
+import { formatBytes } from "@teamagentica/api-client";
 import { useFileStore } from "./fileStore";
+
+interface XHRRef { xhr: XMLHttpRequest | null; }
+
+function uploadFileXHR(
+  pluginId: string,
+  key: string,
+  file: File,
+  onProgress: (e: { loaded: number; total: number }) => void,
+  ref: XHRRef
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    ref.xhr = xhr;
+    const token = localStorage.getItem("teamagentica_token");
+    xhr.open("PUT", `${API_BASE}/api/route/${pluginId}/objects/${encodeURIComponent(key)}`);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress({ loaded: e.loaded, total: e.total }); };
+    xhr.onload = () => { ref.xhr = null; if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(`Upload failed: ${xhr.status}`)); };
+    xhr.onerror = () => { ref.xhr = null; reject(new Error("Upload network error")); };
+    xhr.onabort = () => { ref.xhr = null; reject(new Error("Upload cancelled")); };
+    xhr.send(file);
+  });
+}
 
 type UploadStatus = "queued" | "uploading" | "done" | "error" | "cancelled";
 

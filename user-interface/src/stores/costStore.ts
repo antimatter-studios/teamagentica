@@ -1,17 +1,7 @@
 import { create } from "zustand";
-import {
-  fetchPricing,
-  fetchCurrentPricing,
-  savePricing,
-  deletePricing,
-  fetchCostExplorerRecords,
-  fetchCostExplorerUsers,
-  type ModelPrice,
-  type UsageRecord,
-  type CostExplorerRecord,
-  type CostExplorerUser,
-  isTokenRecord,
-} from "../api/costs";
+import { apiClient } from "../api/client";
+import type { ModelPrice, UsageRecord, CostExplorerRecord, CostExplorerUser } from "@teamagentica/api-client";
+import { isTokenRecord } from "@teamagentica/api-client";
 
 export type Granularity = "hourly" | "daily" | "weekly" | "monthly";
 
@@ -41,7 +31,7 @@ interface CostStore {
   loadUsers: () => Promise<void>;
   setGranularity: (g: Granularity) => void;
   setUserFilter: (userID: string) => void;
-  savePriceEntry: (price: Parameters<typeof savePricing>[0]) => Promise<void>;
+  savePriceEntry: (price: Parameters<typeof apiClient.costs.savePricing>[0]) => Promise<void>;
   deletePriceEntry: (id: number) => Promise<void>;
 }
 
@@ -207,8 +197,8 @@ export const useCostStore = create<CostStore>((set, get) => ({
   loadPricing: async () => {
     try {
       const [current, all] = await Promise.all([
-        fetchCurrentPricing(),
-        fetchPricing(),
+        apiClient.costs.fetchCurrentPricing(),
+        apiClient.costs.fetchPricing(),
       ]);
       set({ prices: current, allPrices: all });
     } catch (err) {
@@ -220,10 +210,10 @@ export const useCostStore = create<CostStore>((set, get) => ({
     set({ loading: true });
     try {
       const userID = get().selectedUserID || undefined;
-      const resp = await fetchCostExplorerRecords(undefined, userID);
+      const resp = await apiClient.costs.fetchCostExplorerRecords(undefined, userID);
       const converted = convertCostExplorerRecords(resp.records);
 
-      const allPrices = get().allPrices.length > 0 ? get().allPrices : await fetchPricing();
+      const allPrices = get().allPrices.length > 0 ? get().allPrices : await apiClient.costs.fetchPricing();
 
       set({
         records: converted.records,
@@ -242,7 +232,7 @@ export const useCostStore = create<CostStore>((set, get) => ({
 
   loadUsers: async () => {
     try {
-      const resp = await fetchCostExplorerUsers();
+      const resp = await apiClient.costs.fetchCostExplorerUsers();
       set({ users: resp.users || [] });
     } catch {
       // Non-critical — silently ignore.
@@ -261,7 +251,7 @@ export const useCostStore = create<CostStore>((set, get) => ({
 
   savePriceEntry: async (price) => {
     try {
-      await savePricing(price);
+      await apiClient.costs.savePricing(price);
       await get().loadPricing();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Failed to save price" });
@@ -270,7 +260,7 @@ export const useCostStore = create<CostStore>((set, get) => ({
 
   deletePriceEntry: async (id) => {
     try {
-      await deletePricing(id);
+      await apiClient.costs.deletePricing(id);
       await get().loadPricing();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Failed to delete price" });

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo } from "react";
-import type { StorageFile } from "../api/files";
-import { formatBytes, filenameFromKey } from "../api/files";
+import type { StorageFile } from "@teamagentica/api-client";
+import { formatBytes, filenameFromKey } from "@teamagentica/api-client";
 import { findPreview } from "./previews/registry";
 
 const DefaultPreview = lazy(() => import("./previews/DefaultPreview"));

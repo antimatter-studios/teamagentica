@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react";
-import {
-  fetchExternalUsers,
-  createExternalUser,
-  deleteExternalUser,
-  type ExternalUserMapping as Mapping,
-} from "../api/costs";
+import { apiClient } from "../api/client";
+import type { ExternalUserMapping as Mapping } from "@teamagentica/api-client";
 import { useCostStore } from "../stores/costStore";
 
 interface Props {
@@ -26,7 +22,7 @@ export default function ExternalUserMapping({ onClose }: Props) {
 
   const loadMappings = async () => {
     try {
-      const resp = await fetchExternalUsers();
+      const resp = await apiClient.costs.fetchExternalUsers();
       setMappings(resp.mappings || []);
       setLoading(false);
     } catch (err) {
@@ -52,7 +48,7 @@ export default function ExternalUserMapping({ onClose }: Props) {
     if (!newExternalID || !newTeamagenticaUserID) return;
     setSaving(true);
     try {
-      await createExternalUser({
+      await apiClient.costs.createExternalUser({
         external_id: newExternalID,
         source: newSource,
         teamagentica_user_id: parseInt(newTeamagenticaUserID, 10),
@@ -70,7 +66,7 @@ export default function ExternalUserMapping({ onClose }: Props) {
 
   const handleDelete = async (id: number) => {
     try {
-      await deleteExternalUser(id);
+      await apiClient.costs.deleteExternalUser(id);
       await loadMappings();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete mapping");

@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { type Plugin } from "../api/plugins";
+import type { Plugin } from "@teamagentica/api-client";
 import {
   usePluginConfig,
   type ConfigField,

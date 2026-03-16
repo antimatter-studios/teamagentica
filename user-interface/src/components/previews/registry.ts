@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { StorageFile } from "../../api/files";
+import type { StorageFile } from "@teamagentica/api-client";
 
 export interface PreviewProps {
   file: StorageFile;

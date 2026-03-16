@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useMarketplaceStore } from "../stores/marketplaceStore";
 import { usePluginStore } from "../stores/pluginStore";
-import type { MarketplacePlugin, MarketplaceGroup } from "../api/marketplace";
+import type { MarketplacePlugin, MarketplaceGroup } from "@teamagentica/api-client";
 
 export default function Marketplace() {
   const { catalog, groups, providers, loading, error, query, selectedProvider } =

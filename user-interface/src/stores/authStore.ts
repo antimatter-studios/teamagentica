@@ -2,13 +2,12 @@ import { create } from "zustand";
 import {
   login as apiLogin,
   register as apiRegister,
-  getMe,
-  getUsers,
   getStoredToken,
   clearToken,
-  type User,
 } from "../api/auth";
 import { setOnUnauthorized } from "../api/client";
+import { apiClient } from "../api/client";
+import type { User } from "@teamagentica/api-client";
 
 interface AuthStore {
   authenticated: boolean;
@@ -75,7 +74,7 @@ export const useAuthStore = create<AuthStore>((set, get) => {
 
   fetchUser: async () => {
     try {
-      const user = await getMe();
+      const user = await apiClient.auth.getMe();
       set({ user });
     } catch {
       clearToken();
@@ -85,7 +84,7 @@ export const useAuthStore = create<AuthStore>((set, get) => {
 
   fetchUsers: async () => {
     try {
-      const users = await getUsers();
+      const users = await apiClient.auth.getUsers();
       set({ users });
     } catch {
       // silently fail — non-admin users can't list users

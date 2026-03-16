@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
-import {
-  type Plugin,
-  getPluginConfigSchema,
-  getFieldOptions,
-  getPluginConfig,
-  updatePluginConfig,
-} from "../api/plugins";
+import { apiClient } from "../api/client";
+import type { Plugin } from "@teamagentica/api-client";
 
 interface AliasEntry {
   name: string;
@@ -34,7 +29,7 @@ function modelToTarget(model: string, pluginId: string): string {
 }
 
 async function findModelFieldKey(plugin: Plugin): Promise<string | null> {
-  const schema = await getPluginConfigSchema(plugin.id);
+  const schema = await apiClient.plugins.getConfigSchema(plugin.id);
   for (const [key, field] of Object.entries(schema)) {
     if (field.type === "select" && field.dynamic) return key;
   }
@@ -62,7 +57,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
   useEffect(() => {
     async function load() {
       try {
-        const configs = await getPluginConfig(plugin.id);
+        const configs = await apiClient.plugins.getConfig(plugin.id);
         const aliasEntry = configs.find((c) => c.key === "PLUGIN_ALIASES");
         setEntries(parseAliasEntries(aliasEntry?.value || ""));
       } catch (err) {
@@ -84,7 +79,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
 
     setModelsLoading(true);
     setModelsError("");
-    getFieldOptions(plugin.id, modelFieldKey)
+    apiClient.plugins.getFieldOptions(plugin.id, modelFieldKey)
       .then((res) => setModelOptions(res.options || []))
       .catch((err) => {
         setModelsError(err instanceof Error ? err.message : "Failed to fetch models");
@@ -124,7 +119,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
     setSaveSuccess(false);
     try {
       const cleaned = entries.filter((e) => e.name.trim() !== "");
-      await updatePluginConfig(plugin.id, {
+      await apiClient.plugins.updateConfig(plugin.id, {
         PLUGIN_ALIASES: {
           value: JSON.stringify(cleaned),
           is_secret: false,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { browseStorage, folderName } from "../api/files";
-import type { Plugin } from "../api/plugins";
+import { apiClient } from "../api/client";
+import { folderName } from "@teamagentica/api-client";
+import type { Plugin } from "@teamagentica/api-client";
 
 interface FolderNode {
   path: string;
@@ -33,7 +34,7 @@ export default function FolderTree({
   useEffect(() => {
     if (expanded && children === null && !loading) {
       setLoading(true);
-      browseStorage(provider.id, "")
+      apiClient.files.browse(provider.id, "")
         .then((r) =>
           setChildren((r.folders || []).map((f) => ({ path: f, name: folderName(f) })))
         )
@@ -135,7 +136,7 @@ function TreeNode({
       if (!expanded) setExpanded(true);
       if (children === null && !loading) {
         setLoading(true);
-        browseStorage(providerId, node.path)
+        apiClient.files.browse(providerId, node.path)
           .then((result) =>
             setChildren((result.folders || []).map((f) => ({ path: f, name: folderName(f) })))
           )
@@ -149,7 +150,7 @@ function TreeNode({
     if (loading) return;
     setLoading(true);
     try {
-      const result = await browseStorage(providerId, node.path);
+      const result = await apiClient.files.browse(providerId, node.path);
       setChildren((result.folders || []).map((f) => ({ path: f, name: folderName(f) })));
     } catch {
       setChildren([]);
@@ -172,7 +173,6 @@ function TreeNode({
     setExpanded(!expanded);
   };
 
-  const hasChildren = children === null || children.length > 0;
   const branch = isLast ? "└─ " : "├─ ";
   const childPrefix = parentPrefix + (isLast ? "   " : "│  ");
 

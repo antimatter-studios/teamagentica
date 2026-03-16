@@ -3,15 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import { useAuthStore } from "../stores/authStore";
 import { usePluginStore } from "../stores/pluginStore";
 import { useEventStore, type DebugEvent, type EventLogEntry } from "../stores/eventStore";
-import { parseCapabilities, type Plugin } from "../api/plugins";
-import { apiGet } from "../api/client";
-
-interface AliasInfo {
-  name: string;
-  target: string;
-  plugin_id: string;
-  capabilities: string[];
-}
+import { apiClient } from "../api/client";
+import { parseCapabilities } from "@teamagentica/api-client";
+import type { Plugin, AliasInfo } from "@teamagentica/api-client";
 
 export default function Dashboard() {
   const { user, users } = useAuthStore(
@@ -32,8 +26,8 @@ export default function Dashboard() {
   useEffect(() => {
     fetchUsers();
     fetchPlugins();
-    apiGet<{ aliases: AliasInfo[] }>("/api/aliases")
-      .then((res) => setAliases(res.aliases || []))
+    apiClient.aliases.list()
+      .then((aliases) => setAliases(aliases))
       .catch(() => {});
   }, []);
 
@@ -52,7 +46,6 @@ export default function Dashboard() {
 
   const isAdmin = user.role === "admin";
   const running = plugins.filter((p) => p.status === "running");
-  const stopped = plugins.filter((p) => p.status === "stopped" || !p.enabled);
   const errored = plugins.filter((p) => p.status === "error" || p.status === "unhealthy");
   const recentEvents = auditEvents.slice(-20).reverse();
 

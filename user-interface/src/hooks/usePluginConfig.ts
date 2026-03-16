@@ -1,20 +1,7 @@
 import { useEffect, useState, useRef } from "react";
-import {
-  getPluginConfig,
-  updatePluginConfig,
-  getPluginConfigSchema,
-  parseConfigSchema,
-  getFieldOptions,
-  getOAuthStatus,
-  startOAuthFlow,
-  pollOAuthFlow,
-  oauthLogout,
-  type Plugin,
-  type PluginConfigEntry,
-  type ConfigSchemaField,
-  type OAuthStatus,
-  type OAuthDeviceCode,
-} from "../api/plugins";
+import { apiClient } from "../api/client";
+import { parseConfigSchema } from "@teamagentica/api-client";
+import type { Plugin, PluginConfigEntry, ConfigSchemaField, OAuthStatus, OAuthDeviceCode } from "@teamagentica/api-client";
 
 export interface ConfigField {
   key: string;
@@ -93,7 +80,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
 
     for (const key of Object.keys(newStates)) {
       if (!newStates[key].loading) continue;
-      getOAuthStatus(plugin.id)
+      apiClient.plugins.getOAuthStatus(plugin.id)
         .then((status) => {
           setOauthStates((prev) => ({
             ...prev,
@@ -116,7 +103,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     }));
 
     try {
-      const dcr = await startOAuthFlow(plugin.id);
+      const dcr = await apiClient.plugins.startOAuthFlow(plugin.id);
       setOauthStates((prev) => ({
         ...prev,
         [fieldKey]: { ...prev[fieldKey], deviceCode: dcr, polling: true },
@@ -124,11 +111,11 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
 
       pollTimersRef.current[fieldKey] = setInterval(async () => {
         try {
-          const res = await pollOAuthFlow(plugin.id);
+          const res = await apiClient.plugins.pollOAuthFlow(plugin.id);
           if (res.authenticated) {
             clearInterval(pollTimersRef.current[fieldKey]);
             delete pollTimersRef.current[fieldKey];
-            const status = await getOAuthStatus(plugin.id);
+            const status = await apiClient.plugins.getOAuthStatus(plugin.id);
             setOauthStates((prev) => ({
               ...prev,
               [fieldKey]: { status, loading: false, deviceCode: null, polling: false },
@@ -156,7 +143,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     }));
 
     try {
-      await oauthLogout(plugin.id);
+      await apiClient.plugins.oauthLogout(plugin.id);
       setOauthStates((prev) => ({
         ...prev,
         [fieldKey]: { status: { authenticated: false }, loading: false, deviceCode: null, polling: false },
@@ -175,10 +162,10 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
   useEffect(() => {
     async function load() {
       try {
-        const entries: PluginConfigEntry[] = await getPluginConfig(plugin.id);
+        const entries: PluginConfigEntry[] = await apiClient.plugins.getConfig(plugin.id);
         // Fetch live schema from running plugin; fall back to DB-cached schema.
         const schema = plugin.status === "running"
-          ? await getPluginConfigSchema(plugin.id)
+          ? await apiClient.plugins.getConfigSchema(plugin.id)
           : parseConfigSchema(plugin);
         const entryMap = new Map(entries.map((e) => [e.key, e]));
 
@@ -215,7 +202,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
 
           if (plugin.status === "running") {
             for (const [key] of dynamicFields) {
-              getFieldOptions(plugin.id, key)
+              apiClient.plugins.getFieldOptions(plugin.id, key)
                 .then((res) => {
                   setDynamicOptions((prev) => ({
                     ...prev,
@@ -266,7 +253,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
           is_secret: field.is_secret,
         };
       }
-      await updatePluginConfig(plugin.id, config);
+      await apiClient.plugins.updateConfig(plugin.id, config);
       setDirty(false);
       setSaveSuccess(true);
       onSaved();

@@ -1,15 +1,6 @@
 import { create } from "zustand";
-import {
-  fetchAgents,
-  fetchConversations,
-  getConversation,
-  createConversation,
-  deleteConversation,
-  sendMessage,
-  type Agent,
-  type Conversation,
-  type ChatMessage,
-} from "../api/chat";
+import { apiClient } from "../api/client";
+import type { Agent, Conversation, ChatMessage } from "@teamagentica/api-client";
 
 interface ChatStore {
   agents: Agent[];
@@ -46,7 +37,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   loadAgents: async () => {
     try {
-      const { agents, has_coordinator } = await fetchAgents();
+      const { agents, has_coordinator } = await apiClient.chat.fetchAgents();
       set({ agents, hasCoordinator: has_coordinator });
       // Auto-select: prefer "auto" when coordinator available, else first agent.
       if (!get().selectedAgent || get().selectedAgent === "") {
@@ -63,7 +54,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   loadConversations: async () => {
     try {
-      const conversations = await fetchConversations();
+      const conversations = await apiClient.chat.fetchConversations();
       set({ conversations });
     } catch (e: unknown) {
       console.error("Failed to load conversations:", e);
@@ -73,7 +64,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   selectConversation: async (id: number) => {
     set({ loading: true, error: null });
     try {
-      const data = await getConversation(id);
+      const data = await apiClient.chat.getConversation(id);
       set({
         activeConversationId: id,
         messages: data.messages || [],
@@ -107,7 +98,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   removeConversation: async (id: number) => {
     try {
-      await deleteConversation(id);
+      await apiClient.chat.deleteConversation(id);
       const { activeConversationId } = get();
       if (activeConversationId === id) {
         set({ activeConversationId: null, messages: [] });
@@ -138,7 +129,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Create conversation lazily if needed.
       let convId = activeConversationId;
       if (!convId) {
-        const conv = await createConversation(selectedAgent);
+        const conv = await apiClient.chat.createConversation(selectedAgent);
         convId = conv.id;
         set({ activeConversationId: convId });
       }
@@ -154,7 +145,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       };
       set({ messages: [...messages, tempUserMsg] });
 
-      const resp = await sendMessage(
+      const resp = await apiClient.chat.sendMessage(
         convId,
         content,
         selectedAgent,

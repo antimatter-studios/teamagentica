@@ -1,7 +1,27 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useChatStore } from "../stores/chatStore";
-import { uploadFile, fetchFileBlob, downloadFile, type Attachment } from "../api/chat";
+import { apiClient } from "../api/client";
+import type { Attachment } from "@teamagentica/api-client";
+
+async function uploadFile(file: File): Promise<{ file_id: string; filename: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiClient.chat.uploadFile(formData);
+}
+
+async function fetchFileBlob(fileIdOrKey: string): Promise<string> {
+  const blob = await apiClient.chat.fetchFileBlob(fileIdOrKey);
+  return URL.createObjectURL(blob);
+}
+
+async function downloadFile(fileIdOrKey: string, filename: string) {
+  const blobUrl = await fetchFileBlob(fileIdOrKey);
+  const a = document.createElement("a");
+  a.href = blobUrl; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(blobUrl);
+}
 
 function AuthImage({ fileKey, alt, className }: { fileKey: string; alt: string; className?: string }) {
   const [src, setSrc] = useState<string>("");

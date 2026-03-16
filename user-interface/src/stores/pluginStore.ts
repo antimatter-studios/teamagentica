@@ -1,12 +1,6 @@
 import { create } from "zustand";
-import {
-  listPlugins,
-  enablePlugin as apiEnable,
-  disablePlugin as apiDisable,
-  restartPlugin as apiRestart,
-  uninstallPlugin as apiUninstall,
-  type Plugin,
-} from "../api/plugins";
+import { apiClient } from "../api/client";
+import type { Plugin } from "@teamagentica/api-client";
 
 interface PluginStore {
   plugins: Plugin[];
@@ -30,7 +24,7 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       set({ loading: true });
     }
     try {
-      const plugins = await listPlugins();
+      const plugins = await apiClient.plugins.list();
       set({ plugins, loading: false, error: null });
     } catch (err) {
       set({
@@ -47,7 +41,7 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       ),
     }));
     try {
-      await apiEnable(id);
+      await apiClient.plugins.enable(id);
       await get().fetch();
     } catch (err) {
       await get().fetch();
@@ -62,7 +56,7 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       ),
     }));
     try {
-      await apiDisable(id);
+      await apiClient.plugins.disable(id);
       await get().fetch();
     } catch (err) {
       await get().fetch();
@@ -77,7 +71,7 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       ),
     }));
     try {
-      await apiRestart(id);
+      await apiClient.plugins.restart(id);
       await get().fetch();
     } catch (err) {
       await get().fetch();
@@ -90,7 +84,7 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
       plugins: state.plugins.filter((p) => p.id !== id),
     }));
     try {
-      await apiUninstall(id);
+      await apiClient.plugins.uninstall(id);
       await get().fetch();
     } catch (err) {
       await get().fetch();

@@ -1,12 +1,6 @@
 import { create } from "zustand";
-import {
-  browseMarketplace,
-  installFromMarketplace,
-  listProviders,
-  type MarketplacePlugin,
-  type MarketplaceGroup,
-  type MarketplaceProvider,
-} from "../api/marketplace";
+import { apiClient } from "../api/client";
+import type { MarketplacePlugin, MarketplaceGroup, MarketplaceProvider } from "@teamagentica/api-client";
 
 interface MarketplaceStore {
   catalog: MarketplacePlugin[];
@@ -39,7 +33,7 @@ export const useMarketplaceStore = create<MarketplaceStore>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const q = get().query;
-      const { plugins, groups } = await browseMarketplace(q || undefined);
+      const { plugins, groups } = await apiClient.marketplace.browse(q || undefined);
       set({ catalog: plugins, groups, loading: false });
     } catch (err) {
       set({
@@ -51,7 +45,7 @@ export const useMarketplaceStore = create<MarketplaceStore>((set, get) => ({
 
   fetchProviders: async () => {
     try {
-      const providers = await listProviders();
+      const providers = await apiClient.marketplace.listProviders();
       set({ providers });
     } catch {
       // non-critical — sidebar just won't show providers
@@ -60,7 +54,7 @@ export const useMarketplaceStore = create<MarketplaceStore>((set, get) => ({
 
   install: async (pluginId) => {
     try {
-      await installFromMarketplace(pluginId);
+      await apiClient.marketplace.install(pluginId);
       await get().fetch();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Failed to install plugin" });

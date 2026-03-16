@@ -1,17 +1,6 @@
-import { apiPost, apiGet } from "./client";
+import { apiClient } from "./client";
 
-export interface User {
-  id: string;
-  email: string;
-  display_name: string;
-  role: string;
-  created_at: string;
-}
-
-interface AuthResponse {
-  token: string;
-  user: User;
-}
+export type { User, AuthResponse } from "@teamagentica/api-client";
 
 const TOKEN_KEY = "teamagentica_token";
 
@@ -27,48 +16,19 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-export async function login(
-  email: string,
-  password: string
-): Promise<AuthResponse> {
-  const res = await apiPost<AuthResponse>("/api/auth/login", {
-    email,
-    password,
-  });
+export async function login(email: string, password: string) {
+  const res = await apiClient.auth.login(email, password);
   storeToken(res.token);
-  // Create session cookie for same-origin iframe auth (workspace proxy).
-  await createSession();
+  await apiClient.auth.createSession();
   return res;
 }
 
-export async function register(
-  email: string,
-  password: string,
-  displayName: string
-): Promise<AuthResponse> {
-  const res = await apiPost<AuthResponse>("/api/auth/register", {
-    email,
-    password,
-    display_name: displayName,
-  });
+export async function register(email: string, password: string, displayName: string) {
+  const res = await apiClient.auth.register(email, password, displayName);
   storeToken(res.token);
-  await createSession();
+  await apiClient.auth.createSession();
   return res;
 }
 
-async function createSession(): Promise<void> {
-  try {
-    await apiPost("/api/auth/session", {});
-  } catch {
-    // Non-fatal — session cookie is a convenience for iframe auth.
-  }
-}
-
-export async function getMe(): Promise<User> {
-  const res = await apiGet<{ user: User }>("/api/users/me");
-  return res.user;
-}
-
-export async function getUsers(): Promise<User[]> {
-  return apiGet<User[]>("/api/users");
-}
+export const getMe = () => apiClient.auth.getMe();
+export const getUsers = () => apiClient.auth.getUsers();

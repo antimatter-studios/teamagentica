@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { parseCapabilities, getPluginConfigSchema, type Plugin, type ConfigSchemaField } from "../api/plugins";
-import { apiGet } from "../api/client";
+import { apiClient } from "../api/client";
+import { parseCapabilities } from "@teamagentica/api-client";
+import type { Plugin, ConfigSchemaField } from "@teamagentica/api-client";
 import { usePluginStore } from "../stores/pluginStore";
 import PluginConfigForm from "./PluginConfigForm";
 import PluginAliasPanel from "./PluginAliasPanel";
@@ -109,7 +110,7 @@ export default function PluginSettings() {
       setLiveSchema({});
       return;
     }
-    getPluginConfigSchema(selected.id).then(setLiveSchema).catch(() => setLiveSchema({}));
+    apiClient.plugins.getConfigSchema(selected.id).then(setLiveSchema).catch(() => setLiveSchema({}));
   }, [selected?.id, selected?.status]);
 
   const hasAliases = Object.values(liveSchema).some((f) => f.type === "aliases");
@@ -121,7 +122,7 @@ export default function PluginSettings() {
       return;
     }
     try {
-      await apiGet(`/api/route/${pluginId}/pricing`);
+      await apiClient.plugins.getPricing(pluginId);
       setHasPricing(true);
     } catch {
       setHasPricing(false);
@@ -135,7 +136,7 @@ export default function PluginSettings() {
       return;
     }
     try {
-      await apiGet(`/api/route/${pluginId}/tools`);
+      await apiClient.plugins.getTools(pluginId);
       setHasTools(true);
     } catch {
       setHasTools(false);
@@ -149,7 +150,7 @@ export default function PluginSettings() {
       return;
     }
     try {
-      await apiGet(`/api/route/${pluginId}/discord-commands`);
+      await apiClient.plugins.getDiscordCommands(pluginId);
       setHasCommands(true);
     } catch {
       setHasCommands(false);
@@ -163,7 +164,7 @@ export default function PluginSettings() {
       return;
     }
     try {
-      await apiGet(`/api/route/${pluginId}/system-prompt`);
+      await apiClient.plugins.getSystemPrompt(pluginId);
       setHasSystemPrompt(true);
     } catch {
       setHasSystemPrompt(false);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchObjectBlob } from "../../api/files";
+import { apiClient } from "../../api/client";
 import type { PreviewProps } from "./registry";
 
 export default function ImagePreview({ file, pluginId }: PreviewProps) {
@@ -20,7 +20,7 @@ export default function ImagePreview({ file, pluginId }: PreviewProps) {
 
     let cancelled = false;
 
-    fetchObjectBlob(pluginId, file.key)
+    apiClient.files.fetchBlob(pluginId, file.key)
       .then((blob) => {
         if (cancelled) return;
         if (blob.size === 0) {

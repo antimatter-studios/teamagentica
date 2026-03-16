@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { API_BASE } from "../api/client";
+import { apiClient } from "../api/client";
 
 export interface DebugEvent {
   timestamp: string;
@@ -44,7 +44,7 @@ async function readSSE(
   const token = localStorage.getItem("teamagentica_token");
   if (!token) return;
 
-  const res = await fetch(`${API_BASE}/api/debug/events`, {
+  const res = await fetch(apiClient.events.streamUrl(), {
     headers: { Authorization: `Bearer ${token}` },
     signal,
   });
@@ -127,7 +127,7 @@ export const useEventStore = create<EventStore>((set) => ({
     // Load history first, then start SSE
     const token = localStorage.getItem("teamagentica_token");
     if (token) {
-      fetch(`${API_BASE}/api/debug/history`, {
+      fetch(apiClient.events.historyUrl(), {
         headers: { Authorization: `Bearer ${token}` },
         signal: ac.signal,
       })

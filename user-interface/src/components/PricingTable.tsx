@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useCostStore } from "../stores/costStore";
-import type { ModelPrice } from "../api/costs";
+import type { ModelPrice } from "@teamagentica/api-client";
 
 interface Props {
   onClose: () => void;

@@ -2,7 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useFileStore } from "../stores/fileStore";
 import { useUploadStore } from "../stores/uploadStore";
-import { downloadFile, formatBytes, filenameFromKey, folderName } from "../api/files";
+import { apiClient } from "../api/client";
+import { formatBytes, filenameFromKey, folderName } from "@teamagentica/api-client";
+
+async function downloadFile(pluginId: string, key: string) {
+  const blob = await apiClient.files.fetchBlob(pluginId, key);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filenameFromKey(key);
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
 import UploadQueue from "./UploadQueue";
 import FileInfoPanel from "./FileInfoPanel";
 import FolderTree from "./FolderTree";

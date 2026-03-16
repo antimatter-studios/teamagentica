@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiClient } from "../api/client";
 
 interface Props {
   pluginId: string;
@@ -27,9 +27,7 @@ export default function PluginSystemPrompt({ pluginId }: Props) {
     setLoading(true);
     setError("");
     try {
-      const resp = await apiGet<SystemPromptResponse>(
-        `/api/route/${pluginId}/system-prompt`
-      );
+      const resp = await apiClient.plugins.getSystemPrompt(pluginId) as SystemPromptResponse;
       setData(resp);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

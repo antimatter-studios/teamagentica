@@ -1,35 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_BASE, apiGet, apiPost, apiPatch, apiDelete } from "../api/client";
+import { API_BASE } from "../api/client";
+import { apiClient } from "../api/client";
+import type { Environment, Workspace, Volume } from "@teamagentica/api-client";
 
-const ROUTE = "/api/route/infra-workspace-manager";
-interface Environment {
-  plugin_id: string;
-  name: string;
-  description: string;
-  image: string;
-  port: number;
-  icon?: string;
-}
+const workspaceIframeSrc = (id: string) => `${API_BASE}/ws/${id}/`;
+const workspacePortProxyUrl = (id: string, port: number) => `${API_BASE}/ws/${id}/proxy/${port}/`;
 
-interface Workspace {
-  id: string;
-  name: string;
-  environment: string;
-  status: string;
-  subdomain: string;
-  url: string;
-  volume_name: string;
-}
-
-interface Volume {
-  name: string;
-  size_bytes: number;
-  created_at: string;
-  is_empty: boolean;
-  has_workspace: boolean;
-  tags: string[];
-  git_remote: string;
-  extensions: string[];
+async function fetchWorkspacePorts(workspaceId: string): Promise<number[]> {
+  const res = await fetch(`${API_BASE}/ws/${workspaceId}/ports`, { credentials: "include" });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.ports || []).sort((a: number, b: number) => a - b);
 }
 
 const LIST_TAB = "__list__";
@@ -56,19 +37,19 @@ export default function CodeEditor() {
 
   const [detectedPorts, setDetectedPorts] = useState<Record<string, number[]>>({});
   const iframeRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
-  const pollRef = useRef<ReturnType<typeof setInterval>>();
-  const portPollRef = useRef<ReturnType<typeof setInterval>>();
+  const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const portPollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [envRes, wsRes, volRes] = await Promise.all([
-        apiGet<{ environments: Environment[] }>(`${ROUTE}/environments`),
-        apiGet<{ workspaces: Workspace[] }>(`${ROUTE}/workspaces`),
-        apiGet<{ volumes: Volume[] }>(`${ROUTE}/volumes`),
+      const [envs, wss, vols] = await Promise.all([
+        apiClient.workspaces.listEnvironments(),
+        apiClient.workspaces.listWorkspaces(),
+        apiClient.workspaces.listVolumes(),
       ]);
-      setEnvironments(envRes.environments || []);
-      setWorkspaces(wsRes.workspaces || []);
-      setVolumes(volRes.volumes || []);
+      setEnvironments(envs);
+      setWorkspaces(wss);
+      setVolumes(vols);
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load workspaces");
@@ -92,11 +73,7 @@ export default function CodeEditor() {
       await Promise.all(
         wsTabs.map(async (id) => {
           try {
-            const resp = await fetch(`${API_BASE}/ws/${id}/ports`, { credentials: "include" });
-            if (resp.ok) {
-              const data = await resp.json();
-              results[id] = (data.ports || []).sort((a: number, b: number) => a - b);
-            }
+            results[id] = await fetchWorkspacePorts(id);
           } catch {
             // Container may not be ready yet — ignore.
           }
@@ -115,7 +92,7 @@ export default function CodeEditor() {
     setCreating(true);
     setError(null);
     try {
-      await apiPost(`${ROUTE}/workspaces`, {
+      await apiClient.workspaces.createWorkspace({
         name: newName.trim(),
         environment_id: newEnvId,
         git_repo: newGitRepo.trim() || undefined,
@@ -133,7 +110,7 @@ export default function CodeEditor() {
 
   const handleDelete = async (id: string) => {
     try {
-      await apiDelete(`${ROUTE}/workspaces/${id}`);
+      await apiClient.workspaces.deleteWorkspace(id);
       closeTab(id);
       setConfirmDelete(null);
       await fetchAll();
@@ -149,7 +126,7 @@ export default function CodeEditor() {
     if (ws.status !== "running" && !startingIds.has(ws.id)) {
       setStartingIds((prev) => new Set(prev).add(ws.id));
       try {
-        await apiPost(`${ROUTE}/workspaces/${ws.id}/start`, {});
+        await apiClient.workspaces.startWorkspace(ws.id);
         await fetchAll();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to start workspace");
@@ -181,7 +158,7 @@ export default function CodeEditor() {
   };
 
   const iframeSrc = (ws: Workspace) => {
-    return `${API_BASE}/ws/${ws.id}/`;
+    return workspaceIframeSrc(ws.id);
   };
 
   const handleLaunchVolume = async (volumeName: string, envId: string) => {
@@ -190,7 +167,7 @@ export default function CodeEditor() {
     const slug = volumeName.replace(/^ws-[a-f0-9]{8}-/, "") || volumeName.replace(/^ws-/, "");
     const displayName = slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     try {
-      await apiPost(`${ROUTE}/workspaces`, {
+      await apiClient.workspaces.createWorkspace({
         name: displayName,
         environment_id: envId,
         volume_name: volumeName,
@@ -418,9 +395,7 @@ export default function CodeEditor() {
                               if (!renameValue.trim()) return;
                               setError(null);
                               try {
-                                await apiPatch(`${ROUTE}/workspaces/${ws.id}`, {
-                                  name: renameValue.trim(),
-                                });
+                                await apiClient.workspaces.renameWorkspace(ws.id, renameValue.trim());
                                 setRenamingId(null);
                                 await fetchAll();
                               } catch (err: unknown) {
@@ -543,7 +518,7 @@ export default function CodeEditor() {
                             className="ws-btn ws-btn-danger ws-btn-sm"
                             onClick={async () => {
                               try {
-                                await apiDelete(`${ROUTE}/volumes/${v.name}`);
+                                await apiClient.workspaces.deleteVolume(v.name);
                                 setConfirmDelete(null);
                                 await fetchAll();
                               } catch (e: unknown) {
@@ -661,7 +636,7 @@ export default function CodeEditor() {
                     {detectedPorts[tabId].map((port) => (
                       <a
                         key={port}
-                        href={`${API_BASE}/ws/${tabId}/proxy/${port}/`}
+                        href={workspacePortProxyUrl(tabId, port)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="ws-port-link"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiClient } from "../api/client";
 
 interface DiscordCommandEntry {
   key: string;
@@ -24,10 +24,8 @@ export default function PluginDiscordCommands({ pluginId }: Props) {
     setLoading(true);
     setError("");
     try {
-      const data = await apiGet<{ commands: DiscordCommandEntry[] }>(
-        `/api/route/${pluginId}/discord-commands`
-      );
-      const sorted = (data.commands || []).slice().sort((a, b) => a.key.localeCompare(b.key));
+      const data = await apiClient.plugins.getDiscordCommands(pluginId);
+      const sorted = (data.commands as DiscordCommandEntry[] || []).slice().sort((a, b) => a.key.localeCompare(b.key));
       setCommands(sorted);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

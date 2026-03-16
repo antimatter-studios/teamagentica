@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiClient } from "../api/client";
 
 interface ToolEntry {
   name: string;
@@ -33,9 +33,7 @@ export default function PluginTools({ pluginId }: Props) {
     setLoading(true);
     setError("");
     try {
-      const data = await apiGet<{ tools: ToolEntry[] }>(
-        `/api/route/${pluginId}/tools`
-      );
+      const data = await apiClient.plugins.getTools(pluginId) as { tools: ToolEntry[] };
       setTools(data.tools || []);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

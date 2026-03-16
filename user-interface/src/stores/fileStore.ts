@@ -1,12 +1,6 @@
 import { create } from "zustand";
-import {
-  fetchStorageProviders,
-  browseStorage,
-  uploadFile,
-  deleteFile as apiDeleteFile,
-  type StorageFile,
-} from "../api/files";
-import type { Plugin } from "../api/plugins";
+import { apiClient } from "../api/client";
+import type { Plugin, StorageFile } from "@teamagentica/api-client";
 
 interface FileStore {
   providers: Plugin[];
@@ -41,7 +35,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
 
   loadProviders: async () => {
     try {
-      const providers = await fetchStorageProviders();
+      const providers = await apiClient.files.fetchStorageProviders();
       set({ providers });
       if (providers.length > 0 && !get().selectedProvider) {
         get().selectProvider(providers[0]);
@@ -61,7 +55,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     if (!provider) return;
     set({ loading: true, error: null, prefix, selectedFile: null });
     try {
-      const result = await browseStorage(provider.id, prefix);
+      const result = await apiClient.files.browse(provider.id, prefix);
       set({ folders: result.folders || [], files: result.files || [], loading: false });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : "Browse failed" });
@@ -86,7 +80,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
       for (let i = 0; i < fileList.length; i++) {
         const file = fileList[i];
         const key = prefix + file.name;
-        await uploadFile(provider.id, key, file);
+        await apiClient.files.upload(provider.id, key, file, file.type || "application/octet-stream");
       }
       await get().browse(prefix);
     } catch (err) {
@@ -99,7 +93,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     if (!provider) return;
     set({ error: null });
     try {
-      await apiDeleteFile(provider.id, key);
+      await apiClient.files.delete(provider.id, key);
       await get().browse(get().prefix);
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Delete failed" });

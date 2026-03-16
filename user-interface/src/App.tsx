@@ -10,7 +10,7 @@ import DebugConsole from "./components/DebugConsole";
 import CostDashboard from "./components/CostDashboard";
 import CodeEditor from "./components/CodeEditor";
 import { useAuthStore } from "./stores/authStore";
-import { searchPlugins } from "./api/plugins";
+import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
 import { useTheme } from "./hooks/useTheme";
 
@@ -36,10 +36,10 @@ export default function App() {
   const disconnectEvents = useEventStore((s) => s.disconnect);
 
   const checkCapabilities = useCallback(() => {
-    searchPlugins("system:chat")
+    apiClient.plugins.search("system:chat")
       .then((p) => setHasChat(p.length > 0))
       .catch(() => {});
-    searchPlugins("workspace:manager")
+    apiClient.plugins.search("workspace:manager")
       .then((p) => setHasEditor(p.length > 0))
       .catch(() => {});
   }, []);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet, apiPut } from "../api/client";
+import { apiClient } from "../api/client";
 
 interface PricingEntry {
   provider: string;
@@ -31,9 +31,7 @@ export default function PluginPricing({ pluginId }: Props) {
     setLoading(true);
     setError("");
     try {
-      const data = await apiGet<{ prices: PricingEntry[] }>(
-        `/api/route/${pluginId}/pricing`
-      );
+      const data = await apiClient.plugins.getPricing(pluginId) as { prices: PricingEntry[] };
       setPrices(data.prices || []);
       setEditing(structuredClone(data.prices || []));
     } catch (err) {
@@ -49,7 +47,7 @@ export default function PluginPricing({ pluginId }: Props) {
     value: string | number
   ) {
     const updated = [...editing];
-    (updated[idx] as Record<string, string | number>)[field] = value;
+    (updated[idx] as unknown as Record<string, string | number>)[field] = value;
     setEditing(updated);
   }
 
@@ -80,7 +78,7 @@ export default function PluginPricing({ pluginId }: Props) {
     setError("");
     setSuccess("");
     try {
-      await apiPut(`/api/route/${pluginId}/pricing`, { prices: valid });
+      await apiClient.plugins.updatePricing(pluginId, valid);
       setPrices(structuredClone(valid));
       setEditing(structuredClone(valid));
       setSuccess("Prices saved and pushed to kernel");
