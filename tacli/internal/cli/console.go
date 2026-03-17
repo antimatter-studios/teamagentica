@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/antimatter-studios/teamagentica/tacli/internal/client"
@@ -20,7 +20,10 @@ func init() {
 }
 
 func runConsole(cmd *cobra.Command, args []string) error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	url, token, err := resolveConnection(cfg)
 	if err != nil {
 		return err
@@ -28,10 +31,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 
 	c := client.New(url, token)
 
-	p := tea.NewProgram(
-		console.New(c),
-		tea.WithAltScreen(),
-	)
+	p := tea.NewProgram(console.New(c))
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("console error: %w", err)

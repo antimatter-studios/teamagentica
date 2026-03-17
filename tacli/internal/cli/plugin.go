@@ -19,7 +19,11 @@ func init() {
 		Aliases: []string{"plugins"},
 		Short:   "Manage plugins",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPluginList(newPluginClient())
+			c, err := newPluginClient()
+			if err != nil {
+				return err
+			}
+			return runPluginList(c)
 		},
 	}
 
@@ -96,7 +100,11 @@ func init() {
 		Short: "List all installed plugins",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPluginList(newPluginClient())
+			c, err := newPluginClient()
+			if err != nil {
+				return err
+			}
+			return runPluginList(c)
 		},
 	}
 
@@ -129,14 +137,23 @@ func init() {
 	rootCmd.AddCommand(cmd)
 }
 
-func newPluginClient() *client.Client {
-	cfg := config.Load()
-	kernelURL, token, _ := resolveConnection(cfg)
-	return client.New(kernelURL, token)
+func newPluginClient() (*client.Client, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	kernelURL, token, err := resolveConnection(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return client.New(kernelURL, token), nil
 }
 
 func resolvePluginClient(cmd *cobra.Command) (*client.Client, error) {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
 	kernelURL, token, err := resolveConnection(cfg)
 	if err != nil {
 		return nil, err

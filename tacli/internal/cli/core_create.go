@@ -186,7 +186,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	c.Token = lr.Token
 
 	// 10. Save profile with kernel state so future config changes can recreate the container.
-	tacliCfg := config.Load()
+	tacliCfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	tacliCfg.SetProfile(config.Profile{
 		Name:  flagCreateName,
 		URL:   kernelURL,

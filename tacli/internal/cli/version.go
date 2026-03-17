@@ -33,7 +33,10 @@ func init() {
 }
 
 func runVersion(cmd *cobra.Command, args []string) error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	url, token, err := resolveConnection(cfg)
 	if err != nil {
 		return err

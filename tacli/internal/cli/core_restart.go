@@ -23,7 +23,10 @@ func init() {
 }
 
 func runCoreRestart(cmd *cobra.Command, args []string) error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	profile := cfg.Active()
 	if profile == nil || profile.Kernel.Image == "" {
 		return fmt.Errorf("no kernel state in profile — run 'tacli core create' first")

@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -40,16 +41,22 @@ func ConfigPath() string {
 }
 
 // Load reads the config file, returning defaults if it doesn't exist.
-func Load() *Config {
-	data, err := os.ReadFile(ConfigPath())
+// Returns an error if the file exists but is corrupt — callers must not
+// overwrite a corrupt config as that would destroy user data.
+func Load() (*Config, error) {
+	p := ConfigPath()
+	data, err := os.ReadFile(p)
 	if err != nil {
-		return &Config{}
+		if os.IsNotExist(err) {
+			return &Config{}, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", p, err)
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return &Config{}
+		return nil, fmt.Errorf("corrupt config %s: %w — fix or delete the file manually", p, err)
 	}
-	return &cfg
+	return &cfg, nil
 }
 
 // Save writes the config file to disk.
@@ -76,10 +83,43 @@ func (c *Config) Active() *Profile {
 }
 
 // SetProfile adds or updates a profile.
+// When updating, only non-zero fields from p are applied — existing
+// values (especially Kernel config) are preserved.
 func (c *Config) SetProfile(p Profile) {
 	for i := range c.Profiles {
 		if c.Profiles[i].Name == p.Name {
-			c.Profiles[i] = p
+			if p.URL != "" {
+				c.Profiles[i].URL = p.URL
+			}
+			if p.Token != "" {
+				c.Profiles[i].Token = p.Token
+			}
+			if p.Kernel.Image != "" {
+				c.Profiles[i].Kernel.Image = p.Kernel.Image
+			}
+			if p.Kernel.Port != 0 {
+				c.Profiles[i].Kernel.Port = p.Kernel.Port
+			}
+			if p.Kernel.Domain != "" {
+				c.Profiles[i].Kernel.Domain = p.Kernel.Domain
+			}
+			if p.Kernel.DataDir != "" {
+				c.Profiles[i].Kernel.DataDir = p.Kernel.DataDir
+			}
+			if p.Kernel.Name != "" {
+				c.Profiles[i].Kernel.Name = p.Kernel.Name
+			}
+			if p.Kernel.NetworkName != "" {
+				c.Profiles[i].Kernel.NetworkName = p.Kernel.NetworkName
+			}
+			if p.Kernel.Labels != nil {
+				c.Profiles[i].Kernel.Labels = p.Kernel.Labels
+			}
+			// bools are always applied when any other Kernel field is set
+			if p.Kernel.Image != "" || p.Kernel.Port != 0 || p.Kernel.Domain != "" {
+				c.Profiles[i].Kernel.DevMode = p.Kernel.DevMode
+				c.Profiles[i].Kernel.MTLS = p.Kernel.MTLS
+			}
 			return
 		}
 	}

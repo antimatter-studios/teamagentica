@@ -46,8 +46,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		fmt.Println("Authenticated successfully")
 	}
 
-	// Save profile.
-	cfg := config.Load()
+	// Save profile — SetProfile merges with existing, preserving kernel config.
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	cfg.SetProfile(config.Profile{
 		Name:  name,
 		URL:   url,

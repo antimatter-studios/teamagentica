@@ -143,13 +143,14 @@ func (c *Client) Register(email, password string) (*LoginResponse, error) {
 
 // PluginSummary is a plugin representation from the kernel API.
 type PluginSummary struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Image   string `json:"image"`
-	Status  string `json:"status"`
-	Enabled bool   `json:"enabled"`
-	System  bool   `json:"system"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Version      string   `json:"version"`
+	Image        string   `json:"image"`
+	Status       string   `json:"status"`
+	Enabled      bool     `json:"enabled"`
+	System       bool     `json:"system"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // ListPlugins calls GET /api/plugins.
@@ -559,6 +560,180 @@ func (c *Client) doSimple(method, path string) error {
 	return nil
 }
 
+// ── typed config ──────────────────────────────────────────────────────────────
+
+// ConfigItem is a single config field returned by GET /api/plugins/:id/config.
+type ConfigItem struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	IsSecret bool   `json:"is_secret"`
+	Default  string `json:"default,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Required bool   `json:"required,omitempty"`
+	ReadOnly bool   `json:"readonly,omitempty"`
+}
+
+// PluginConfigItems calls GET /api/plugins/:id/config and returns typed items.
+func (c *Client) PluginConfigItems(id string) ([]ConfigItem, error) {
+	resp, err := c.get("/api/plugins/" + id + "/config")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var wrapper struct {
+		Config []ConfigItem `json:"config"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	return wrapper.Config, nil
+}
+
+// ConfigSchemaField describes a single field from the plugin's config schema.
+type ConfigSchemaField struct {
+	Type        string      `json:"type"`
+	Label       string      `json:"label"`
+	Required    bool        `json:"required,omitempty"`
+	Secret      bool        `json:"secret,omitempty"`
+	ReadOnly    bool        `json:"readonly,omitempty"`
+	Default     string      `json:"default,omitempty"`
+	Options     []string    `json:"options,omitempty"`
+	Dynamic     bool        `json:"dynamic,omitempty"`
+	HelpText    string      `json:"help_text,omitempty"`
+	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`
+	Order       int         `json:"order,omitempty"`
+}
+
+// VisibleWhen describes a conditional visibility rule.
+type VisibleWhen struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+}
+
+// PluginConfigSchema calls GET /api/plugins/:id/schema/config and returns the schema.
+func (c *Client) PluginConfigSchema(id string) (map[string]ConfigSchemaField, error) {
+	resp, err := c.get("/api/plugins/" + id + "/schema/config")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var schema map[string]ConfigSchemaField
+	if err := json.NewDecoder(resp.Body).Decode(&schema); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	return schema, nil
+}
+
+// ── OAuth device-code flow ───────────────────────────────────────────────────
+
+// DeviceCodeResponse is returned by POST /api/route/:id/auth/device-code.
+type DeviceCodeResponse struct {
+	URL  string `json:"url"`
+	Code string `json:"code"`
+}
+
+// OAuthDeviceCode initiates the device-code flow for a plugin.
+// Uses a 45s timeout to allow the plugin to start its auth subprocess and
+// return the OAuth URL (which can take up to ~30s).
+func (c *Client) OAuthDeviceCode(pluginID string) (*DeviceCodeResponse, error) {
+	slowClient := &http.Client{Timeout: 45 * time.Second}
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/route/"+pluginID+"/auth/device-code", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := slowClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("request failed (%d): %s", resp.StatusCode, string(body))
+	}
+	var result DeviceCodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	return &result, nil
+}
+
+// OAuthSubmitCode delivers the authorization code to the plugin's login process
+// and waits for authentication to complete. Returns whether auth succeeded.
+func (c *Client) OAuthSubmitCode(pluginID, code string) (bool, error) {
+	slowClient := &http.Client{Timeout: 45 * time.Second}
+	body, _ := json.Marshal(map[string]string{"code": code})
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/route/"+pluginID+"/auth/submit-code", strings.NewReader(string(body)))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := slowClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("submit-code failed (%d): %s", resp.StatusCode, string(b))
+	}
+	var result struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Authenticated, nil
+}
+
+// OAuthStatusFull returns authenticated + login_in_progress for a plugin.
+func (c *Client) OAuthStatusFull(pluginID string) (authenticated bool, loginInProgress bool, err error) {
+	resp, err := c.get("/api/route/" + pluginID + "/auth/status")
+	if err != nil {
+		return false, false, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Authenticated   bool `json:"authenticated"`
+		LoginInProgress bool `json:"login_in_progress"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, false, fmt.Errorf("decode: %w", err)
+	}
+	return result.Authenticated, result.LoginInProgress, nil
+}
+
+// OAuthPoll checks whether a generic device-code flow has completed (e.g. OpenAI).
+func (c *Client) OAuthPoll(pluginID string) (bool, error) {
+	resp, err := c.post("/api/route/" + pluginID + "/auth/poll")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, fmt.Errorf("decode: %w", err)
+	}
+	return result.Authenticated, nil
+}
+
+// OAuthStatus checks current auth status for a plugin.
+func (c *Client) OAuthStatus(pluginID string) (bool, error) {
+	resp, err := c.get("/api/route/" + pluginID + "/auth/status")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, fmt.Errorf("decode: %w", err)
+	}
+	return result.Authenticated, nil
+}
+
 // ── plugin detail ─────────────────────────────────────────────────────────────
 
 // PluginDetail is the full plugin record returned by GET /api/plugins/:id.
@@ -599,6 +774,33 @@ func (c *Client) GetPlugin(id string) (*PluginDetail, error) {
 // GetPluginLogs calls GET /api/plugins/:id/logs and returns plain-text log output.
 func (c *Client) GetPluginLogs(id string, tail int) (string, error) {
 	resp, err := c.get(fmt.Sprintf("/api/plugins/%s/logs?tail=%d", id, tail))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read: %w", err)
+	}
+	return string(b), nil
+}
+
+// GetKernelLogs calls GET /api/kernel/logs and returns plain-text log output.
+func (c *Client) GetKernelLogs(tail int) (string, error) {
+	resp, err := c.get(fmt.Sprintf("/api/kernel/logs?tail=%d", tail))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read: %w", err)
+	}
+	return string(b), nil
+}
+
+func (c *Client) GetUILogs(tail int) (string, error) {
+	resp, err := c.get(fmt.Sprintf("/api/kernel/ui/logs?tail=%d", tail))
 	if err != nil {
 		return "", err
 	}

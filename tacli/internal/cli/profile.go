@@ -37,7 +37,10 @@ func init() {
 }
 
 func runProfileList(cmd *cobra.Command, args []string) error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	path := config.ConfigPath()
 
 	if len(cfg.Profiles) == 0 {
@@ -57,7 +60,10 @@ func runProfileList(cmd *cobra.Command, args []string) error {
 }
 
 func runProfileShow(cmd *cobra.Command, args []string) error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	path := config.ConfigPath()
 
 	var name string

@@ -62,8 +62,8 @@ func init() {
 			RunE:  runMarketplacePlugins,
 		},
 		&cobra.Command{
-			Use:   "submit-catalog <plugins-dir>",
-			Short: "Submit all plugin.yaml files from a directory to the catalog",
+			Use:   "submit <path>",
+			Short: "Submit plugin.yaml file(s) — accepts a single file or a directory of plugins",
 			Args:  cobra.ExactArgs(1),
 			RunE:  runMarketplaceSubmitCatalog,
 		},
@@ -73,7 +73,10 @@ func init() {
 }
 
 func resolveMarketplaceClient(cmd *cobra.Command) (*client.Client, error) {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
 	kernelURL, token, err := resolveConnection(cfg)
 	if err != nil {
 		return nil, err
@@ -312,13 +315,25 @@ func fetchInstalledMap(c *client.Client) map[string]client.PluginSummary {
 	return m
 }
 
-func marketplaceSubmitCatalog(c *client.Client, pluginsDir string) error {
-	matches, err := filepath.Glob(filepath.Join(pluginsDir, "*", "plugin.yaml"))
+func marketplaceSubmitCatalog(c *client.Client, path string) error {
+	var matches []string
+
+	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("glob: %w", err)
+		return fmt.Errorf("stat %s: %w", path, err)
 	}
-	if len(matches) == 0 {
-		return fmt.Errorf("no plugin.yaml files found in %s", pluginsDir)
+
+	if !info.IsDir() {
+		// Single file supplied directly.
+		matches = []string{path}
+	} else {
+		matches, err = filepath.Glob(filepath.Join(path, "*", "plugin.yaml"))
+		if err != nil {
+			return fmt.Errorf("glob: %w", err)
+		}
+		if len(matches) == 0 {
+			return fmt.Errorf("no plugin.yaml files found in %s", path)
+		}
 	}
 
 	var submitted, errors int

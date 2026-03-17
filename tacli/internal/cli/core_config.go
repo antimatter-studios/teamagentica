@@ -39,7 +39,10 @@ Example:
 }
 
 func runCoreConfigSet(cmd *cobra.Command, args []string) error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	profile := cfg.Active()
 	if profile == nil {
 		return fmt.Errorf("no active profile — run 'tacli core create' first")
