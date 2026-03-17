@@ -33,11 +33,7 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"PLUGIN_PORT":      {Type: "number", Label: "Listen Port", Default: "8090", HelpText: "Port the cost explorer listens on"},
-			"PLUGIN_DATA_PATH": {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Path for the database file"},
-			"PLUGIN_DEBUG":     {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Enable debug logging", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	ctx := context.Background()

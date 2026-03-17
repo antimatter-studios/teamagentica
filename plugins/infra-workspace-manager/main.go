@@ -62,10 +62,7 @@ func main() {
 				},
 			},
 		},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"WORKSPACE_MANAGER_PORT": {Type: "number", Label: "Listen Port", Default: "8091", HelpText: "Port the workspace manager listens on"},
-			"PLUGIN_DEBUG":           {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed operations", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	ctx := context.Background()

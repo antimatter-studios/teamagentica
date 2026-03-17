@@ -31,12 +31,7 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"OPENROUTER_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://openrouter.ai/keys", Order: 1},
-			"OPENROUTER_MODEL":  {Type: "select", Label: "Model", Default: "google/gemini-2.5-flash", Dynamic: true, Order: 2},
-			"PLUGIN_ALIASES":    {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin.", Order: 90},
-			"PLUGIN_DEBUG":      {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Start SDK first (register + heartbeat + event server).

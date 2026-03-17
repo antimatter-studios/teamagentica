@@ -2,7 +2,7 @@ id: infra-cron-scheduler
 name: "Cron Scheduler"
 description: "Cron-style scheduled event system for automated workflows and recurring jobs"
 group: infrastructure
-version: "1.0.0"
+version: "1.0.1"
 image: "teamagentica-infra-cron-scheduler:latest"
 author: teamagentica
 tags: [infrastructure, cron, scheduler, automation]

@@ -2,7 +2,7 @@ id: storage-volume
 name: "Block Storage"
 description: "Namespace-isolated block storage volumes. Provides persistent, mountable volumes with metadata and type labels (auth, storage). Other plugins discover it via the storage:block capability."
 group: storage
-version: "1.1.0"
+version: "1.1.1"
 image: "teamagentica-storage-volume:latest"
 author: teamagentica
 tags: [storage, volume, block, disk, infrastructure, tool]

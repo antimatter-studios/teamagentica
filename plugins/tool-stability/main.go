@@ -27,12 +27,7 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"STABILITY_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.stability.ai — 25 free credits on signup", Order: 1},
-			"STABILITY_MODEL":  {Type: "select", Label: "Model", Default: "sd3-medium", Dynamic: true, Order: 2},
-			"PLUGIN_ALIASES":   {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin.", Order: 90},
-			"PLUGIN_DEBUG":     {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 	sdkClient.Start(context.Background())
 

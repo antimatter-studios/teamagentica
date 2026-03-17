@@ -34,18 +34,19 @@ func DevVersion(base string) string {
 }
 
 // Manifest represents the plugin.yaml file — the single source of truth
-// for a plugin's identity, capabilities, and dependencies.
+// for a plugin's identity, capabilities, dependencies, and config schema.
 type Manifest struct {
-	ID           string   `yaml:"id"`
-	Name         string   `yaml:"name"`
-	Description  string   `yaml:"description"`
-	Group        string   `yaml:"group"`
-	Version      string   `yaml:"version"`
-	Image        string   `yaml:"image"`
-	Author       string   `yaml:"author"`
-	Tags         []string `yaml:"tags"`
-	Capabilities []string `yaml:"capabilities"`
-	Dependencies []string `yaml:"dependencies"`
+	ID           string                       `yaml:"id"`
+	Name         string                       `yaml:"name"`
+	Description  string                       `yaml:"description"`
+	Group        string                       `yaml:"group"`
+	Version      string                       `yaml:"version"`
+	Image        string                       `yaml:"image"`
+	Author       string                       `yaml:"author"`
+	Tags         []string                     `yaml:"tags"`
+	Capabilities []string                     `yaml:"capabilities"`
+	Dependencies []string                     `yaml:"dependencies"`
+	ConfigSchema map[string]ConfigSchemaField `yaml:"config_schema"`
 }
 
 // LoadManifest reads plugin.yaml from the current working directory (or the
@@ -80,23 +81,23 @@ func LoadManifest() Manifest {
 
 // ConfigSchemaField describes a single configuration field for a plugin.
 type ConfigSchemaField struct {
-	Type        string            `json:"type"`
-	Label       string            `json:"label"`
-	Required    bool              `json:"required,omitempty"`
-	Secret      bool              `json:"secret,omitempty"`
-	ReadOnly    bool              `json:"readonly,omitempty"`
-	Default     string            `json:"default,omitempty"`
-	Options     []string          `json:"options,omitempty"`
-	Dynamic     bool              `json:"dynamic,omitempty"`
-	HelpText    string            `json:"help_text,omitempty"`
-	VisibleWhen *VisibleWhen      `json:"visible_when,omitempty"`
-	Order       int               `json:"order,omitempty"`
+	Type        string            `json:"type" yaml:"type"`
+	Label       string            `json:"label" yaml:"label"`
+	Required    bool              `json:"required,omitempty" yaml:"required,omitempty"`
+	Secret      bool              `json:"secret,omitempty" yaml:"secret,omitempty"`
+	ReadOnly    bool              `json:"readonly,omitempty" yaml:"readonly,omitempty"`
+	Default     string            `json:"default,omitempty" yaml:"default,omitempty"`
+	Options     []string          `json:"options,omitempty" yaml:"options,omitempty"`
+	Dynamic     bool              `json:"dynamic,omitempty" yaml:"dynamic,omitempty"`
+	HelpText    string            `json:"help_text,omitempty" yaml:"help_text,omitempty"`
+	VisibleWhen *VisibleWhen      `json:"visible_when,omitempty" yaml:"visible_when,omitempty"`
+	Order       int               `json:"order,omitempty" yaml:"order,omitempty"`
 }
 
 // VisibleWhen describes a condition under which a field should be visible.
 type VisibleWhen struct {
-	Field string `json:"field"`
-	Value string `json:"value"`
+	Field string `json:"field" yaml:"field"`
+	Value string `json:"value" yaml:"value"`
 }
 
 // SchemaFunc is called on each GET /schema request, allowing plugins to return

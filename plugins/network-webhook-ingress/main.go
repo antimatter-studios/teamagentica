@@ -43,14 +43,53 @@ func main() {
 	const defaultPort = 9000
 	httpPort := defaultPort
 
+	configSchema := map[string]pluginsdk.ConfigSchemaField{
+		"WEBHOOK_INGRESS_PORT": {Type: "number", Label: "Listen Port", Default: "9000", HelpText: "Port the ingress listens on for external webhook traffic"},
+	}
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"WEBHOOK_INGRESS_PORT": {Type: "number", Label: "Listen Port", Default: "9000", HelpText: "Port the ingress listens on for external webhook traffic"},
+		SchemaFunc: func() map[string]interface{} {
+			schema := map[string]interface{}{
+				"config": configSchema,
+			}
+
+			baseURLMu.RLock()
+			url := baseURL
+			baseURLMu.RUnlock()
+
+			if url == "" {
+				url = "(waiting for tunnel)"
+			}
+
+			routesMu.RLock()
+			snapshot := make([]Route, len(routes))
+			copy(snapshot, routes)
+			routesMu.RUnlock()
+
+			status := map[string]string{
+				"Tunnel URL": url,
+				"Routes":     strconv.Itoa(len(snapshot)),
+			}
+			schema["status"] = status
+
+			if len(snapshot) > 0 {
+				webhooks := make(map[string]string, len(snapshot))
+				for _, rt := range snapshot {
+					publicURL := rt.Prefix
+					if url != "(waiting for tunnel)" {
+						publicURL = strings.TrimRight(url, "/") + rt.Prefix
+					}
+					webhooks[rt.PluginID] = publicURL
+				}
+				schema["webhooks"] = webhooks
+			}
+
+			return schema
 		},
 	})
 

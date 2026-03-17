@@ -68,13 +68,7 @@ func main() {
 				},
 			},
 		},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"STORAGE_DATA_PATH":    {Type: "string", Label: "Data Path", Default: "/data", HelpText: "Local filesystem path for volume storage", Order: 1},
-			"STORAGE_VOLUMES_PATH": {Type: "string", Label: "Volumes Path", Default: "/data/volumes", HelpText: "Path for namespace-isolated block storage volumes", Order: 2},
-			"STORAGE_VOLUME_PORT":  {Type: "string", Label: "Plugin Port", Default: "8090", HelpText: "HTTP port for the storage plugin", Order: 3},
-			"PLUGIN_ALIASES":     {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin.", Order: 90},
-			"PLUGIN_DEBUG":       {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed operations", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 	// Seed aliases from kernel (will update dynamically via alias:update events).
 	entries, err := sdkClient.FetchAliases()

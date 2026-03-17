@@ -52,10 +52,7 @@ func main() {
 		Port:         httpPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"DEFAULT_AGENT": {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator. Leave empty to require manual agent selection.", Order: 1},
-			"PLUGIN_DEBUG":  {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Seed aliases from kernel.

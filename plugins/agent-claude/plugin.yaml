@@ -2,10 +2,11 @@ id: agent-claude
 name: "Claude Agent"
 description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
 group: agents
-version: "1.0.0"
+version: "1.0.7"
 image: "teamagentica-agent-claude:latest"
 author: teamagentica
 tags: [chat, ai, agent, claude, anthropic]
+capabilities: ["agent:openai", "agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]
 config_schema:
   CLAUDE_BACKEND:
@@ -15,6 +16,14 @@ config_schema:
     options: [cli, api_key]
     help_text: "Choose how to interact with Claude"
     order: 1
+  CLAUDE_AUTH:
+    type: oauth
+    label: "Login with Anthropic"
+    help_text: "Authenticate with your Anthropic account to use Claude models"
+    visible_when:
+      field: CLAUDE_BACKEND
+      value: cli
+    order: 2
   ANTHROPIC_API_KEY:
     type: string
     label: "API Key"
@@ -24,13 +33,13 @@ config_schema:
     visible_when:
       field: CLAUDE_BACKEND
       value: api_key
-    order: 2
+    order: 3
   CLAUDE_MODEL:
     type: select
     label: Model
     default: claude-sonnet-4-6
     dynamic: true
-    order: 3
+    order: 4
   PLUGIN_ALIASES:
     type: aliases
     label: Aliases

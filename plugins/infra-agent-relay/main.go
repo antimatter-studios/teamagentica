@@ -382,7 +382,7 @@ func main() {
 		Port:         port,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 	r := newRelay(sdkClient)
 

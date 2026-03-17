@@ -31,15 +31,7 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"INCEPTION_API_KEY":   {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.inceptionlabs.ai/", Order: 1},
-			"INCEPTION_MODEL":    {Type: "select", Label: "Model", Default: "mercury-2", Dynamic: true, Order: 2},
-			"INCEPTION_INSTANT":  {Type: "boolean", Label: "Instant Mode", Default: "false", HelpText: "Use reasoning_effort=instant for lowest latency responses (reduced quality)", Order: 3},
-			"INCEPTION_DIFFUSING": {Type: "boolean", Label: "Diffusing Mode", Default: "false", HelpText: "Visualise the diffusion denoising process in streaming responses", Order: 4},
-			"TOOL_LOOP_LIMIT":    {Type: "string", Label: "Tool Loop Limit", Default: "20", HelpText: "Maximum tool-calling iterations per request. Set to 0 for unrestricted.", Order: 10},
-			"PLUGIN_ALIASES":     {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.", Order: 90},
-			"PLUGIN_DEBUG":       {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Start SDK first (register + heartbeat + event server).

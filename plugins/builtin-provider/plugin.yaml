@@ -2,7 +2,7 @@ id: builtin-provider
 name: "Builtin Plugin Provider"
 description: "Default marketplace provider serving the official plugin catalog"
 group: infrastructure
-version: "1.0.0"
+version: "1.0.1"
 image: "teamagentica-builtin-provider:latest"
 author: teamagentica
 tags: [system, marketplace, provider]

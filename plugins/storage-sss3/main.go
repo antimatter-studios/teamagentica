@@ -42,18 +42,7 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"S3_ENDPOINT":      {Type: "string", Label: "S3 Endpoint", Required: true, Default: "http://sss3:9000", HelpText: "S3-compatible endpoint URL", Order: 1},
-			"S3_BUCKET":        {Type: "string", Label: "Bucket Name", Required: true, Default: "teamagentica", HelpText: "S3 bucket name for storage", Order: 2},
-			"S3_ACCESS_KEY":    {Type: "string", Label: "Access Key", Required: true, Secret: true, Default: "minioadmin", HelpText: "S3 access key", Order: 3},
-			"S3_SECRET_KEY":    {Type: "string", Label: "Secret Key", Required: true, Secret: true, Default: "minioadmin", HelpText: "S3 secret key", Order: 4},
-			"S3_REGION":        {Type: "string", Label: "Region", Default: "us-east-1", HelpText: "S3 region", Order: 5},
-			"SSS3_STORAGE_PATH": {Type: "string", Label: "Storage Path", Default: "/data/sss3", HelpText: "Local filesystem path for sss3 data", Order: 6},
-			"SSS3_STORAGE_PORT": {Type: "string", Label: "Plugin Port", Default: "8081", HelpText: "HTTP port for the storage plugin", Order: 7},
-			"SSS3_PORT":        {Type: "string", Label: "SSS3 Port", Default: "5553", HelpText: "Port for the local sss3 sidecar", Order: 8},
-			"PLUGIN_ALIASES":   {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin.", Order: 90},
-			"PLUGIN_DEBUG":     {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed S3 operations", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 	// Seed aliases from kernel (will update dynamically via alias:update events).
 	entries, err := sdkClient.FetchAliases()

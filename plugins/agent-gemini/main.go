@@ -36,12 +36,7 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"GEMINI_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://aistudio.google.com/apikey", Order: 1},
-			"GEMINI_MODEL":   {Type: "select", Label: "Model", Default: "gemini-2.5-flash", Dynamic: true, Order: 2},
-			"PLUGIN_ALIASES": {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin.", Order: 90},
-			"PLUGIN_DEBUG":   {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Start SDK first (register with kernel + heartbeat loop + event server).

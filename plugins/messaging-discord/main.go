@@ -40,13 +40,7 @@ func main() {
 		Port:         httpPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"DISCORD_BOT_TOKEN": {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Discord bot token from developer portal", Order: 1},
-			"DISCORD_GUILD_ID":  {Type: "string", Label: "Guild ID", Required: true, HelpText: "Discord server ID for channel management tools", Order: 2},
-			"COORDINATOR_ALIAS": {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "The @alias that manages conversations — routes unaddressed messages and delegates to other agents", Order: 5},
-			"MESSAGE_BUFFER_MS": {Type: "number", Label: "Message Buffer (ms)", Default: "1000", HelpText: "Debounce window for consolidating sequential messages (e.g. forwarded image + text). Set to 0 to disable.", Order: 6},
-			"PLUGIN_DEBUG":      {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Start SDK first (register with kernel + heartbeat loop + event server).

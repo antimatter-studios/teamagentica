@@ -30,10 +30,7 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"PLUGIN_PORT":  {Type: "number", Label: "Listen Port", Default: "8090", HelpText: "Port the builder listens on"},
-			"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Enable debug logging", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	ctx := context.Background()

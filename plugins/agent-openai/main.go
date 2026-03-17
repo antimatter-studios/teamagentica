@@ -38,15 +38,7 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"OPENAI_BACKEND": {Type: "select", Label: "Backend", Default: "subscription", Options: []string{"subscription", "api_key"}, HelpText: "Choose how to authenticate with OpenAI", Order: 1},
-			"OPENAI_AUTH":    {Type: "oauth", Label: "Login with OpenAI", HelpText: "Authenticate with your OpenAI account to use Codex models", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "subscription"}, Order: 2},
-			"OPENAI_API_KEY": {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://platform.openai.com/api-keys", VisibleWhen: &pluginsdk.VisibleWhen{Field: "OPENAI_BACKEND", Value: "api_key"}, Order: 2},
-			"OPENAI_MODEL":   {Type: "select", Label: "Model", Default: "gpt-4o", Dynamic: true, Order: 3},
-			"TOOL_LOOP_LIMIT": {Type: "string", Label: "Tool Loop Limit", Default: "20", HelpText: "Maximum tool-calling iterations per request. Set to 0 for unrestricted.", Order: 10},
-			"PLUGIN_ALIASES": {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.", Order: 90},
-			"PLUGIN_DEBUG":   {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Start SDK first (register with kernel + heartbeat loop + event server).

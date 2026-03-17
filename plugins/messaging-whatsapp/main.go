@@ -36,14 +36,7 @@ func main() {
 		Port:         httpPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"WHATSAPP_ACCESS_TOKEN":    {Type: "string", Label: "Access Token", Required: true, Secret: true, HelpText: "Permanent access token from Meta developer portal", Order: 1},
-			"WHATSAPP_PHONE_NUMBER_ID": {Type: "string", Label: "Phone Number ID", Required: true, HelpText: "WhatsApp Business phone number ID from Meta developer portal", Order: 2},
-			"WHATSAPP_VERIFY_TOKEN":    {Type: "string", Label: "Webhook Verify Token", Required: true, HelpText: "A secret string you choose — must match what you enter in Meta's webhook configuration", Order: 3},
-			"WHATSAPP_APP_SECRET":      {Type: "string", Label: "App Secret", Secret: true, HelpText: "Optional app secret for webhook signature verification", Order: 4},
-			"DEFAULT_AGENT":            {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "Select the default agent that acts as coordinator", Order: 5},
-			"PLUGIN_DEBUG":             {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Seed aliases from kernel (will update dynamically via alias:update events).

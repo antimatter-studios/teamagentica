@@ -41,16 +41,7 @@ func main() {
 		Port:         httpPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"TELEGRAM_BOT_TOKEN":     {Type: "string", Label: "Bot Token", Required: true, Secret: true, HelpText: "Telegram bot token from @BotFather", Order: 1},
-			"TELEGRAM_MODE":          {Type: "select", Label: "Update Mode", Default: "poll", Options: []string{"poll", "webhook"}, HelpText: "How the bot receives messages from Telegram", Order: 2},
-			"TELEGRAM_POLL_TIMEOUT":  {Type: "number", Label: "Poll Timeout (seconds)", Default: "60", HelpText: "Long poll timeout — Telegram holds the connection open for this many seconds waiting for new messages", VisibleWhen: &pluginsdk.VisibleWhen{Field: "TELEGRAM_MODE", Value: "poll"}, Order: 3},
-			"TELEGRAM_WEBHOOK_URL":   {Type: "string", Label: "Webhook URL", HelpText: "Public HTTPS URL that Telegram will POST updates to", VisibleWhen: &pluginsdk.VisibleWhen{Field: "TELEGRAM_MODE", Value: "webhook"}, Order: 3},
-			"TELEGRAM_ALLOWED_USERS": {Type: "string", Label: "Allowed User IDs", HelpText: "Comma-separated Telegram user IDs. Leave empty to allow all users.", Order: 4},
-			"COORDINATOR_ALIAS":      {Type: "select", Label: "Coordinator Agent", Dynamic: true, HelpText: "The @alias that manages conversations — routes unaddressed messages and delegates to other agents", Order: 5},
-			"MESSAGE_BUFFER_MS":      {Type: "number", Label: "Message Buffer (ms)", Default: "1000", HelpText: "Debounce window for consolidating sequential messages (e.g. forwarded image + text). Set to 0 to disable.", Order: 6},
-			"PLUGIN_DEBUG":           {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Seed aliases from kernel (will update dynamically via alias:update events).

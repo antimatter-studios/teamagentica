@@ -38,13 +38,7 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"CLAUDE_BACKEND":     {Type: "select", Label: "Backend", Default: "cli", Options: []string{"cli", "api_key"}, HelpText: "Choose how to interact with Claude", Order: 1},
-			"ANTHROPIC_API_KEY":  {Type: "string", Label: "API Key", Required: true, Secret: true, HelpText: "Get your API key at https://console.anthropic.com/settings/keys", VisibleWhen: &pluginsdk.VisibleWhen{Field: "CLAUDE_BACKEND", Value: "api_key"}, Order: 2},
-			"CLAUDE_MODEL":       {Type: "select", Label: "Model", Default: "claude-sonnet-4-6", Dynamic: true, Order: 3},
-			"PLUGIN_ALIASES":     {Type: "aliases", Label: "Aliases", HelpText: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target.", Order: 90},
-			"PLUGIN_DEBUG":       {Type: "boolean", Label: "Debug Mode", Default: "false", HelpText: "Log detailed request/response traffic to the debug console (may include sensitive data)", Order: 99},
-		},
+		ConfigSchema: manifest.ConfigSchema,
 	})
 
 	// Start SDK first (register with kernel + heartbeat loop + event server).
@@ -119,6 +113,13 @@ func main() {
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
+
+	// Auth routes (proxied via kernel /api/route/:id/auth/*).
+	router.GET("/auth/status", h.AuthStatus)
+	router.POST("/auth/device-code", h.AuthDeviceCode)
+	router.POST("/auth/submit-code", h.AuthSubmitCode)
+	router.POST("/auth/poll", h.AuthPoll)
+	router.DELETE("/auth", h.AuthLogout)
 
 	// Subscribe to MCP server events.
 	if backend == "cli" {

@@ -2,7 +2,7 @@ id: tool-veo
 name: "Google Veo Video"
 description: "AI video generation tool powered by Google Veo"
 group: tools
-version: "1.0.0"
+version: "1.0.1"
 image: "teamagentica-tool-veo:latest"
 author: teamagentica
 tags: [video, ai, tool, veo, google, gemini]

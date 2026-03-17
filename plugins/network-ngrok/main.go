@@ -30,17 +30,34 @@ func main() {
 
 	const defaultPort = 9100
 
+	configSchema := map[string]pluginsdk.ConfigSchemaField{
+		"NGROK_AUTHTOKEN":     {Type: "string", Label: "ngrok Auth Token", Required: true, Secret: true, HelpText: "Your ngrok authentication token from https://dashboard.ngrok.com"},
+		"NGROK_DOMAIN":        {Type: "string", Label: "Custom Domain", HelpText: "Optional static ngrok domain (e.g. my-app.ngrok-free.app). Leave empty for a random URL."},
+		"NGROK_TUNNEL_TARGET": {Type: "string", Label: "Tunnel Target", HelpText: "Internal host:port to tunnel to. Leave empty to use the kernel. Set to network-webhook-ingress host:port if using the webhook ingress plugin (e.g. teamagentica-plugin-network-webhook-ingress:9000)."},
+		"NGROK_HTTP_PORT":     {Type: "number", Label: "HTTP Port", Default: "9100", HelpText: "Port for the ngrok plugin health endpoint"},
+	}
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: map[string]pluginsdk.ConfigSchemaField{
-			"NGROK_AUTHTOKEN":     {Type: "string", Label: "ngrok Auth Token", Required: true, Secret: true, HelpText: "Your ngrok authentication token from https://dashboard.ngrok.com"},
-			"NGROK_DOMAIN":        {Type: "string", Label: "Custom Domain", HelpText: "Optional static ngrok domain (e.g. my-app.ngrok-free.app). Leave empty for a random URL."},
-			"NGROK_TUNNEL_TARGET": {Type: "string", Label: "Tunnel Target", HelpText: "Internal host:port to tunnel to. Leave empty to use the kernel. Set to network-webhook-ingress host:port if using the webhook ingress plugin (e.g. teamagentica-plugin-network-webhook-ingress:9000)."},
-			"NGROK_HTTP_PORT":     {Type: "number", Label: "HTTP Port", Default: "9100", HelpText: "Port for the ngrok plugin health endpoint"},
+		SchemaFunc: func() map[string]interface{} {
+			tunnelURLMu.RLock()
+			url := tunnelURL
+			tunnelURLMu.RUnlock()
+
+			if url == "" {
+				url = "(not connected)"
+			}
+
+			return map[string]interface{}{
+				"config": configSchema,
+				"status": map[string]string{
+					"Public URL": url,
+				},
+			}
 		},
 	})
 
