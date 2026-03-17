@@ -37,6 +37,9 @@ includes:
   infra-agent-relay:
     taskfile: ./plugins/infra-agent-relay/Taskfile.yml
     dir: ./plugins/infra-agent-relay
+  infra-builder:
+    taskfile: ./plugins/infra-builder/Taskfile.yml
+    dir: ./plugins/infra-builder
   infra-cost-tracking:
     taskfile: ./plugins/infra-cost-tracking/Taskfile.yml
     dir: ./plugins/infra-cost-tracking
@@ -79,6 +82,9 @@ includes:
   tool-seedance:
     taskfile: ./plugins/tool-seedance/Taskfile.yml
     dir: ./plugins/tool-seedance
+  tool-task-tracker:
+    taskfile: ./plugins/tool-task-tracker/Taskfile.yml
+    dir: ./plugins/tool-task-tracker
   tool-stability:
     taskfile: ./plugins/tool-stability/Taskfile.yml
     dir: ./plugins/tool-stability
@@ -104,73 +110,139 @@ tasks:
     cmds:
       - task --list
 
+  cache:clear:
+    desc: Clear Docker BuildKit build cache
+    cmds:
+      - docker builder prune -f
+
+  plugin:build:
+    desc: "Build a single plugin (prod): task plugin:build -- network-ngrok [--version 1.0.3]"
+    vars:
+      PLUGIN_NAME:
+        sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
+      VERSION:
+        sh: |
+          ver=$(echo "{{.CLI_ARGS}}" | grep -oE '\-\-version[= ]+[^ ]+' | sed 's/--version[= ]*//')
+          echo "$ver"
+    cmds:
+      - cmd: |
+          if [ -n "{{.VERSION}}" ]; then
+            if ! echo "{{.VERSION}}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$'; then
+              echo "Error: version must be in format X.Y.Z or X.Y.Z-suffix (got '{{.VERSION}}')"
+              exit 1
+            fi
+            sed -i '' 's/^version: .*/version: "{{.VERSION}}"/' plugins/{{.PLUGIN_NAME}}/plugin.yaml
+          fi
+        silent: true
+      - task: "{{.PLUGIN_NAME}}:build"
+      - cmd: |
+          ver=$(grep '^version:' plugins/{{.PLUGIN_NAME}}/plugin.yaml | sed 's/version: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+          echo ""
+          echo "Built: teamagentica-{{.PLUGIN_NAME}}:latest (v${ver})"
+        silent: true
+
+  plugin:build:dev:
+    desc: "Build a single plugin (dev): task plugin:build:dev -- network-ngrok [--version 1.0.3]"
+    vars:
+      PLUGIN_NAME:
+        sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
+      VERSION:
+        sh: |
+          ver=$(echo "{{.CLI_ARGS}}" | grep -oE '\-\-version[= ]+[^ ]+' | sed 's/--version[= ]*//')
+          echo "$ver"
+    cmds:
+      - cmd: |
+          if [ -n "{{.VERSION}}" ]; then
+            if ! echo "{{.VERSION}}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$'; then
+              echo "Error: version must be in format X.Y.Z or X.Y.Z-suffix (got '{{.VERSION}}')"
+              exit 1
+            fi
+            sed -i '' 's/^version: .*/version: "{{.VERSION}}"/' plugins/{{.PLUGIN_NAME}}/plugin.yaml
+          fi
+        silent: true
+      - task: "{{.PLUGIN_NAME}}:build:dev"
+      - cmd: |
+          ver=$(grep '^version:' plugins/{{.PLUGIN_NAME}}/plugin.yaml | sed 's/version: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+          echo ""
+          echo "Built: teamagentica-{{.PLUGIN_NAME}}:dev (v${ver})"
+        silent: true
+
+  plugin:test:
+    desc: "Test a single plugin: task plugin:test -- network-ngrok"
+    cmds:
+      - task: "{{.CLI_ARGS}}:test"
+
   build:plugins:
     desc: Build all plugin Docker images (prod)
     cmds:
-      - task: agent-claude:docker:prod
-      - task: agent-gemini:docker:prod
-      - task: agent-inception:docker:prod
-      - task: agent-kimi:docker:prod
-      - task: agent-openai:docker:prod
-      - task: agent-openrouter:docker:prod
-      - task: agent-requesty:docker:prod
-      - task: builtin-provider:docker:prod
-      - task: infra-agent-relay:docker:prod
-      - task: infra-cost-tracking:docker:prod
-      - task: infra-cron-scheduler:docker:prod
-      - task: infra-mcp-server:docker:prod
-      - task: infra-workspace-manager:docker:prod
-      - task: messaging-chat:docker:prod
-      - task: messaging-discord:docker:prod
-      - task: messaging-telegram:docker:prod
-      - task: messaging-whatsapp:docker:prod
-      - task: network-ngrok:docker:prod
-      - task: network-webhook-ingress:docker:prod
-      - task: storage-sss3:docker:prod
-      - task: storage-volume:docker:prod
-      - task: tool-nanobanana:docker:prod
-      - task: tool-seedance:docker:prod
-      - task: tool-stability:docker:prod
-      - task: tool-veo:docker:prod
-      - task: user-claude-terminal:docker:prod
-      - task: user-codex-terminal:docker:prod
-      - task: user-opencode-terminal:docker:prod
-      - task: user-vscode-server:docker:prod
+      - task: agent-claude:build
+      - task: agent-gemini:build
+      - task: agent-inception:build
+      - task: agent-kimi:build
+      - task: agent-openai:build
+      - task: agent-openrouter:build
+      - task: agent-requesty:build
+      - task: builtin-provider:build
+      - task: infra-agent-relay:build
+      - task: infra-builder:build
+      - task: infra-cost-tracking:build
+      - task: infra-cron-scheduler:build
+      - task: infra-mcp-server:build
+      - task: infra-workspace-manager:build
+      - task: messaging-chat:build
+      - task: messaging-discord:build
+      - task: messaging-telegram:build
+      - task: messaging-whatsapp:build
+      - task: network-ngrok:build
+      - task: network-webhook-ingress:build
+      - task: storage-sss3:build
+      - task: storage-volume:build
+      - task: tool-nanobanana:build
+      - task: tool-seedance:build
+      - task: tool-task-tracker:build
+      - task: tool-stability:build
+      - task: tool-veo:build
+      - task: user-claude-terminal:build
+      - task: user-codex-terminal:build
+      - task: user-opencode-terminal:build
+      - task: user-vscode-server:build
       - echo "All plugin images built successfully"
       - task: restart:running
 
   build:plugins:dev:
     desc: Build all plugin Docker images (dev)
     cmds:
-      - task: agent-claude:docker:dev
-      - task: agent-gemini:docker:dev
-      - task: agent-inception:docker:dev
-      - task: agent-kimi:docker:dev
-      - task: agent-openai:docker:dev
-      - task: agent-openrouter:docker:dev
-      - task: agent-requesty:docker:dev
-      - task: builtin-provider:docker:dev
-      - task: infra-agent-relay:docker:dev
-      - task: infra-cost-tracking:docker:dev
-      - task: infra-cron-scheduler:docker:dev
-      - task: infra-mcp-server:docker:dev
-      - task: infra-workspace-manager:docker:dev
-      - task: messaging-chat:docker:dev
-      - task: messaging-discord:docker:dev
-      - task: messaging-telegram:docker:dev
-      - task: messaging-whatsapp:docker:dev
-      - task: network-ngrok:docker:dev
-      - task: network-webhook-ingress:docker:dev
-      - task: storage-sss3:docker:dev
-      - task: storage-volume:docker:dev
-      - task: tool-nanobanana:docker:dev
-      - task: tool-seedance:docker:dev
-      - task: tool-stability:docker:dev
-      - task: tool-veo:docker:dev
-      - task: user-claude-terminal:docker:dev
-      - task: user-codex-terminal:docker:dev
-      - task: user-opencode-terminal:docker:dev
-      - task: user-vscode-server:docker:dev
+      - task: agent-claude:build:dev
+      - task: agent-gemini:build:dev
+      - task: agent-inception:build:dev
+      - task: agent-kimi:build:dev
+      - task: agent-openai:build:dev
+      - task: agent-openrouter:build:dev
+      - task: agent-requesty:build:dev
+      - task: builtin-provider:build:dev
+      - task: infra-agent-relay:build:dev
+      - task: infra-builder:build:dev
+      - task: infra-cost-tracking:build:dev
+      - task: infra-cron-scheduler:build:dev
+      - task: infra-mcp-server:build:dev
+      - task: infra-workspace-manager:build:dev
+      - task: messaging-chat:build:dev
+      - task: messaging-discord:build:dev
+      - task: messaging-telegram:build:dev
+      - task: messaging-whatsapp:build:dev
+      - task: network-ngrok:build:dev
+      - task: network-webhook-ingress:build:dev
+      - task: storage-sss3:build:dev
+      - task: storage-volume:build:dev
+      - task: tool-nanobanana:build:dev
+      - task: tool-seedance:build:dev
+      - task: tool-task-tracker:build:dev
+      - task: tool-stability:build:dev
+      - task: tool-veo:build:dev
+      - task: user-claude-terminal:build:dev
+      - task: user-codex-terminal:build:dev
+      - task: user-opencode-terminal:build:dev
+      - task: user-vscode-server:build:dev
       - echo "All dev plugin images built successfully"
       - task: restart:running
 
@@ -199,12 +271,12 @@ tasks:
   marketplace:submit:
     desc: Submit a plugin manifest to the catalog
     cmds:
-      - go run ./tacli marketplace --submit-catalog {{.CLI_ARGS}}
+      - go run ./tacli marketplace submit {{.CLI_ARGS}}
 
   marketplace:submit-all:
     desc: Submit all plugin.yaml manifests to the catalog
     cmds:
-      - go run ./tacli marketplace --submit-catalog ./plugins
+      - go run ./tacli marketplace submit ./plugins
 
   restart:running:
     desc: Restart running plugin containers so they pick up new images

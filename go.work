@@ -33,5 +33,6 @@ use (
 	./plugins/user-claude-terminal
 	./plugins/user-codex-terminal
 	./plugins/user-opencode-terminal
+	./plugins/tool-task-tracker
 	./tacli
 )
