@@ -101,7 +101,7 @@ func (s *Store) Upsert(pluginID, version string, data map[string]interface{}) er
 // GetManifest returns the full manifest data for a plugin (latest version).
 func (s *Store) GetManifest(pluginID string) (map[string]interface{}, bool) {
 	var m Manifest
-	if err := s.db.Where("plugin_id = ?", pluginID).Order("created_at DESC").First(&m).Error; err != nil {
+	if err := s.db.Where("plugin_id = ?", pluginID).Order("version DESC").First(&m).Error; err != nil {
 		return nil, false
 	}
 
