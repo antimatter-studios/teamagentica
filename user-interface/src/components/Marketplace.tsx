@@ -30,6 +30,11 @@ export default function Marketplace() {
     [plugins]
   );
 
+  const installedVersions = useMemo(
+    () => new Map(plugins.map((p) => [p.id, p.version])),
+    [plugins]
+  );
+
   const [searchInput, setSearchInput] = useState("");
   const [installing, setInstalling] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -275,10 +280,12 @@ export default function Marketplace() {
               {groupPlugins.map((p) => {
                 const isInstalled = installedIds.has(p.plugin_id);
                 const isInstalling = installing === p.plugin_id;
+                const installedVersion = installedVersions.get(p.plugin_id);
+                const hasUpdate = isInstalled && installedVersion !== p.version;
 
                 return (
                   <div
-                    className="marketplace-row"
+                    className={`marketplace-row${hasUpdate ? " marketplace-row-update" : ""}`}
                     key={`${p.provider}-${p.plugin_id}`}
                   >
                     <div className="marketplace-row-main">

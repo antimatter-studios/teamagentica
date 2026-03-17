@@ -1945,6 +1945,30 @@ body::after {
   border-radius: 6px;
 }
 
+.marketplace-row-update {
+  background: #f97316;
+}
+
+.marketplace-row-update:hover {
+  background: #fb923c;
+}
+
+.marketplace-row-update,
+.marketplace-row-update .plugin-name,
+.marketplace-row-update .plugin-version,
+.marketplace-row-update .marketplace-row-author,
+.marketplace-row-update .marketplace-row-desc,
+.marketplace-row-update .capability-tag,
+.marketplace-row-update .marketplace-installed-badge {
+  color: #000;
+}
+
+.marketplace-row-update .marketplace-installed-badge {
+  background: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.2);
+  color: #000;
+}
+
 .marketplace-install-btn {
   padding: 8px 18px !important;
   font-size: 10px !important;
@@ -5098,4 +5122,616 @@ body::after {
 
 .upload-dismiss-btn:hover {
   color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════
+   Kanban Board
+   ═══════════════════════════════════════════════ */
+
+/* ── Layout ── */
+
+.kn-root {
+  display: flex;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.kn-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.kn-error {
+  color: var(--error);
+}
+
+/* ── Left sidebar ── */
+
+.kn-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.kn-sidebar-header {
+  padding: 20px 18px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.kn-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.kn-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.kn-sidebar-item:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--text-primary);
+}
+
+.kn-sidebar-item--active {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-left-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.kn-sidebar-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.kn-sidebar-item-count {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.kn-sidebar-footer {
+  border-top: 1px solid var(--border-color);
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+
+.kn-sidebar-new {
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px dashed var(--border-color);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.kn-sidebar-new:hover,
+.kn-sidebar-new--active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+/* ── Main area ── */
+
+.kn-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.kn-board-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  gap: 16px;
+}
+
+.kn-board-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.kn-board-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.kn-board-desc {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-board-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.kn-board-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.kn-board {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  align-items: flex-start;
+}
+
+.kn-board-empty {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 24px;
+}
+
+.kn-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ── Column ── */
+
+.kn-column {
+  display: flex;
+  flex-direction: column;
+  width: 272px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 100%;
+}
+
+.kn-column-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+
+.kn-column-name {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-column-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.kn-column-menu {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.kn-column:hover .kn-column-menu {
+  opacity: 1;
+}
+
+.kn-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 48px;
+}
+
+.kn-column-empty {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 16px 0;
+}
+
+.kn-add-card-btn {
+  width: 100%;
+  padding: 9px 14px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.kn-add-card-btn:hover {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+/* ── Card ── */
+
+.kn-card {
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  touch-action: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  contain: layout style;
+}
+
+.kn-card:hover {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.kn-card--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.3);
+}
+
+.kn-card--dragging {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  border-color: var(--accent);
+  will-change: transform;
+}
+
+.kn-card:active {
+  cursor: grabbing;
+}
+
+.kn-card-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.kn-card-desc {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.kn-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.kn-card:hover .kn-card-actions {
+  opacity: 1;
+}
+
+/* ── Shared buttons ── */
+
+.kn-btn {
+  padding: 5px 12px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.kn-btn--primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.kn-btn--primary:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+
+.kn-btn--outline {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.kn-btn--outline:hover,
+.kn-btn--active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.kn-btn--ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: transparent;
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+.kn-btn--ghost:hover {
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.kn-btn--danger:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+/* ── Right form panel ── */
+
+.kn-panel {
+  width: 420px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.kn-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.kn-panel-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.kn-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.kn-panel-close:hover {
+  color: var(--text-primary);
+}
+
+.kn-panel-body {
+  flex: 1;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.kn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kn-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.kn-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+  outline: none;
+}
+
+.kn-input:focus {
+  border-color: var(--accent);
+}
+
+.kn-textarea {
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+}
+
+.kn-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  margin-top: auto;
+  border-top: 1px solid var(--border-color);
+}
+
+.kn-panel-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+/* Two-column field row */
+.kn-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Select input */
+.kn-select {
+  appearance: none;
+  cursor: pointer;
+}
+
+/* ── Card face: metadata ── */
+
+.kn-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kn-priority {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+.kn-priority--low     { background: rgba(52,211,153,0.15); color: #34d399; }
+.kn-priority--medium  { background: rgba(251,191,36,0.15);  color: #fbbf24; }
+.kn-priority--high    { background: rgba(251,113,133,0.15); color: #fb7185; }
+.kn-priority--urgent  { background: rgba(239,68,68,0.2);    color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+
+.kn-card-assignee {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.kn-card-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.kn-label-pill {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.kn-card-due {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.kn-card-due--overdue {
+  color: var(--error);
 }

@@ -9,12 +9,13 @@ import PluginSettings from "./components/PluginSettings";
 import DebugConsole from "./components/DebugConsole";
 import CostDashboard from "./components/CostDashboard";
 import CodeEditor from "./components/CodeEditor";
+import KanbanBoard from "./components/KanbanBoard";
 import { useAuthStore } from "./stores/authStore";
 import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
 import { useTheme } from "./hooks/useTheme";
 
-type Page = "dashboard" | "chat" | "code" | "files" | "marketplace" | "plugins" | "costs" | "console";
+type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "marketplace" | "plugins" | "costs" | "console";
 
 // Plugin lifecycle event types that can change which capabilities are available.
 const PLUGIN_LIFECYCLE_EVENTS = new Set([
@@ -31,6 +32,7 @@ export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [hasChat, setHasChat] = useState(false);
   const [hasEditor, setHasEditor] = useState(false);
+  const [hasTasks, setHasTasks] = useState(false);
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
   const disconnectEvents = useEventStore((s) => s.disconnect);
@@ -41,6 +43,9 @@ export default function App() {
       .catch(() => {});
     apiClient.plugins.search("workspace:manager")
       .then((p) => setHasEditor(p.length > 0))
+      .catch(() => {});
+    apiClient.plugins.search("system:tasks")
+      .then((p) => setHasTasks(p.length > 0))
       .catch(() => {});
   }, []);
 
@@ -54,6 +59,7 @@ export default function App() {
       disconnectEvents();
       setHasChat(false);
       setHasEditor(false);
+      setHasTasks(false);
     }
     return () => disconnectEvents();
   }, [authenticated, fetchUser, connectEvents, disconnectEvents, checkCapabilities]);
@@ -77,7 +83,8 @@ export default function App() {
   useEffect(() => {
     if (!hasChat && page === "chat") setPage("dashboard");
     if (!hasEditor && page === "code") setPage("dashboard");
-  }, [hasChat, hasEditor, page]);
+    if (!hasTasks && page === "tasks") setPage("dashboard");
+  }, [hasChat, hasEditor, hasTasks, page]);
 
   const canAccessPlugins = user?.role === "admin";
   const { theme, setTheme, themes } = useTheme();
@@ -124,6 +131,14 @@ export default function App() {
           >
             FILES
           </button>
+          {hasTasks && (
+            <button
+              className={`nav-tab ${page === "tasks" ? "active" : ""}`}
+              onClick={() => setPage("tasks")}
+            >
+              TASKS
+            </button>
+          )}
           {canAccessPlugins && (
             <button
               className={`nav-tab ${page === "marketplace" ? "active" : ""}`}
@@ -182,6 +197,7 @@ export default function App() {
 
       {page === "dashboard" && <Dashboard />}
       {page === "files" && <FileBrowser />}
+      {page === "tasks" && <KanbanBoard />}
       {page === "marketplace" && <Marketplace />}
       {page === "plugins" && <PluginSettings />}
       {page === "costs" && <CostDashboard />}
