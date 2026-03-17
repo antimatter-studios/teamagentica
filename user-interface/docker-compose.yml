@@ -5,8 +5,8 @@ services:
     profiles: [prod]
     container_name: teamagentica-ui
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: user-interface/Dockerfile
       target: prod
     labels:
       docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
@@ -23,8 +23,8 @@ services:
     profiles: [dev]
     container_name: teamagentica-ui-dev
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: user-interface/Dockerfile
       target: dev
     labels:
       docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
@@ -33,6 +33,7 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - .:/app
+      - ../packages:/packages
       - /app/node_modules
     environment:
       - VITE_APP_NAME=${APP_NAME:-TeamAgentica}

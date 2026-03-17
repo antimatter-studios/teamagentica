@@ -38,7 +38,8 @@ tasks:
       - docker compose -f docker-compose.yml --profile dev down
 
   dev:restart:
-    desc: Restart dev UI container
+    desc: Rebuild and restart dev UI container (picks up new dependencies)
     cmds:
       - task: dev:stop
+      - task: dev:build
       - task: dev:start
