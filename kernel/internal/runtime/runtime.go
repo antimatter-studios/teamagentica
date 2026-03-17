@@ -17,4 +17,6 @@ type ContainerRuntime interface {
 	StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string) (containerID string, err error)
 	HealthCheck(ctx context.Context, containerID string) (running bool, err error)
 	ContainerLogs(ctx context.Context, containerID string, tail int) (string, error)
+	SelfContainerID() string
+	UIContainerID(ctx context.Context) (string, error)
 }

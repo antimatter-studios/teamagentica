@@ -26,12 +26,13 @@ import (
 
 // DockerRuntime manages plugin containers via the Docker API.
 type DockerRuntime struct {
-	client      *client.Client
-	network     string
-	dataDir     string // host-side path bind-mounted at /data in the kernel container
-	certManager *certs.CertManager
-	rtCfg       *runtimecfg.Config
-	baseDomain  string
+	client           *client.Client
+	network          string
+	dataDir          string // host-side path bind-mounted at /data in the kernel container
+	certManager      *certs.CertManager
+	rtCfg            *runtimecfg.Config
+	baseDomain       string
+	selfContainerID  string // Docker container ID of the kernel itself (resolved at startup)
 }
 
 // NewDockerRuntime creates a Docker client from environment and ensures the
@@ -65,8 +66,65 @@ func NewDockerRuntime(networkName, dataDir string, certManager *certs.CertManage
 		return nil, fmt.Errorf("ensure docker network: %w", err)
 	}
 
+	// Discover our own container ID so we can serve kernel logs.
+	if id, err := rt.discoverSelfContainer(ctx); err != nil {
+		log.Printf("WARNING: could not discover own container ID: %v — kernel logs unavailable", err)
+	} else {
+		rt.selfContainerID = id
+		log.Printf("docker runtime: kernel container ID=%s", id[:12])
+	}
+
 	log.Printf("docker runtime initialised (network=%s)", networkName)
 	return rt, nil
+}
+
+// SelfContainerID returns the Docker container ID of the kernel itself.
+// Returns empty string if discovery failed.
+func (d *DockerRuntime) SelfContainerID() string {
+	return d.selfContainerID
+}
+
+// UIContainerID finds the user-interface container by well-known name.
+// Checks for "teamagentica-ui-dev" (dev profile) and "teamagentica-ui" (prod).
+func (d *DockerRuntime) UIContainerID(ctx context.Context) (string, error) {
+	containers, err := d.client.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("list containers: %w", err)
+	}
+	for _, c := range containers {
+		for _, name := range c.Names {
+			name = strings.TrimPrefix(name, "/")
+			if name == "teamagentica-ui-dev" || name == "teamagentica-ui" {
+				return c.ID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("UI container not found (teamagentica-ui / teamagentica-ui-dev)")
+}
+
+// discoverSelfContainer finds the kernel's own container by matching hostname.
+func (d *DockerRuntime) discoverSelfContainer(ctx context.Context) (string, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("get hostname: %w", err)
+	}
+
+	containers, err := d.client.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("list containers: %w", err)
+	}
+
+	for _, c := range containers {
+		info, err := d.client.ContainerInspect(ctx, c.ID)
+		if err != nil {
+			continue
+		}
+		if info.Config != nil && info.Config.Hostname == hostname {
+			return c.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("no container found with hostname %q", hostname)
 }
 
 // ensureNetwork creates the bridge network if it does not already exist.
