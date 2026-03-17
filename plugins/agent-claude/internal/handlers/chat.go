@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,7 @@ import (
 
 // Handler holds the plugin's configuration and exposes HTTP handlers.
 type Handler struct {
+	mu            sync.RWMutex
 	backend       string // "cli" or "api_key"
 	apiKey        string
 	model         string
@@ -65,7 +67,25 @@ func (h *Handler) SetClaudeCLI(client *claudecli.Client) {
 
 // SetMCPConfig sets the path to the MCP config file.
 func (h *Handler) SetMCPConfig(path string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.mcpConfig = path
+}
+
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v, ok := config["CLAUDE_MODEL"]; ok && v != "" {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+	}
+	if v, ok := config["ANTHROPIC_API_KEY"]; ok {
+		h.apiKey = v
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -76,19 +96,23 @@ func (h *Handler) emitEvent(eventType, detail string) {
 
 // Health returns a simple health check response.
 func (h *Handler) Health(c *gin.Context) {
+	h.mu.RLock()
+	backend := h.backend
+	apiKey := h.apiKey
+	h.mu.RUnlock()
 	configured := false
-	switch h.backend {
+	switch backend {
 	case "cli":
 		configured = h.claudeCLI != nil && h.claudeCLI.IsAvailable()
 	case "api_key":
-		configured = h.apiKey != ""
+		configured = apiKey != ""
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
 		"plugin":     "agent-claude",
 		"version":    "1.0.0",
 		"configured": configured,
-		"backend":    h.backend,
+		"backend":    backend,
 	})
 }
 
@@ -126,7 +150,9 @@ func (h *Handler) Chat(c *gin.Context) {
 		}
 	}
 
+	h.mu.RLock()
 	model := h.model
+	h.mu.RUnlock()
 	if req.Model != "" {
 		model = req.Model
 	}
@@ -135,7 +161,13 @@ func (h *Handler) Chat(c *gin.Context) {
 	if len(messages) > 0 {
 		lastMsg = messages[len(messages)-1].Content
 	}
-	if h.debug {
+	h.mu.RLock()
+	backend := h.backend
+	mcpConfig := h.mcpConfig
+	debug := h.debug
+	h.mu.RUnlock()
+
+	if debug {
 		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d workspace=%s session=%s content=%s",
 			model, len(messages), req.WorkspaceID, req.SessionID, truncateStr(lastMsg, 200)))
 	} else {
@@ -145,7 +177,7 @@ func (h *Handler) Chat(c *gin.Context) {
 
 	start := time.Now()
 
-	switch h.backend {
+	switch backend {
 	case "cli":
 		if h.claudeCLI == nil {
 			h.emitEvent("error", "CLI backend not initialised")
@@ -184,7 +216,7 @@ func (h *Handler) Chat(c *gin.Context) {
 			}
 		}
 
-		resp, err := h.claudeCLI.ChatCompletion(model, prompt, req.SystemPrompt, req.MaxTurns, nil, h.mcpConfig, opts)
+		resp, err := h.claudeCLI.ChatCompletion(model, prompt, req.SystemPrompt, req.MaxTurns, nil, mcpConfig, opts)
 		if err != nil {
 			log.Printf("Claude CLI error: %v", err)
 			h.emitEvent("error", fmt.Sprintf("cli: %v", err))
@@ -205,7 +237,7 @@ func (h *Handler) Chat(c *gin.Context) {
 		})
 		h.emitUsage("anthropic", resp.Model, resp.InputTokens, resp.OutputTokens, resp.InputTokens+resp.OutputTokens, resp.CachedTokens, elapsed.Milliseconds(), userID)
 
-		if h.debug {
+		if debug {
 			h.emitEvent("chat_response", fmt.Sprintf("backend=cli model=%s tokens=%d+%d turns=%d cost=$%.4f time=%dms response=%s",
 				resp.Model, resp.InputTokens, resp.OutputTokens, resp.NumTurns, resp.CostUSD, elapsed.Milliseconds(), truncateStr(resp.Response, 200)))
 		} else {
@@ -228,7 +260,10 @@ func (h *Handler) Chat(c *gin.Context) {
 		})
 
 	case "api_key":
-		if h.apiKey == "" {
+		h.mu.RLock()
+		apiKey := h.apiKey
+		h.mu.RUnlock()
+		if apiKey == "" {
 			h.emitEvent("error", "api_key backend has no ANTHROPIC_API_KEY")
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "api_key backend is configured but ANTHROPIC_API_KEY is not set."})
 			return
@@ -259,7 +294,7 @@ func (h *Handler) Chat(c *gin.Context) {
 
 		maxIter := h.toolLoopLimit
 		for iteration := 0; maxIter == 0 || iteration <= maxIter; iteration++ {
-			resp, err := anthropic.ChatCompletion(h.apiKey, model, messages, 8192, toolDefs...)
+			resp, err := anthropic.ChatCompletion(apiKey, model, messages, 8192, toolDefs...)
 			if err != nil {
 				log.Printf("Anthropic error: %v", err)
 				h.emitEvent("error", fmt.Sprintf("anthropic: %v", err))
@@ -339,7 +374,7 @@ func (h *Handler) Chat(c *gin.Context) {
 			h.emitUsage("anthropic", model, totalInput, totalOutput, totalTokens, totalCached, elapsed.Milliseconds(), userID)
 
 			responseText := anthropic.GetResponseText(resp)
-			if h.debug {
+			if debug {
 				h.emitEvent("chat_response", fmt.Sprintf("backend=api_key model=%s tokens=%d+%d time=%dms response=%s",
 					model, totalInput, totalOutput, elapsed.Milliseconds(), truncateStr(responseText, 200)))
 			} else {
@@ -378,8 +413,8 @@ func (h *Handler) Chat(c *gin.Context) {
 		})
 
 	default:
-		h.emitEvent("error", fmt.Sprintf("unknown backend: %s", h.backend))
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unknown backend %q. Set CLAUDE_BACKEND to 'cli' or 'api_key'.", h.backend)})
+		h.emitEvent("error", fmt.Sprintf("unknown backend: %s", backend))
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unknown backend %q. Set CLAUDE_BACKEND to 'cli' or 'api_key'.", backend)})
 	}
 }
 

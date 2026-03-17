@@ -48,44 +48,28 @@ func (c *Client) IsAvailable() bool {
 	return cmd.Run() == nil
 }
 
-// StreamJSON event types from claude --output-format stream-json.
-
+// streamEvent covers the new flat stream-json format (claude --verbose).
+// The "result" event now has the response text directly in the "result" string
+// field rather than nested under a "result" object.
 type streamEvent struct {
-	Type    string          `json:"type"`
-	Message json.RawMessage `json:"message,omitempty"`
-
-	// result fields (type == "result")
-	Result *resultData `json:"result,omitempty"`
-
-	// For content_block_delta
-	Delta *deltaData `json:"delta,omitempty"`
-
-	// For system messages
+	Type    string `json:"type"`
 	Subtype string `json:"subtype,omitempty"`
+
+	// result event (flat, new format)
+	Result      string      `json:"result"`       // response text
+	IsError     bool        `json:"is_error"`
+	TotalCostUSD float64    `json:"total_cost_usd"`
+	DurationMs  int64       `json:"duration_ms"`
+	NumTurns    int         `json:"num_turns"`
+	SessionID   string      `json:"session_id"`
+	Usage       *resultUsage `json:"usage,omitempty"`
+
+	// assistant event — carries the model name
+	Message *assistantMessage `json:"message,omitempty"`
 }
 
-type resultData struct {
-	Type         string        `json:"type"`
-	Role         string        `json:"role"`
-	Content      []contentItem `json:"content"`
-	StopReason   string        `json:"stop_reason"`
-	Usage        *resultUsage  `json:"usage,omitempty"`
-	Model        string        `json:"model"`
-	CostUSD      float64       `json:"cost_usd"`
-	DurationMs   int64         `json:"duration_ms"`
-	IsError      bool          `json:"is_error"`
-	SessionID    string        `json:"session_id"`
-	NumTurns     int           `json:"num_turns"`
-}
-
-type contentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type deltaData struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+type assistantMessage struct {
+	Model string `json:"model"`
 }
 
 type resultUsage struct {
@@ -131,11 +115,12 @@ func (c *Client) ChatCompletion(model string, prompt string, systemPrompt string
 		} else {
 			args = append(args, "--resume")
 		}
-		args = append(args, "-p", prompt, "--output-format", "stream-json")
+		args = append(args, "-p", prompt, "--output-format", "stream-json", "--verbose")
 	} else {
 		args = []string{
 			"-p", prompt,
 			"--output-format", "stream-json",
+			"--verbose",
 		}
 	}
 
@@ -227,30 +212,22 @@ func parseStreamJSON(data []byte, debug bool) (*ChatResponse, error) {
 
 		switch event.Type {
 		case "result":
-			if event.Result != nil {
-				// Extract text from content blocks.
-				var texts []string
-				for _, c := range event.Result.Content {
-					if c.Type == "text" && c.Text != "" {
-						texts = append(texts, c.Text)
-					}
-				}
-				resp.Response = strings.Join(texts, "\n")
-				resp.Model = event.Result.Model
-				resp.CostUSD = event.Result.CostUSD
-				resp.DurationMs = event.Result.DurationMs
-				resp.NumTurns = event.Result.NumTurns
-				resp.SessionID = event.Result.SessionID
-
-				if event.Result.Usage != nil {
-					resp.InputTokens = event.Result.Usage.InputTokens
-					resp.OutputTokens = event.Result.Usage.OutputTokens
-					resp.CachedTokens = event.Result.Usage.CacheRead
-				}
-
-				if event.Result.IsError {
-					return nil, fmt.Errorf("claude CLI returned error: %s", resp.Response)
-				}
+			if event.IsError {
+				return nil, fmt.Errorf("claude CLI returned error: %s", event.Result)
+			}
+			resp.Response = event.Result
+			resp.CostUSD = event.TotalCostUSD
+			resp.DurationMs = event.DurationMs
+			resp.NumTurns = event.NumTurns
+			resp.SessionID = event.SessionID
+			if event.Usage != nil {
+				resp.InputTokens = event.Usage.InputTokens
+				resp.OutputTokens = event.Usage.OutputTokens
+				resp.CachedTokens = event.Usage.CacheRead
+			}
+		case "assistant":
+			if event.Message != nil && event.Message.Model != "" {
+				resp.Model = event.Message.Model
 			}
 		default:
 			if debug {
