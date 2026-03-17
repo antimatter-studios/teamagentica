@@ -337,10 +337,15 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 		return
 	}
 
+	plugin, err := h.bootstrapPlugin(entry)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	var allInstalled []models.Plugin
 	visited := map[string]bool{}
-	plugin, err := h.installPlugin(provider, entry, visited, &allInstalled)
-	if err != nil {
+	if err := h.syncPlugin(provider, plugin, visited, &allInstalled); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -360,22 +365,9 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	})
 }
 
-// installPlugin installs a plugin and its dependencies. Already-installed
-// plugins are skipped (use UpgradePlugin to update an installed plugin).
-// The visited map prevents infinite dependency loops.
-func (h *MarketplaceHandler) installPlugin(provider models.Provider, entry *CatalogEntry, visited map[string]bool, allInstalled *[]models.Plugin) (*models.Plugin, error) {
-	if visited[entry.PluginID] {
-		return nil, nil
-	}
-	visited[entry.PluginID] = true
-
-	// If already installed (e.g. as a dependency), skip — use upgrade to update.
-	var existing models.Plugin
-	if h.db.First(&existing, "id = ?", entry.PluginID).Error == nil {
-		return &existing, nil
-	}
-
-	// Create plugin record.
+// bootstrapPlugin creates a new plugin DB record and service token.
+// Called only for first-time installs, before syncPlugin.
+func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugin, error) {
 	plugin := models.Plugin{
 		ID:      entry.PluginID,
 		Name:    entry.Name,
@@ -386,7 +378,6 @@ func (h *MarketplaceHandler) installPlugin(provider models.Provider, entry *Cata
 		return nil, fmt.Errorf("failed to create plugin %s: %w", plugin.ID, err)
 	}
 
-	// Generate service token (10 years).
 	expiry := 10 * 365 * 24 * time.Hour
 	token, err := auth.GenerateServiceToken(entry.PluginID, []string{"plugins:search"}, expiry)
 	if err != nil {
@@ -407,66 +398,52 @@ func (h *MarketplaceHandler) installPlugin(provider models.Provider, entry *Cata
 	}
 	h.db.Model(&plugin).Update("service_token", token)
 
-	// Fetch manifest to get capabilities and dependencies.
-	manifest, err := fetchPluginManifest(provider.URL, entry.PluginID)
+	return &plugin, nil
+}
+
+// syncPlugin fetches the latest manifest from the provider and applies it to
+// the plugin record. Dependencies are resolved recursively — new deps that
+// aren't installed yet get bootstrapped first.
+func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models.Plugin, visited map[string]bool, allInstalled *[]models.Plugin) error {
+	if visited[plugin.ID] {
+		return nil
+	}
+	visited[plugin.ID] = true
+
+	manifest, err := fetchPluginManifest(provider.URL, plugin.ID)
 	if err != nil {
-		log.Printf("marketplace: could not fetch manifest for %s: %v (deps won't be resolved)", entry.PluginID, err)
+		return fmt.Errorf("could not fetch manifest for %s: %w", plugin.ID, err)
+	}
+	if err := applyManifest(plugin, manifest, h.db); err != nil {
+		return err
 	}
 
-	if manifest != nil {
-		updates := map[string]interface{}{}
-		if deps, ok := manifest["dependencies"].([]interface{}); ok && len(deps) > 0 {
-			var depStrings []string
-			for _, d := range deps {
-				if s, ok := d.(string); ok {
-					depStrings = append(depStrings, s)
-				}
-			}
-			plugin.SetDependencies(depStrings)
-			updates["dependencies"] = plugin.Dependencies
-		}
-		if caps, ok := manifest["capabilities"].([]interface{}); ok && len(caps) > 0 {
-			var capStrings []string
-			for _, c := range caps {
-				if s, ok := c.(string); ok {
-					capStrings = append(capStrings, s)
-				}
-			}
-			plugin.SetCapabilities(capStrings)
-			updates["capabilities"] = plugin.Capabilities
-		}
-		if cs, ok := manifest["config_schema"]; ok && cs != nil {
-			if b, err := json.Marshal(cs); err == nil {
-				plugin.ConfigSchema = models.JSONRawString(b)
-				updates["config_schema"] = plugin.ConfigSchema
-			}
-		}
-		if len(updates) > 0 {
-			h.db.Model(&plugin).Updates(updates)
-		}
-	}
+	*allInstalled = append(*allInstalled, *plugin)
 
-	*allInstalled = append(*allInstalled, plugin)
-
-	h.Events.Emit(events.DebugEvent{
-		Type:     "install",
-		PluginID: entry.PluginID,
-		Detail:   fmt.Sprintf("installed from %s (image=%s, version=%s)", provider.Name, entry.Image, entry.Version),
-	})
-
-	// Recursively install dependencies.
+	// Recursively ensure dependencies exist and are synced.
 	for _, cap := range plugin.GetDependencies() {
 		depEntry := h.findProviderPluginByCapability(provider, cap)
 		if depEntry == nil {
 			log.Printf("marketplace: no provider plugin found for capability %q", cap)
 			continue
 		}
-		if _, err := h.installPlugin(provider, depEntry, visited, allInstalled); err != nil {
-			log.Printf("marketplace: failed to install dependency %s: %v", depEntry.PluginID, err)
+
+		var dep models.Plugin
+		if h.db.First(&dep, "id = ?", depEntry.PluginID).Error != nil {
+			bootstrapped, err := h.bootstrapPlugin(depEntry)
+			if err != nil {
+				log.Printf("marketplace: failed to bootstrap dependency %s: %v", depEntry.PluginID, err)
+				continue
+			}
+			dep = *bootstrapped
+		}
+
+		if err := h.syncPlugin(provider, &dep, visited, allInstalled); err != nil {
+			log.Printf("marketplace: failed to sync dependency %s: %v", depEntry.PluginID, err)
 		}
 	}
 
-	return &plugin, nil
+	return nil
 }
 
 // fetchPluginManifest fetches the full plugin.yaml manifest from a provider.
@@ -496,8 +473,8 @@ func fetchPluginManifest(providerURL, pluginID string) (map[string]interface{}, 
 }
 
 // UpgradePlugin handles POST /api/marketplace/upgrade.
-// Updates an already-installed plugin's metadata (version, image, capabilities, dependencies)
-// from the provider catalog manifest. Fails if the plugin is NOT already installed.
+// Updates an already-installed plugin's metadata from the provider manifest.
+// Uses the same ensurePlugin path as install — existing plugins get updated in place.
 func (h *MarketplaceHandler) UpgradePlugin(c *gin.Context) {
 	var req installRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -524,8 +501,9 @@ func (h *MarketplaceHandler) UpgradePlugin(c *gin.Context) {
 		}
 	}
 
-	plugin, err := h.upgradePlugin(provider, req.PluginID, &existing)
-	if err != nil {
+	var allInstalled []models.Plugin
+	visited := map[string]bool{}
+	if err := h.syncPlugin(provider, &existing, visited, &allInstalled); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -534,21 +512,16 @@ func (h *MarketplaceHandler) UpgradePlugin(c *gin.Context) {
 		userID, _ := c.Get("user_id")
 		uid, _ := userID.(uint)
 		al.LogUserAction(uid, "marketplace.upgrade", "plugin:"+req.PluginID,
-			fmt.Sprintf(`{"provider":%q,"version":%q}`, provider.Name, plugin.Version),
+			fmt.Sprintf(`{"provider":%q,"version":%q}`, provider.Name, existing.Version),
 			c.ClientIP(), true)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "plugin upgraded", "plugin": plugin})
+	c.JSON(http.StatusOK, gin.H{"message": "plugin upgraded", "plugin": existing})
 }
 
-// upgradePlugin fetches the latest manifest from the provider and updates
-// version, image, capabilities, and dependencies in the database.
-func (h *MarketplaceHandler) upgradePlugin(provider models.Provider, pluginID string, plugin *models.Plugin) (*models.Plugin, error) {
-	manifest, err := fetchPluginManifest(provider.URL, pluginID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch manifest for %s: %w", pluginID, err)
-	}
-
+// applyManifest applies manifest fields (version, image, capabilities, dependencies,
+// config_schema) to a plugin model and persists any changes to the database.
+func applyManifest(plugin *models.Plugin, manifest map[string]interface{}, db *gorm.DB) error {
 	updates := map[string]interface{}{}
 
 	if v, ok := manifest["version"].(string); ok && v != "" {
@@ -579,15 +552,19 @@ func (h *MarketplaceHandler) upgradePlugin(provider models.Provider, pluginID st
 		plugin.SetDependencies(depStrings)
 		updates["dependencies"] = plugin.Dependencies
 	}
-
-	if len(updates) > 0 {
-		if err := h.db.Model(plugin).Updates(updates).Error; err != nil {
-			return nil, fmt.Errorf("failed to update %s: %w", pluginID, err)
+	if cs, ok := manifest["config_schema"]; ok && cs != nil {
+		if b, err := json.Marshal(cs); err == nil {
+			plugin.ConfigSchema = models.JSONRawString(b)
+			updates["config_schema"] = plugin.ConfigSchema
 		}
 	}
 
-	log.Printf("marketplace: upgraded %s (version=%s, caps=%v, deps=%v)", pluginID, plugin.Version, plugin.GetCapabilities(), plugin.GetDependencies())
-	return plugin, nil
+	if len(updates) > 0 {
+		if err := db.Model(plugin).Updates(updates).Error; err != nil {
+			return fmt.Errorf("failed to apply manifest for %s: %w", plugin.ID, err)
+		}
+	}
+	return nil
 }
 
 // findProviderPluginByCapability searches the provider catalog for a plugin
