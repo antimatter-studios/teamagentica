@@ -497,6 +497,66 @@ func (h *PluginHandler) GetPluginLogs(c *gin.Context) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(logs))
 }
 
+// GetKernelLogs handles GET /api/kernel/logs.
+// Returns the kernel container's own logs.
+func (h *PluginHandler) GetKernelLogs(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
+		return
+	}
+
+	selfID := h.runtime.SelfContainerID()
+	if selfID == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "kernel container ID not discovered"})
+		return
+	}
+
+	tail := 100
+	if t := c.Query("tail"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil && v > 0 {
+			tail = v
+		}
+	}
+
+	logs, err := h.runtime.ContainerLogs(c.Request.Context(), selfID, tail)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get kernel logs: " + err.Error()})
+		return
+	}
+
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(logs))
+}
+
+// GetUILogs handles GET /api/ui/logs.
+// Returns logs from the user-interface container.
+func (h *PluginHandler) GetUILogs(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
+		return
+	}
+
+	tail := 100
+	if t := c.Query("tail"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil && v > 0 {
+			tail = v
+		}
+	}
+
+	cid, err := h.runtime.UIContainerID(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "UI container not found: " + err.Error()})
+		return
+	}
+
+	logs, err := h.runtime.ContainerLogs(c.Request.Context(), cid, tail)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get UI logs: " + err.Error()})
+		return
+	}
+
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(logs))
+}
+
 // GetSelfConfig handles GET /api/plugins/:id/self-config — called by plugins
 // via the SDK to fetch their own configuration. Returns unmasked values
 // (including secrets) since this is authenticated with the plugin's service token.
@@ -701,65 +761,36 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		h.syncPluginAliases(id, entry.Value)
 	}
 
-	// Soft update: emit config:update event instead of restarting the container.
-	if c.Query("soft") == "true" {
-		if plugin.Status == "running" && plugin.Host != "" {
-			var keys []string
-			for k := range req.Config {
-				keys = append(keys, k)
-			}
-			keysJSON, _ := json.Marshal(keys)
-
-			// Build the new config values for the event detail.
-			configValues := make(map[string]string, len(req.Config))
-			for k, v := range req.Config {
-				if v.IsSecret {
-					configValues[k] = "********"
-				} else {
-					configValues[k] = v.Value
-				}
-			}
-
-			detail, _ := json.Marshal(map[string]interface{}{
-				"keys":   keys,
-				"config": configValues,
-			})
-
-			h.Events.Emit(events.DebugEvent{
-				Type:     "config:update",
-				PluginID: id,
-				Detail:   fmt.Sprintf("soft update keys=%s", keysJSON),
-			})
-
-			// Emit addressed event to the plugin.
-			h.handleAddressedEvent("kernel", "config:update", string(detail), id, time.Now())
+	// Emit config:update event to the running plugin.
+	if plugin.Status == "running" && plugin.Host != "" {
+		var keys []string
+		for k := range req.Config {
+			keys = append(keys, k)
 		}
-	} else {
-		// Hard restart: stop and re-start the container with updated config.
-		// Skip for metadata-only plugins (no container to restart).
-		if plugin.Enabled && !plugin.IsMetadataOnly() && plugin.ContainerID != "" && h.runtime != nil {
-			ctx := c.Request.Context()
-			_ = h.runtime.StopPlugin(ctx, plugin.ContainerID)
+		keysJSON, _ := json.Marshal(keys)
 
-			env := h.buildEnv(id)
-			env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-			env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
-
-			containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
-			if err != nil {
-				h.db.Model(&plugin).Updates(map[string]interface{}{
-					"container_id": "",
-					"status":       "error",
-				})
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "config updated but restart failed: " + err.Error()})
-				return
+		// Build the new config values for the event detail.
+		configValues := make(map[string]string, len(req.Config))
+		for k, v := range req.Config {
+			if v.IsSecret {
+				configValues[k] = "********"
+			} else {
+				configValues[k] = v.Value
 			}
-
-			h.db.Model(&plugin).Updates(map[string]interface{}{
-				"container_id": containerID,
-				"status":       "running",
-			})
 		}
+
+		detail, _ := json.Marshal(map[string]interface{}{
+			"keys":   keys,
+			"config": configValues,
+		})
+
+		h.Events.Emit(events.DebugEvent{
+			Type:     "config:update",
+			PluginID: id,
+			Detail:   fmt.Sprintf("config update keys=%s", keysJSON),
+		})
+
+		h.handleAddressedEvent("kernel", "config:update", string(detail), id, time.Now())
 	}
 
 	if al := getAudit(c); al != nil {

@@ -273,6 +273,14 @@ func main() {
 		webhookGroup.Any("/:plugin_id/*path", pluginHandler.WebhookIngress)
 	}
 
+	// Kernel self-inspection routes (admin only).
+	kernelGroup := r.Group("/api/kernel")
+	kernelGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		kernelGroup.GET("/logs", pluginHandler.GetKernelLogs)
+		kernelGroup.GET("/ui/logs", pluginHandler.GetUILogs)
+	}
+
 	// Debug console SSE (admin only).
 	debugGroup := r.Group("/api/debug")
 	debugGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
