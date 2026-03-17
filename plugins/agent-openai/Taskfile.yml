@@ -3,50 +3,26 @@ version: '3'
 vars:
   BINARY_NAME: agent-openai
   BUILD_DIR: ./build
+  DEV_IMAGE: teamagentica-agent-openai:dev
 
 tasks:
   default:
     cmds:
       - task --list
 
-  dev:
-    desc: Run in dev mode with hot reload
-    env:
-      TEAMAGENTICA_KERNEL_HOST: localhost
-      TEAMAGENTICA_KERNEL_PORT: "8080"
-      TEAMAGENTICA_PLUGIN_TOKEN: '{{.TEAMAGENTICA_PLUGIN_TOKEN}}'
-      AGENT_OPENAI_PORT: "8081"
-    cmds:
-      - air
-
   build:
-    desc: Build production binary
+    desc: Build prod Docker image
     cmds:
-      - mkdir -p {{.BUILD_DIR}}
-      - CGO_ENABLED=0 go build -ldflags="-s -w" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
-    sources:
-      - "**/*.go"
-      - go.mod
-      - go.sum
-    generates:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod ../..
 
-  test:
-    desc: Run tests
-    cmds:
-      - go test ./... -v
-
-  clean:
-    desc: Clean build artifacts
-    cmds:
-      - rm -rf {{.BUILD_DIR}}
-
-  docker:dev:
+  build:dev:
     desc: Build dev Docker image
     cmds:
       - docker build -t teamagentica-{{.BINARY_NAME}}:dev -f Dockerfile --target dev ../..
 
-  docker:prod:
-    desc: Build prod Docker image
+  test:
+    desc: Run unit tests with coverage inside the dev Docker image
+    deps:
+      - build:dev
     cmds:
-      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod ../..
+      - docker run --rm -t --entrypoint go {{.DEV_IMAGE}} test -v ./... -cover
