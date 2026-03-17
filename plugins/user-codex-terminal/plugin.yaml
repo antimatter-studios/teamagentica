@@ -2,8 +2,9 @@ id: user-codex-terminal
 name: "Codex Terminal"
 description: "Web terminal with OpenAI Codex CLI — AI-powered coding assistant in the browser"
 group: user
-version: "1.0.1"
+version: "1.0.2"
 author: teamagentica
 image: teamagentica-user-codex-terminal:latest
-tags: [workspace:environment, terminal, codex, ai, openai]
+tags: [terminal, codex, ai, openai]
+capabilities: [workspace:environment]
 dependencies: ["workspace:manager"]

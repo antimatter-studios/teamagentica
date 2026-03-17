@@ -2,10 +2,10 @@ id: infra-workspace-manager
 name: "Workspace Manager"
 description: "Orchestrates workspace environments — discovers workspace plugins, manages container lifecycle, and creates isolated volumes"
 group: infrastructure
-version: "1.0.1"
+version: "1.0.2"
 image: "teamagentica-infra-workspace-manager:latest"
 author: teamagentica
-tags: [workspace:manager, infrastructure]
+tags: [infrastructure]
 capabilities: ["workspace:manager"]
 config_schema:
   PLUGIN_DEBUG:

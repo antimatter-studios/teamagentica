@@ -2,10 +2,10 @@ id: infra-agent-relay
 name: "Agent Relay"
 description: "Routes messages between messaging plugins and agent-bridge instances running in workspace containers"
 group: infrastructure
-version: "0.1.2"
+version: "0.1.3"
 image: "teamagentica-infra-agent-relay:latest"
 author: teamagentica
-tags: [infra:agent-relay, infrastructure]
+tags: [infrastructure]
 capabilities: ["infra:agent-relay"]
 config_schema:
   PLUGIN_DEBUG:
