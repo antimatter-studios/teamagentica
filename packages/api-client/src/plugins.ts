@@ -80,7 +80,8 @@ export function parseCapabilities(plugin: Plugin): string[] {
 }
 
 export class PluginsAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async list(): Promise<Plugin[]> {
     const res = await this.http.get<{ plugins: Plugin[] }>("/api/plugins");

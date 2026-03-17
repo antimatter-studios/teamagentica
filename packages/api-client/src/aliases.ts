@@ -8,7 +8,8 @@ export interface AliasInfo {
 }
 
 export class AliasesAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async list(): Promise<AliasInfo[]> {
     const res = await this.http.get<{ aliases: AliasInfo[] }>("/api/aliases");

@@ -33,7 +33,8 @@ export interface Volume {
 }
 
 export class WorkspacesAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async listEnvironments(): Promise<Environment[]> {
     const res = await this.http.get<{ environments: Environment[] }>(

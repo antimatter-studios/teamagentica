@@ -14,7 +14,8 @@ export interface AuthResponse {
 }
 
 export class AuthAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async login(email: string, password: string): Promise<AuthResponse> {
     const res = await this.http.post<AuthResponse>("/api/auth/login", {

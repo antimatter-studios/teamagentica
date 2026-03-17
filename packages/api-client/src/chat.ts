@@ -43,7 +43,8 @@ export interface Attachment {
 const ROUTE = "/api/route/messaging-chat";
 
 export class ChatAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async fetchAgents(): Promise<{ agents: Agent[]; has_coordinator: boolean }> {
     const resp = await this.http.get<{

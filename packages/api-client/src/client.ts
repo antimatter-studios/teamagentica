@@ -10,7 +10,8 @@ export interface ClientConfig {
 }
 
 export class HttpTransport {
-  constructor(private config: ClientConfig) {}
+  private config: ClientConfig;
+  constructor(config: ClientConfig) { this.config = config; }
 
   get baseUrl(): string {
     return this.config.baseUrl;

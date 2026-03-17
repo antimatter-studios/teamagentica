@@ -44,7 +44,8 @@ interface InstallResponse {
 }
 
 export class MarketplaceAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async browse(query?: string): Promise<BrowseResponse> {
     const q = query ? `?q=${encodeURIComponent(query)}` : "";

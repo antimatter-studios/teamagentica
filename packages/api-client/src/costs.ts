@@ -78,7 +78,8 @@ export interface ExternalUserMapping {
 }
 
 export class CostsAPI {
-  constructor(private http: HttpTransport) {}
+  private http: HttpTransport;
+  constructor(http: HttpTransport) { this.http = http; }
 
   async fetchPricing(): Promise<ModelPrice[]> {
     return this.http.get<ModelPrice[]>("/api/pricing");

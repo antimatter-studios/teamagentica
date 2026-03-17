@@ -1,5 +1,6 @@
 export class EventsAPI {
-  constructor(private baseUrl: string) {}
+  private baseUrl: string;
+  constructor(baseUrl: string) { this.baseUrl = baseUrl; }
 
   streamUrl(): string {
     return `${this.baseUrl}/api/debug/events`;

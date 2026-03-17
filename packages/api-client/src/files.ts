@@ -16,10 +16,12 @@ export interface BrowseResult {
 }
 
 export class FilesAPI {
-  constructor(
-    private http: HttpTransport,
-    private searchPlugins: (capability: string) => Promise<Plugin[]>
-  ) {}
+  private http: HttpTransport;
+  private searchPlugins: (capability: string) => Promise<Plugin[]>;
+  constructor(http: HttpTransport, searchPlugins: (capability: string) => Promise<Plugin[]>) {
+    this.http = http;
+    this.searchPlugins = searchPlugins;
+  }
 
   async fetchStorageProviders(): Promise<Plugin[]> {
     return this.searchPlugins("storage:");

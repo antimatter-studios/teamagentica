@@ -8,6 +8,7 @@ import { WorkspacesAPI } from "./workspaces.js";
 import { MarketplaceAPI } from "./marketplace.js";
 import { ChatAPI } from "./chat.js";
 import { FilesAPI } from "./files.js";
+import { TasksAPI } from "./tasks.js";
 
 export class TeamAgenticaClient {
   readonly http: HttpTransport;
@@ -20,6 +21,7 @@ export class TeamAgenticaClient {
   readonly marketplace: MarketplaceAPI;
   readonly chat: ChatAPI;
   readonly files: FilesAPI;
+  readonly tasks: TasksAPI;
 
   constructor(config: ClientConfig) {
     this.http = new HttpTransport(config);
@@ -32,6 +34,7 @@ export class TeamAgenticaClient {
     this.marketplace = new MarketplaceAPI(this.http);
     this.chat = new ChatAPI(this.http);
     this.files = new FilesAPI(this.http, (cap) => this.plugins.search(cap));
+    this.tasks = new TasksAPI(this.http);
   }
 
   get baseUrl(): string {
@@ -91,3 +94,6 @@ export { ChatAPI } from "./chat.js";
 
 export type { StorageFile, BrowseResult } from "./files.js";
 export { FilesAPI, formatBytes, filenameFromKey, folderName } from "./files.js";
+
+export type { Board, Column, Card } from "./tasks.js";
+export { TasksAPI } from "./tasks.js";
