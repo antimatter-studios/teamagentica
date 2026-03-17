@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/antimatter-studios/teamagentica/tacli/internal/client"
 )
@@ -30,6 +30,8 @@ type healthMsg struct {
 }
 
 // pluginsMsg is handled by tabs via the default fan-out branch.
+// When err contains "invalid or expired token" or "missing authorization",
+// the console surfaces this as an auth error in the header.
 type pluginsMsg struct {
 	plugins []client.PluginSummary
 	err     error
@@ -49,6 +51,7 @@ type Model struct {
 	activeTab int
 	health    *client.HealthResponse
 	connErr   error
+	authErr   string // non-empty when API returns auth errors
 	now       time.Time
 	width     int
 	height    int
@@ -79,7 +82,6 @@ func New(c *client.Client) Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.SetWindowTitle("tacli console"),
 		doFetchHealth(m.c),
 		doFetchPlugins(m.c),
 		scheduleRefresh(),
@@ -96,9 +98,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.mktTab.setSize(msg.Width, m.contentHeight())
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
+		// ctrl+c always quits, even when a tab is capturing input
+		if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))) {
+			m.quit = true
+			return m, tea.Quit
+		}
+
+		// If the active tab is capturing input, send all keys to it directly
+		if m.activeTab == tabMarket && m.mktTab.InputActive() {
+			var cmd tea.Cmd
+			m.mktTab, cmd = m.mktTab.update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+		if m.activeTab == tabPlugins && m.plugTab.InputActive() {
+			var cmd tea.Cmd
+			m.plugTab, cmd = m.plugTab.update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("q", "ctrl+c"))):
 			m.quit = true
@@ -135,6 +162,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case tea.PasteMsg:
+		var cmd tea.Cmd
+		switch m.activeTab {
+		case tabPlugins:
+			m.plugTab, cmd = m.plugTab.update(msg)
+		case tabMarket:
+			m.mktTab, cmd = m.mktTab.update(msg)
+		}
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
 	case healthMsg:
 		m.health = msg.health
 		m.connErr = msg.err
@@ -152,6 +191,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sseEventMsg:
 		m.evtTab = m.evtTab.addEvent(client.SSEEvent(msg))
 		cmds = append(cmds, waitForSSEEvent(m.evtCh))
+
+	case pluginsMsg:
+		// detect auth errors and surface them in the header
+		if msg.err != nil {
+			errStr := msg.err.Error()
+			if strings.Contains(errStr, "token") || strings.Contains(errStr, "authorization") || strings.Contains(errStr, "401") {
+				m.authErr = "session expired — run: tacli connect"
+			}
+		} else {
+			m.authErr = ""
+		}
+		// fan out to all tabs
+		var cmd tea.Cmd
+		m.plugTab, cmd = m.plugTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.logTab, cmd = m.logTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.mktTab, cmd = m.mktTab.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	default:
 		// all other messages fan out to all tabs (async responses)
@@ -178,23 +242,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
+	v := tea.View{WindowTitle: "tacli console", AltScreen: true}
 	if m.quit {
-		return ""
+		return v
 	}
 	if m.width == 0 {
-		return "loading…"
+		v.SetContent("loading…")
+		return v
 	}
 	if m.width < 60 || m.height < 12 {
-		return "terminal too small (need ≥60×12)"
+		v.SetContent("terminal too small (need ≥60×12)")
+		return v
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	v.SetContent(lipgloss.JoinVertical(lipgloss.Left,
 		m.renderHeader(),
 		m.renderTabBar(),
 		m.renderContent(),
 		m.renderFooter(),
-	)
+	))
+	return v
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────
@@ -212,6 +280,8 @@ func (m Model) renderHeader() string {
 	var connLabel string
 	if m.connErr != nil {
 		connLabel = sErr.Render("✗ disconnected") + "  " + sMuted.Render(m.c.BaseURL)
+	} else if m.authErr != "" {
+		connLabel = sErr.Render("✗ " + m.authErr)
 	} else if m.health != nil {
 		connLabel = sOK.Render("● connected") + "  " + sMuted.Render(m.c.BaseURL)
 	} else {
@@ -256,6 +326,12 @@ func (m Model) renderTabBar() string {
 func (m Model) renderContent() string {
 	h := m.contentHeight()
 	w := m.width
+
+	// full-screen auth error overlay
+	if m.authErr != "" {
+		return m.renderAuthError(w, h)
+	}
+
 	switch m.activeTab {
 	case tabPlugins:
 		return m.plugTab.view(w, h)
@@ -267,6 +343,51 @@ func (m Model) renderContent() string {
 		return m.mktTab.view(w, h)
 	}
 	return ""
+}
+
+func (m Model) renderAuthError(w, h int) string {
+	innerW := w - 2
+	innerH := h - 2
+
+	lines := make([]string, 0, innerH)
+
+	// center vertically
+	topPad := innerH/2 - 3
+	if topPad < 1 {
+		topPad = 1
+	}
+	for i := 0; i < topPad; i++ {
+		lines = append(lines, "")
+	}
+
+	// warning block
+	msg1 := "SESSION EXPIRED"
+	msg2 := "Your authentication token is invalid or expired."
+	msg3 := "Run the following command to reconnect:"
+	msg4 := "tacli connect " + m.c.BaseURL
+	msg5 := "(press q to quit)"
+
+	center := func(s string) string {
+		vw := lipgloss.Width(s)
+		pad := (innerW - vw) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		return strings.Repeat(" ", pad) + s
+	}
+
+	lines = append(lines, center(sErr.Render(msg1)))
+	lines = append(lines, "")
+	lines = append(lines, center(msg2))
+	lines = append(lines, "")
+	lines = append(lines, center(msg3))
+	lines = append(lines, "")
+	lines = append(lines, center(sBold.Render(msg4)))
+	lines = append(lines, "")
+	lines = append(lines, center(sMuted.Render(msg5)))
+
+	content := buildContent(lines, innerH, innerW)
+	return renderBox(content, innerW, true)
 }
 
 func (m Model) renderFooter() string {

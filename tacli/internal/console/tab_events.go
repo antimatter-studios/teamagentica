@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/antimatter-studios/teamagentica/tacli/internal/client"
 )
@@ -57,7 +57,7 @@ func (t eventsTab) addEvent(e client.SSEEvent) eventsTab {
 
 func (t eventsTab) update(msg tea.Msg) (eventsTab, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "g":
 			t.autoScroll = true
