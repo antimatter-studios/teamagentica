@@ -334,6 +334,39 @@ func (h *Handler) GetTools(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"tools": []gin.H{
 			{
+				"name":        "list_boards",
+				"description": "List all kanban boards with their columns",
+				"endpoint":    "/mcp/list_boards",
+				"parameters": gin.H{
+					"type":       "object",
+					"properties": gin.H{},
+				},
+			},
+			{
+				"name":        "list_tasks",
+				"description": "List all tasks on a board, grouped by status (column)",
+				"endpoint":    "/mcp/list_tasks",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"board_id": gin.H{"type": "string", "description": "ID of the board"},
+					},
+					"required": []string{"board_id"},
+				},
+			},
+			{
+				"name":        "list_tasks_by_status",
+				"description": "List tasks in a specific status (column)",
+				"endpoint":    "/mcp/list_tasks_by_status",
+				"parameters": gin.H{
+					"type": "object",
+					"properties": gin.H{
+						"column_id": gin.H{"type": "string", "description": "ID of the status column"},
+					},
+					"required": []string{"column_id"},
+				},
+			},
+			{
 				"name":        "create_task",
 				"description": "Create a new task (card) in a kanban board column",
 				"endpoint":    "/mcp/create_task",
@@ -397,6 +430,96 @@ func (h *Handler) GetTools(c *gin.Context) {
 				},
 			},
 		},
+	})
+}
+
+func (h *Handler) MCPListBoards(c *gin.Context) {
+	boards, err := h.db.ListBoards()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	type boardWithColumns struct {
+		storage.Board
+		Columns []storage.Column `json:"columns"`
+	}
+	result := make([]boardWithColumns, 0, len(boards))
+	for _, b := range boards {
+		cols, err := h.db.ListColumns(b.ID)
+		if err != nil {
+			cols = []storage.Column{}
+		}
+		result = append(result, boardWithColumns{Board: b, Columns: cols})
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *Handler) MCPListTasks(c *gin.Context) {
+	var req struct {
+		BoardID string `json:"board_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cols, err := h.db.ListColumns(req.BoardID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	cards, err := h.db.ListCards(req.BoardID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// Index cards by column.
+	byColumn := make(map[string][]storage.Card)
+	for _, card := range cards {
+		byColumn[card.ColumnID] = append(byColumn[card.ColumnID], card)
+	}
+	type statusGroup struct {
+		StatusID   string         `json:"status_id"`
+		StatusName string         `json:"status_name"`
+		Tasks      []storage.Card `json:"tasks"`
+	}
+	groups := make([]statusGroup, 0, len(cols))
+	for _, col := range cols {
+		tasks := byColumn[col.ID]
+		if tasks == nil {
+			tasks = []storage.Card{}
+		}
+		groups = append(groups, statusGroup{
+			StatusID:   col.ID,
+			StatusName: col.Name,
+			Tasks:      tasks,
+		})
+	}
+	c.JSON(http.StatusOK, groups)
+}
+
+func (h *Handler) MCPListTasksByStatus(c *gin.Context) {
+	var req struct {
+		ColumnID string `json:"column_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	col, err := h.db.GetColumn(req.ColumnID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "status not found"})
+		return
+	}
+	var cards []storage.Card
+	cards, err = h.db.ListCardsByColumn(req.ColumnID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status_id":   col.ID,
+		"status_name": col.Name,
+		"tasks":       cards,
 	})
 }
 

@@ -79,6 +79,9 @@ func main() {
 
 	// MCP tool discovery + execution
 	router.GET("/tools", h.GetTools)
+	router.POST("/mcp/list_boards", h.MCPListBoards)
+	router.POST("/mcp/list_tasks", h.MCPListTasks)
+	router.POST("/mcp/list_tasks_by_status", h.MCPListTasksByStatus)
 	router.POST("/mcp/create_task", h.MCPCreateTask)
 	router.POST("/mcp/set_task_state", h.MCPSetTaskState)
 	router.POST("/mcp/update_task", h.MCPUpdateTask)

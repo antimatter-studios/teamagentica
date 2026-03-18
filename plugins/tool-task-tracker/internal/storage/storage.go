@@ -126,6 +126,11 @@ func (d *DB) ListCards(boardID string) ([]Card, error) {
 	return cards, d.db.Where("board_id = ?", boardID).Order("column_id asc, position asc").Find(&cards).Error
 }
 
+func (d *DB) ListCardsByColumn(columnID string) ([]Card, error) {
+	var cards []Card
+	return cards, d.db.Where("column_id = ?", columnID).Order("position asc").Find(&cards).Error
+}
+
 func (d *DB) CreateCard(c *Card) error {
 	return d.db.Create(c).Error
 }
