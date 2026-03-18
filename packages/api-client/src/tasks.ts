@@ -34,6 +34,14 @@ export interface Card {
   updated_at: number;
 }
 
+export interface Comment {
+  id: string;
+  card_id: string;
+  author: string;
+  body: string;
+  created_at: number;
+}
+
 export class TasksAPI {
   private http: HttpTransport;
   constructor(http: HttpTransport) { this.http = http; }
@@ -110,5 +118,10 @@ export class TasksAPI {
 
   async deleteCard(boardId: string, cardId: string): Promise<void> {
     return this.http.delete(`${ROUTE}/boards/${boardId}/cards/${cardId}`);
+  }
+
+  // Comments
+  async listComments(cardId: string): Promise<Comment[]> {
+    return this.http.get<Comment[]>(`${ROUTE}/cards/${cardId}/comments`);
   }
 }
