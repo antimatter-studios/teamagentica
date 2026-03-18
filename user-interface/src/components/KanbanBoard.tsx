@@ -17,7 +17,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { apiClient } from "../api/client";
-import type { Board, Column, Card } from "@teamagentica/api-client";
+import type { Board, Column, Card, Comment } from "@teamagentica/api-client";
 
 // ── Position helpers ──────────────────────────────────────────────────────────
 
@@ -207,6 +207,11 @@ const KanbanColumn = memo(function KanbanColumn({
 
 // ── Side panel ────────────────────────────────────────────────────────────────
 
+function formatCommentTime(ms: number): string {
+  const d = new Date(ms);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function SidePanel({
   panel,
   onClose,
@@ -224,6 +229,17 @@ function SidePanel({
   const [assignee, setAssignee] = useState("");
   const [labels, setLabels] = useState("");
   const [dueDate, setDueDate] = useState("");  // "YYYY-MM-DD" or ""
+  const [comments, setComments] = useState<Comment[]>([]);
+
+  useEffect(() => {
+    if (panel.type === "edit-card") {
+      apiClient.tasks.listComments(panel.card.id)
+        .then(setComments)
+        .catch(() => setComments([]));
+    } else {
+      setComments([]);
+    }
+  }, [panel]);
 
   useEffect(() => {
     if (panel.type === "edit-card") {
@@ -337,6 +353,28 @@ function SidePanel({
             />
           </div>
         </>)}
+
+        {/* Comments — only shown when editing an existing card */}
+        {panel.type === "edit-card" && (
+          <div className="kn-comments">
+            <div className="kn-comments-heading">Comments</div>
+            {comments.length === 0 ? (
+              <div className="kn-comments-empty">No comments yet.</div>
+            ) : (
+              <div className="kn-comments-list">
+                {comments.map((c) => (
+                  <div key={c.id} className="kn-comment">
+                    <div className="kn-comment-meta">
+                      <span className="kn-comment-author">{c.author || "agent"}</span>
+                      <span className="kn-comment-time">{formatCommentTime(c.created_at)}</span>
+                    </div>
+                    <div className="kn-comment-body">{c.body}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="kn-panel-footer">
           {panel.type === "edit-card" && onDelete && (
