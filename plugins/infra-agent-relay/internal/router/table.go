@@ -26,10 +26,11 @@ type routeKey struct {
 
 // Table is the relay's routing table. Thread-safe.
 type Table struct {
-	mu           sync.RWMutex
-	coordinators map[string]*CoordinatorRoute  // source_plugin → coordinator
-	workspaces   map[routeKey]*WorkspaceRoute  // {source, channel} → workspace
-	aliases      *alias.AliasMap
+	mu                 sync.RWMutex
+	coordinators       map[string]*CoordinatorRoute // source_plugin → coordinator
+	defaultCoordinator *CoordinatorRoute            // fallback when no per-plugin mapping
+	workspaces         map[routeKey]*WorkspaceRoute // {source, channel} → workspace
+	aliases            *alias.AliasMap
 }
 
 // NewTable creates an empty routing table.
@@ -52,6 +53,20 @@ func (t *Table) GetCoordinator(sourcePlugin string) *CoordinatorRoute {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.coordinators[sourcePlugin]
+}
+
+// SetDefaultCoordinator sets the fallback coordinator used when no per-plugin mapping exists.
+func (t *Table) SetDefaultCoordinator(pluginID, model string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.defaultCoordinator = &CoordinatorRoute{PluginID: pluginID, Model: model}
+}
+
+// GetDefaultCoordinator returns the fallback coordinator, or nil.
+func (t *Table) GetDefaultCoordinator() *CoordinatorRoute {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.defaultCoordinator
 }
 
 // MapWorkspace maps a {source, channel} to a workspace bridge.

@@ -23,10 +23,11 @@ import (
 // Messaging plugins send messages here; the relay routes to the correct
 // destination: an LLM agent plugin (via kernel) or a workspace bridge (via TCP).
 type relay struct {
-	mu     sync.RWMutex
-	conns  map[string]*bridge.Client // workspaceID → TCP connection
-	routes *router.Table
-	sdk    *pluginsdk.Client
+	mu                  sync.RWMutex
+	conns               map[string]*bridge.Client // workspaceID → TCP connection
+	routes              *router.Table
+	sdk                 *pluginsdk.Client
+	allowFirstAsDefault bool // true when DEFAULT_COORDINATOR is unset at startup
 }
 
 func newRelay(sdk *pluginsdk.Client) *relay {
@@ -90,8 +91,11 @@ func (r *relay) handleChat(c *gin.Context) {
 		}
 	}
 
-	// 3. Route to coordinator agent for this source plugin.
+	// 3. Route to coordinator agent for this source plugin, falling back to default.
 	coordinator := r.routes.GetCoordinator(req.SourcePlugin)
+	if coordinator == nil {
+		coordinator = r.routes.GetDefaultCoordinator()
+	}
 	if coordinator == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no coordinator configured for " + req.SourcePlugin})
 		return
@@ -365,6 +369,37 @@ func (r *relay) handleStatus(c *gin.Context) {
 	})
 }
 
+// coordinatorMapSchema returns a snapshot of current coordinator assignments for display.
+func (r *relay) coordinatorMapSchema() map[string]string {
+	coordinators := r.routes.ListCoordinators()
+	defaultCoord := r.routes.GetDefaultCoordinator()
+	aliases := r.routes.Aliases()
+
+	coordMap := make(map[string]string)
+	for sourcePlugin, coord := range coordinators {
+		name := coord.PluginID
+		if aliases != nil {
+			if a := aliases.FindAliasByPluginID(coord.PluginID); a != "" {
+				name = "@" + a
+			}
+		}
+		coordMap[sourcePlugin] = name
+	}
+	if defaultCoord != nil {
+		name := defaultCoord.PluginID
+		if aliases != nil {
+			if a := aliases.FindAliasByPluginID(defaultCoord.PluginID); a != "" {
+				name = "@" + a
+			}
+		}
+		coordMap["(default)"] = name
+	}
+	if len(coordMap) == 0 {
+		coordMap["(none)"] = "no coordinators assigned"
+	}
+	return coordMap
+}
+
 func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 	manifest := pluginsdk.LoadManifest()
@@ -376,15 +411,27 @@ func main() {
 		}
 	}
 
+	var relayRef *relay // set after construction
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         getHostname(),
 		Port:         port,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: manifest.ConfigSchema,
+		SchemaFunc: func() map[string]interface{} {
+			coordMap := map[string]string{"(none)": "no coordinators assigned"}
+			if relayRef != nil {
+				coordMap = relayRef.coordinatorMapSchema()
+			}
+			return map[string]interface{}{
+				"config":          manifest.ConfigSchema,
+				"coordinator_map": coordMap,
+			}
+		},
 	})
 	r := newRelay(sdkClient)
+	relayRef = r
 
 	// Subscribe to alias updates from kernel (before Start).
 	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
@@ -399,6 +446,43 @@ func main() {
 		log.Printf("Aliases updated: %d entries", len(detail.Aliases))
 	}))
 
+	// Subscribe to relay:coordinator events from messaging plugins.
+	// Addressed events queue in the kernel until we're ready, solving startup ordering.
+	sdkClient.OnEvent("relay:coordinator", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			SourcePlugin string `json:"source_plugin"`
+			Alias        string `json:"alias"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("relay:coordinator parse error: %v", err)
+			return
+		}
+		aliases := r.routes.Aliases()
+		if aliases == nil {
+			log.Printf("relay:coordinator: aliases not loaded yet, skipping %s → @%s", detail.SourcePlugin, detail.Alias)
+			return
+		}
+		target := aliases.Resolve(detail.Alias)
+		if target == nil || target.Type != alias.TargetAgent {
+			log.Printf("relay:coordinator: alias @%s not found or not an agent", detail.Alias)
+			return
+		}
+		r.routes.SetCoordinator(detail.SourcePlugin, target.PluginID, target.Model)
+		log.Printf("coordinator set via event: %s → @%s (%s)", detail.SourcePlugin, detail.Alias, target.PluginID)
+
+		r.mu.Lock()
+		setDefault := r.allowFirstAsDefault
+		if setDefault {
+			r.allowFirstAsDefault = false
+		}
+		r.mu.Unlock()
+
+		if setDefault {
+			r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
+			log.Printf("first coordinator also set as default: @%s (%s)", detail.Alias, target.PluginID)
+		}
+	}))
+
 	sdkClient.Start(context.Background())
 
 	// Fetch initial aliases.
@@ -409,6 +493,62 @@ func main() {
 		r.routes.SetAliases(alias.NewAliasMap(entries))
 		log.Printf("Loaded %d aliases", len(entries))
 	}
+
+	// Fetch plugin config and apply DEFAULT_COORDINATOR.
+	pluginConfig, err := sdkClient.FetchConfig()
+	if err != nil {
+		log.Printf("Failed to fetch relay config: %v (using defaults)", err)
+	}
+	if v := pluginConfig["DEFAULT_COORDINATOR"]; v != "" {
+		aliases := r.routes.Aliases()
+		if aliases != nil {
+			if target := aliases.Resolve(v); target != nil && target.Type == alias.TargetAgent {
+				r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
+				log.Printf("Default coordinator set from config: @%s (%s)", v, target.PluginID)
+			} else {
+				log.Printf("DEFAULT_COORDINATOR alias @%s not found, will use first registered coordinator", v)
+				r.mu.Lock()
+				r.allowFirstAsDefault = true
+				r.mu.Unlock()
+			}
+		}
+	} else {
+		log.Printf("DEFAULT_COORDINATOR not set — first relay:coordinator event will become the default")
+		r.mu.Lock()
+		r.allowFirstAsDefault = true
+		r.mu.Unlock()
+	}
+
+	// Subscribe to config updates for dynamic DEFAULT_COORDINATOR changes.
+	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Config map[string]string `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("config:update parse error: %v", err)
+			return
+		}
+		v, ok := detail.Config["DEFAULT_COORDINATOR"]
+		if !ok {
+			return
+		}
+		aliases := r.routes.Aliases()
+		if aliases == nil {
+			log.Printf("config:update DEFAULT_COORDINATOR: aliases not loaded yet")
+			return
+		}
+		if v == "" {
+			log.Printf("DEFAULT_COORDINATOR cleared")
+			return
+		}
+		target := aliases.Resolve(v)
+		if target == nil || target.Type != alias.TargetAgent {
+			log.Printf("config:update DEFAULT_COORDINATOR: alias @%s not found", v)
+			return
+		}
+		r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
+		log.Printf("Default coordinator updated: @%s (%s)", v, target.PluginID)
+	}))
 
 	ginRouter := gin.Default()
 
