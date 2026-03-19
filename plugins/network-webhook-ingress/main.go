@@ -25,9 +25,9 @@ type Route struct {
 }
 
 var (
-	routes   []Route
-	routesMu sync.RWMutex
-	baseURL  string // public base URL from tunnel provider
+	routes    []Route
+	routesMu  sync.RWMutex
+	baseURL   string // public base URL from tunnel provider
 	baseURLMu sync.RWMutex
 )
 
@@ -43,10 +43,6 @@ func main() {
 	const defaultPort = 9000
 	httpPort := defaultPort
 
-	configSchema := map[string]pluginsdk.ConfigSchemaField{
-		"WEBHOOK_INGRESS_PORT": {Type: "number", Label: "Listen Port", Default: "9000", HelpText: "Port the ingress listens on for external webhook traffic"},
-	}
-
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
@@ -54,42 +50,11 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		SchemaFunc: func() map[string]interface{} {
-			schema := map[string]interface{}{
-				"config": configSchema,
+			return map[string]interface{}{
+				"config":   getConfigSchema(),
+				"status":   getStatusSchema(),
+				"webhooks": getWebhooksSchema(),
 			}
-
-			baseURLMu.RLock()
-			url := baseURL
-			baseURLMu.RUnlock()
-
-			if url == "" {
-				url = "(waiting for tunnel)"
-			}
-
-			routesMu.RLock()
-			snapshot := make([]Route, len(routes))
-			copy(snapshot, routes)
-			routesMu.RUnlock()
-
-			status := map[string]string{
-				"Tunnel URL": url,
-				"Routes":     strconv.Itoa(len(snapshot)),
-			}
-			schema["status"] = status
-
-			if len(snapshot) > 0 {
-				webhooks := make(map[string]string, len(snapshot))
-				for _, rt := range snapshot {
-					publicURL := rt.Prefix
-					if url != "(waiting for tunnel)" {
-						publicURL = strings.TrimRight(url, "/") + rt.Prefix
-					}
-					webhooks[rt.PluginID] = publicURL
-				}
-				schema["webhooks"] = webhooks
-			}
-
-			return schema
 		},
 	})
 
@@ -327,6 +292,49 @@ func main() {
 
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
 	log.Println("Webhook ingress shut down")
+}
+
+func getConfigSchema() map[string]pluginsdk.ConfigSchemaField {
+	return map[string]pluginsdk.ConfigSchemaField{
+		"WEBHOOK_INGRESS_PORT": {Type: "number", Label: "Listen Port", Default: "9000", HelpText: "Port the ingress listens on for external webhook traffic"},
+	}
+}
+
+func getStatusSchema() map[string]pluginsdk.ConfigSchemaField {
+	baseURLMu.RLock()
+	url := baseURL
+	baseURLMu.RUnlock()
+
+	if url == "" {
+		url = "(waiting for tunnel)"
+	}
+
+	snapshot := getRouteSnapshot()
+
+	return map[string]pluginsdk.ConfigSchemaField{
+		"Tunnel URL": {Type: "string", Label: "Tunnel URL", Default: url},
+		"Routes":     {Type: "number", Label: "Routes", Default: strconv.Itoa(len(snapshot))},
+	}
+}
+
+func getWebhooksSchema() map[string]pluginsdk.ConfigSchemaField {
+	snapshot := getRouteSnapshot()
+
+	webhooks := make(map[string]pluginsdk.ConfigSchemaField, len(snapshot))
+	for _, rt := range snapshot {
+		webhooks[rt.PluginID] = pluginsdk.ConfigSchemaField{
+			Type: "string", Label: rt.PluginID, Default: rt.Prefix,
+		}
+	}
+	return webhooks
+}
+
+func getRouteSnapshot() []Route {
+	routesMu.RLock()
+	snapshot := make([]Route, len(routes))
+	copy(snapshot, routes)
+	routesMu.RUnlock()
+	return snapshot
 }
 
 // upsertRoute adds or updates a route in the route table.

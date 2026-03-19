@@ -28,19 +28,6 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		Schema: map[string]interface{}{
-			"config": map[string]pluginsdk.ConfigSchemaField{
-				"CODEX_APPROVAL_MODE": {
-					Type:     "select",
-					Label:    "Approval Mode",
-					Default:  "suggest",
-					Options:  []string{"suggest", "auto-edit", "full-auto"},
-					HelpText: "suggest: asks before everything, auto-edit: auto-approves file changes, full-auto: auto-approves everything",
-					Order:    1,
-				},
-				"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
-			},
-		},
 		SchemaFunc: func() map[string]interface{} {
 			// Read current config to merge into workspace env_defaults.
 			approvalMode := "suggest"
@@ -51,34 +38,8 @@ func main() {
 			}
 
 			return map[string]interface{}{
-				"config": map[string]pluginsdk.ConfigSchemaField{
-					"CODEX_APPROVAL_MODE": {
-						Type:     "select",
-						Label:    "Approval Mode",
-						Default:  "suggest",
-						Options:  []string{"suggest", "auto-edit", "full-auto"},
-						HelpText: "suggest: asks before everything, auto-edit: auto-approves file changes, full-auto: auto-approves everything",
-						Order:    1,
-					},
-					"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
-				},
-				"workspace": map[string]interface{}{
-					"display_name": "Codex Terminal",
-					"description":  "Web terminal with OpenAI Codex CLI — AI-powered coding assistant",
-					"icon":         `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" fill="#10A37F"/><path d="M12 6v12M8 10l4-4 4 4M8 14l4 4 4-4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-					"image":        "teamagentica-devbox:latest",
-					"port":         7681,
-					"docker_user":  "",
-					"shared_mounts": []map[string]interface{}{
-						{"volume_name": "codex-shared", "target": "/home/coder/.codex"},
-					},
-					"env_defaults": map[string]string{
-						"DEVBOX_APP":          "codex",
-						"DEFAULT_WORKSPACE":   "/workspace",
-						"HOME":               "/home/coder",
-						"CODEX_APPROVAL_MODE": approvalMode,
-					},
-				},
+				"config":    getConfigSchema(),
+				"workspace": getWorkspaceSchema(approvalMode),
 			}
 		},
 	})
@@ -104,5 +65,39 @@ func main() {
 	log.Printf("user-codex-terminal listening on :%d", defaultPort)
 	if err := r.Run(":8090"); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+func getConfigSchema() map[string]pluginsdk.ConfigSchemaField {
+	return map[string]pluginsdk.ConfigSchemaField{
+		"CODEX_APPROVAL_MODE": {
+			Type:     "select",
+			Label:    "Approval Mode",
+			Default:  "suggest",
+			Options:  []string{"suggest", "auto-edit", "full-auto"},
+			HelpText: "suggest: asks before everything, auto-edit: auto-approves file changes, full-auto: auto-approves everything",
+			Order:    1,
+		},
+		"PLUGIN_DEBUG": {Type: "boolean", Label: "Debug Mode", Default: "false", Order: 99},
+	}
+}
+
+func getWorkspaceSchema(approvalMode string) map[string]interface{} {
+	return map[string]interface{}{
+		"display_name": "Codex Terminal",
+		"description":  "Web terminal with OpenAI Codex CLI — AI-powered coding assistant",
+		"icon":         `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" fill="#10A37F"/><path d="M12 6v12M8 10l4-4 4 4M8 14l4 4 4-4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+		"image":        "teamagentica-devbox:latest",
+		"port":         7681,
+		"docker_user":  "",
+		"shared_mounts": []map[string]interface{}{
+			{"volume_name": "codex-shared", "target": "/home/coder/.codex"},
+		},
+		"env_defaults": map[string]string{
+			"DEVBOX_APP":          "codex",
+			"DEFAULT_WORKSPACE":   "/workspace",
+			"HOME":                "/home/coder",
+			"CODEX_APPROVAL_MODE": approvalMode,
+		},
 	}
 }

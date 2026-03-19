@@ -2,7 +2,7 @@ id: user-claude-terminal
 name: "Claude Terminal"
 description: "Web terminal with Claude Code CLI — AI-powered coding assistant in the browser"
 group: user
-version: "1.0.2"
+version: "1.0.3"
 author: teamagentica
 image: teamagentica-user-claude-terminal:latest
 tags: [terminal, claude, ai]
