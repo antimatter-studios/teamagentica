@@ -2,7 +2,7 @@ id: messaging-discord
 name: "Discord Bot"
 description: "Discord bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.1"
+version: "1.0.3"
 image: "teamagentica-messaging-discord:latest"
 author: teamagentica
 tags: [chat, discord, bot]
@@ -14,11 +14,11 @@ config_schema:
     required: true
     secret: true
     order: 1
-  DEFAULT_AGENT:
+  COORDINATOR_ALIAS:
     type: select
-    label: "Coordinator Agent"
+    label: "Coordinator Alias"
     dynamic: true
-    help_text: "Select the default agent to handle messages"
+    help_text: "Select the coordinator alias to handle messages from this bot"
     order: 5
   PLUGIN_DEBUG:
     type: boolean

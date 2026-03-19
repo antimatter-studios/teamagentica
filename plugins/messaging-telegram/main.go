@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,7 +40,11 @@ func main() {
 		Port:         httpPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: manifest.ConfigSchema,
+		SchemaFunc: func() map[string]interface{} {
+			return map[string]interface{}{
+				"config": manifest.ConfigSchema,
+			}
+		},
 	})
 
 	// Seed aliases from kernel (will update dynamically via alias:update events).
@@ -104,9 +107,9 @@ func main() {
 
 	telegramBot.SetRelayClient(relay.NewClient(sdkClient, manifest.ID))
 
-	// Set coordinator on relay if configured.
+	// Emit coordinator assignment to relay via addressed event.
 	if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
-		setCoordinatorOnRelay(sdkClient, manifest.ID, coordAlias)
+		emitCoordinatorEvent(sdkClient, manifest.ID, coordAlias)
 	}
 
 	// Apply initial MESSAGE_BUFFER_MS from fetched config.
@@ -144,15 +147,15 @@ func main() {
 			}
 		}
 		if v, ok := detail.Config["COORDINATOR_ALIAS"]; ok {
-			setCoordinatorOnRelay(sdkClient, manifest.ID, v)
+			emitCoordinatorEvent(sdkClient, manifest.ID, v)
 		}
 	}))
 
-	// Re-send coordinator when the relay (re)starts — it stores the mapping in memory.
+	// Re-emit coordinator when the relay (re)starts — addressed events are consumed once.
 	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
-			log.Printf("Relay ready — re-sending coordinator assignment")
-			setCoordinatorOnRelay(sdkClient, manifest.ID, coordAlias)
+			log.Printf("Relay ready — re-emitting coordinator assignment")
+			emitCoordinatorEvent(sdkClient, manifest.ID, coordAlias)
 		}
 	}))
 
@@ -343,18 +346,15 @@ func parseAllowedUsers(raw string) map[int64]bool {
 	return allowed
 }
 
-// setCoordinatorOnRelay tells the relay which alias should coordinate conversations for this plugin.
-func setCoordinatorOnRelay(sdk *pluginsdk.Client, sourcePlugin, aliasName string) {
-	payload, _ := json.Marshal(map[string]string{
+// emitCoordinatorEvent tells the relay which alias should coordinate conversations for this plugin.
+// Uses addressed delivery so the event queues in the kernel until infra-agent-relay is ready.
+func emitCoordinatorEvent(sdk *pluginsdk.Client, sourcePlugin, aliasName string) {
+	detail, _ := json.Marshal(map[string]string{
 		"source_plugin": sourcePlugin,
 		"alias":         aliasName,
 	})
-	_, err := sdk.RouteToPlugin(context.Background(), "infra-agent-relay", "POST", "/config/coordinator", bytes.NewReader(payload))
-	if err != nil {
-		log.Printf("Failed to set coordinator on relay: %v", err)
-		return
-	}
-	log.Printf("Coordinator set on relay: %s → @%s", sourcePlugin, aliasName)
+	sdk.ReportAddressedEvent("relay:coordinator", string(detail), "infra-agent-relay")
+	log.Printf("Emitted relay:coordinator: %s → @%s", sourcePlugin, aliasName)
 }
 
 func getHostname() string {

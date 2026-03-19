@@ -2,7 +2,7 @@ id: messaging-telegram
 name: "Telegram Bot"
 description: "Telegram bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.4"
+version: "1.0.6"
 image: "teamagentica-messaging-telegram:latest"
 author: teamagentica
 tags: [chat, telegram, bot]
@@ -43,11 +43,11 @@ config_schema:
     label: "Allowed Users"
     help_text: "Comma-separated Telegram user IDs that are allowed to interact with the bot"
     order: 4
-  DEFAULT_AGENT:
+  COORDINATOR_ALIAS:
     type: select
-    label: "Default Agent"
+    label: "Coordinator Alias"
     dynamic: true
-    help_text: "Select the default agent to handle messages"
+    help_text: "Select the coordinator alias to handle messages from this bot"
     order: 5
   PLUGIN_DEBUG:
     type: boolean
