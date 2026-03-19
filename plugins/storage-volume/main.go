@@ -68,7 +68,11 @@ func main() {
 				},
 			},
 		},
-		ConfigSchema: manifest.ConfigSchema,
+		SchemaFunc: func() map[string]interface{} {
+			return map[string]interface{}{
+				"config": manifest.ConfigSchema,
+			}
+		},
 	})
 	// Seed aliases from kernel (will update dynamically via alias:update events).
 	entries, err := sdkClient.FetchAliases()

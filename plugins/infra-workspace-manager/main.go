@@ -62,7 +62,11 @@ func main() {
 				},
 			},
 		},
-		ConfigSchema: manifest.ConfigSchema,
+		SchemaFunc: func() map[string]interface{} {
+			return map[string]interface{}{
+				"config": manifest.ConfigSchema,
+			}
+		},
 	})
 
 	ctx := context.Background()

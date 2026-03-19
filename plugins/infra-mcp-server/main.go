@@ -37,7 +37,11 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		ConfigSchema: manifest.ConfigSchema,
+		SchemaFunc: func() map[string]interface{} {
+			return map[string]interface{}{
+				"config": manifest.ConfigSchema,
+			}
+		},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

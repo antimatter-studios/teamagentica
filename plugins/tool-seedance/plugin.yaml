@@ -2,7 +2,7 @@ id: tool-seedance
 name: "Seedance Video"
 description: "AI video generation tool powered by Seedance 2.0 API"
 group: tools
-version: "2.0.1"
+version: "2.0.2"
 image: "teamagentica-tool-seedance:latest"
 author: teamagentica
 tags: [video, ai, tool, seedance]

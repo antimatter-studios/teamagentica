@@ -31,7 +31,11 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
-		ConfigSchema: manifest.ConfigSchema,
+		SchemaFunc: func() map[string]interface{} {
+			return map[string]interface{}{
+				"config": manifest.ConfigSchema,
+			}
+		},
 	})
 
 	// Start SDK first (register + heartbeat + event server).
