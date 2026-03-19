@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,16 +99,26 @@ func (s *Store) Upsert(pluginID, version string, data map[string]interface{}) er
 	}).Error
 }
 
-// GetManifest returns the full manifest data for a plugin (latest version).
+// GetManifest returns the full manifest data for a plugin (latest semver version).
 func (s *Store) GetManifest(pluginID string) (map[string]interface{}, bool) {
-	var m Manifest
-	if err := s.db.Where("plugin_id = ?", pluginID).Order("version DESC").First(&m).Error; err != nil {
+	var manifests []Manifest
+	if err := s.db.Where("plugin_id = ?", pluginID).Find(&manifests).Error; err != nil {
+		return nil, false
+	}
+	if len(manifests) == 0 {
 		return nil, false
 	}
 
+	latest := manifests[0]
+	for _, m := range manifests[1:] {
+		if semverLess(latest.Version, m.Version) {
+			latest = m
+		}
+	}
+
 	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(m.Data), &data); err != nil {
-		log.Printf("catalog: corrupt manifest for %s: %v", pluginID, err)
+	if err := json.Unmarshal([]byte(latest.Data), &data); err != nil {
+		log.Printf("catalog: corrupt manifest for %s: %v", pluginID, latest.Version)
 		return nil, false
 	}
 	return data, true
@@ -115,22 +126,55 @@ func (s *Store) GetManifest(pluginID string) (map[string]interface{}, bool) {
 
 // Search returns browsing entries matching the query (or all if empty).
 func (s *Store) Search(q string) []Entry {
-	// Get latest version of each plugin using a subquery.
 	var manifests []Manifest
-	sub := s.db.Model(&Manifest{}).
-		Select("plugin_id, MAX(created_at) as max_created").
-		Group("plugin_id")
+	s.db.Find(&manifests)
 
-	s.db.Where("(plugin_id, created_at) IN (?)", sub).Find(&manifests)
+	// Keep the highest semver per plugin_id.
+	latest := make(map[string]Manifest, len(manifests))
+	for _, m := range manifests {
+		if existing, ok := latest[m.PluginID]; !ok || semverLess(existing.Version, m.Version) {
+			latest[m.PluginID] = m
+		}
+	}
 
 	var entries []Entry
-	for _, m := range manifests {
+	for _, m := range latest {
 		e := manifestToEntry(m)
 		if q == "" || matchesQuery(e, strings.ToLower(q)) {
 			entries = append(entries, e)
 		}
 	}
 	return entries
+}
+
+// semverLess reports whether version a is less than version b.
+// Compares dot-separated numeric components; non-numeric parts fall back to string comparison.
+func semverLess(a, b string) bool {
+	aParts := strings.Split(strings.TrimPrefix(a, "v"), ".")
+	bParts := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	n := len(aParts)
+	if len(bParts) > n {
+		n = len(bParts)
+	}
+	for i := 0; i < n; i++ {
+		var ap, bp string
+		if i < len(aParts) {
+			ap = aParts[i]
+		}
+		if i < len(bParts) {
+			bp = bParts[i]
+		}
+		ai, aErr := strconv.Atoi(ap)
+		bi, bErr := strconv.Atoi(bp)
+		if aErr == nil && bErr == nil {
+			if ai != bi {
+				return ai < bi
+			}
+		} else if ap != bp {
+			return ap < bp
+		}
+	}
+	return false
 }
 
 // ListAll returns browsing entries for all plugins (latest version each).
