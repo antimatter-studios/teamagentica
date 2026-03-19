@@ -187,11 +187,23 @@ func marketplaceRemove(c *client.Client, name string) error {
 
 func marketplaceUpgrade(c *client.Client, pluginID string) error {
 	fmt.Printf("Upgrading %s from marketplace...\n", pluginID)
+
+	// Capture current version before upgrading so we can show the before/after.
+	var oldVersion string
+	if current, err := c.GetPlugin(pluginID); err == nil {
+		oldVersion = current.Version
+	}
+
 	plugin, err := c.UpgradePlugin(pluginID)
 	if err != nil {
 		return fmt.Errorf("upgrade %s: %w", pluginID, err)
 	}
-	fmt.Printf("Upgraded %s (version %s)\n", plugin.ID, plugin.Version)
+
+	if oldVersion != "" && oldVersion != plugin.Version {
+		fmt.Printf("Upgraded %s (%s → %s)\n", plugin.ID, oldVersion, plugin.Version)
+	} else {
+		fmt.Printf("Upgraded %s (version %s)\n", plugin.ID, plugin.Version)
+	}
 	return nil
 }
 

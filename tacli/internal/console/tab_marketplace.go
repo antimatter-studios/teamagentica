@@ -260,7 +260,7 @@ func (t marketplaceTab) view(width, height int) string {
 		// table column widths — adapt to available space
 		const colGap = 1
 		const statusW = 3
-		const versionW = 8
+		const versionW = 15
 		const minNameW = 16
 		const minGroupW = 10
 		const minDescW = 20
@@ -322,11 +322,15 @@ func (t marketplaceTab) view(width, height int) string {
 					status = sOK.Render(" ✓ ")
 				}
 			}
+			versionStr := p.Version
+			if upgrade {
+				versionStr = t.installedVersions[p.PluginID] + " → " + p.Version
+			}
 			line := fmt.Sprintf("  %s %-*s %-*s %-*s %s",
 				status,
 				nameW, trunc(p.Name, nameW),
 				groupW, trunc(p.Group, groupW),
-				versionW, trunc(p.Version, versionW),
+				versionW, trunc(versionStr, versionW),
 				trunc(p.Description, descW),
 			)
 			if upgrade {

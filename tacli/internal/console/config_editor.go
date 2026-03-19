@@ -69,6 +69,7 @@ type configField struct {
 	Type     string // "string", "select", "boolean", "oauth", "number", "text", "aliases"
 	Secret   bool
 	Required bool
+	ReadOnly bool
 	Default  string
 	Options  []string
 	HelpText string
