@@ -2,10 +2,11 @@ id: agent-inception
 name: "Inception Mercury"
 description: "AI agent powered by Inception Labs Mercury 2, the world's fastest diffusion-based reasoning LLM"
 group: agents
-version: "1.0.2"
+version: "1.0.5"
 image: "teamagentica-agent-inception:latest"
 author: teamagentica
 tags: [chat, ai, agent, inception, mercury, diffusion, code]
+capabilities: ["agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]
 config_schema:
   INCEPTION_API_KEY:
@@ -30,11 +31,6 @@ config_schema:
     label: "Diffusing Mode"
     default: "false"
     order: 4
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

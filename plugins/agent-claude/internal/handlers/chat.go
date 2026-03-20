@@ -185,8 +185,11 @@ func (h *Handler) Chat(c *gin.Context) {
 			return
 		}
 
-		// Build agent's own system prompt (CLI branch has no tool discovery).
-		systemPrompt := buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, nil)
+		// Use injected system prompt if provided, otherwise build from context.
+		systemPrompt := req.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, nil)
+		}
 		if systemPrompt != "" {
 			filtered := make([]anthropic.Message, 0, len(messages))
 			for _, m := range messages {
@@ -277,8 +280,11 @@ func (h *Handler) Chat(c *gin.Context) {
 			h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
 		}
 
-		// Build agent's own system prompt.
-		systemPrompt := buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+		// Use injected system prompt if provided, otherwise build from context.
+		systemPrompt := req.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+		}
 		if systemPrompt != "" {
 			filtered := make([]anthropic.Message, 0, len(messages))
 			for _, m := range messages {

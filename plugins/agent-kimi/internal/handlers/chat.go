@@ -61,6 +61,7 @@ type chatRequest struct {
 	Conversation  []kimi.Message `json:"conversation"`
 	IsCoordinator bool           `json:"is_coordinator,omitempty"`
 	AgentAlias    string         `json:"agent_alias,omitempty"`
+	SystemPrompt  string         `json:"system_prompt,omitempty"`
 }
 
 func (h *Handler) Chat(c *gin.Context) {
@@ -115,7 +116,10 @@ func (h *Handler) Chat(c *gin.Context) {
 	}
 
 	// Build agent's own system prompt.
-	systemPrompt := buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+	systemPrompt := req.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+	}
 	if systemPrompt != "" {
 		filtered := make([]kimi.Message, 0, len(messages))
 		for _, m := range messages {

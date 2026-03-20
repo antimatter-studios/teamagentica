@@ -103,19 +103,25 @@ func main() {
 		log.Println("[subscription] initialising Codex CLI backend")
 		workdir := dataPath + "/codex-workspace"
 		codexHome := dataPath + "/codex-home"
+		dirOK := true
 		for _, dir := range []string{workdir, codexHome} {
 			if err := os.MkdirAll(dir, 0755); err != nil {
-				log.Fatalf("failed to create directory %s: %v", dir, err)
+				log.Printf("WARNING: failed to create directory %s: %v (subscription backend may not work)", dir, err)
+				dirOK = false
 			}
 		}
 
-		cliClient := codexcli.NewClient(cliBinary, workdir, codexHome, cliTimeout, debug)
-		h.SetCodexCLI(cliClient)
-
-		if cliClient.IsAuthenticated() {
-			log.Println("[subscription] Codex CLI is authenticated")
+		if !dirOK {
+			log.Printf("WARNING: skipping subscription backend init due to directory creation failure")
 		} else {
-			log.Println("[subscription] WARNING: Codex CLI is NOT authenticated — run 'codex login --device-auth' in the container")
+			cliClient := codexcli.NewClient(cliBinary, workdir, codexHome, cliTimeout, debug)
+			h.SetCodexCLI(cliClient)
+
+			if cliClient.IsAuthenticated() {
+				log.Println("[subscription] Codex CLI is authenticated")
+			} else {
+				log.Println("[subscription] WARNING: Codex CLI is NOT authenticated — run 'codex login --device-auth' in the container")
+			}
 		}
 	}
 

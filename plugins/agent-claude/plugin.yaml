@@ -2,7 +2,7 @@ id: agent-claude
 name: "Claude Agent"
 description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
 group: agents
-version: "1.0.33"
+version: "1.0.37"
 image: "teamagentica-agent-claude:latest"
 author: teamagentica
 tags: [chat, ai, agent, claude, anthropic]
@@ -40,11 +40,6 @@ config_schema:
     default: claude-sonnet-4-6
     dynamic: true
     order: 4
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

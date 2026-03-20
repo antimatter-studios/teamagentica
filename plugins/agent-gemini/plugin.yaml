@@ -2,10 +2,11 @@ id: agent-gemini
 name: "Google Gemini Agent"
 description: "AI agent powered by Google Gemini models including Flash and Pro"
 group: agents
-version: "1.0.2"
+version: "1.0.5"
 image: "teamagentica-agent-gemini:latest"
 author: teamagentica
 tags: [chat, ai, agent, gemini, google]
+capabilities: ["agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]
 config_schema:
   GEMINI_API_KEY:
@@ -20,11 +21,6 @@ config_schema:
     default: gemini-2.5-flash
     dynamic: true
     order: 2
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

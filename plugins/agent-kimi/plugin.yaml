@@ -2,10 +2,11 @@ id: agent-kimi
 name: "Kimi K2 Agent"
 description: "AI agent powered by Moonshot's Kimi K2 with 128K context and thinking mode"
 group: agents
-version: "1.0.2"
+version: "1.0.5"
 image: "teamagentica-agent-kimi:latest"
 author: teamagentica
 tags: [chat, ai, agent, kimi, moonshot]
+capabilities: ["agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]
 config_schema:
   KIMI_API_KEY:
@@ -20,11 +21,6 @@ config_schema:
     default: kimi-k2-turbo-preview
     dynamic: true
     order: 2
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

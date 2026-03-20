@@ -87,24 +87,30 @@ func main() {
 		log.Println("[cli] initialising Claude CLI backend")
 		workdir := dataPath + "/claude-workspace"
 		claudeDir := dataPath + "/claude-home"
+		dirOK := true
 		for _, dir := range []string{workdir, claudeDir} {
 			if err := os.MkdirAll(dir, 0755); err != nil {
-				log.Fatalf("failed to create directory %s: %v", dir, err)
+				log.Printf("WARNING: failed to create directory %s: %v (CLI backend may not work)", dir, err)
+				dirOK = false
 			}
 		}
 
-		cliClient := claudecli.NewClient(cliBinary, workdir, claudeDir, cliTimeout, debug)
-		h.SetClaudeCLI(cliClient)
-
-		// Set MCP config path if it exists.
-		if mcpPath := claudecli.MCPConfigPath(claudeDir); mcpPath != "" {
-			h.SetMCPConfig(mcpPath)
-		}
-
-		if cliClient.IsAvailable() {
-			log.Println("[cli] Claude CLI is available")
+		if !dirOK {
+			log.Printf("WARNING: skipping CLI backend init due to directory creation failure")
 		} else {
-			log.Println("[cli] WARNING: Claude CLI is NOT available — check CLAUDE_CLI_BINARY path")
+			cliClient := claudecli.NewClient(cliBinary, workdir, claudeDir, cliTimeout, debug)
+			h.SetClaudeCLI(cliClient)
+
+			// Set MCP config path if it exists.
+			if mcpPath := claudecli.MCPConfigPath(claudeDir); mcpPath != "" {
+				h.SetMCPConfig(mcpPath)
+			}
+
+			if cliClient.IsAvailable() {
+				log.Println("[cli] Claude CLI is available")
+			} else {
+				log.Println("[cli] WARNING: Claude CLI is NOT available — check CLAUDE_CLI_BINARY path")
+			}
 		}
 	}
 

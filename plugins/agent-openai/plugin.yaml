@@ -2,7 +2,7 @@ id: agent-openai
 name: "OpenAI Agent"
 description: "AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities"
 group: agents
-version: "1.0.6"
+version: "1.0.10"
 image: "teamagentica-agent-openai:latest"
 author: teamagentica
 tags: [chat, ai, agent, codex]
@@ -40,11 +40,6 @@ config_schema:
     default: gpt-4o
     dynamic: true
     order: 3
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"
