@@ -46,12 +46,7 @@ export default function FolderTree({
   const handleRootClick = () => {
     if (!isSelected) onSelectProvider(provider);
     else onNavigate("");
-  };
-
-  const handleToggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpanded(!expanded);
-    if (!expanded && !isSelected) onSelectProvider(provider);
+    if (!expanded) setExpanded(true);
   };
 
   const isRootActive = isSelected && activePath === "";
@@ -68,7 +63,7 @@ export default function FolderTree({
         >
           {"\u25CF"}
         </span>
-        <span className="ftree-name" onClick={handleToggle}>{provider.name || provider.id}</span>
+        <span className="ftree-name">{provider.name || provider.id}</span>
       </button>
       {expanded && (
         <div className="ftree-lines">
@@ -168,11 +163,6 @@ function TreeNode({
     if (!expanded) setExpanded(true);
   };
 
-  const handleToggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpanded(!expanded);
-  };
-
   const branch = isLast ? "└─ " : "├─ ";
   const childPrefix = parentPrefix + (isLast ? "   " : "│  ");
 
@@ -183,7 +173,7 @@ function TreeNode({
         onClick={handleClick}
       >
         <span className="ftree-prefix">{parentPrefix}{branch}</span>
-        <span className="ftree-name" onClick={handleToggle}>{node.name}</span>
+        <span className="ftree-name">{node.name}</span>
       </button>
       {expanded && loading && (
         <div className="ftree-row ftree-leaf">
