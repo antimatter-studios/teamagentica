@@ -96,7 +96,7 @@ func main() {
 	// Volumes live at /data/volumes/.
 	workspaceDir := "/data"
 	if err := os.MkdirAll(workspaceDir+"/volumes", 0755); err != nil {
-		log.Fatalf("failed to create workspace volumes dir: %v", err)
+		log.Printf("WARNING: failed to create workspace volumes dir: %v (some operations may fail)", err)
 	}
 
 	// Local SQLite database for workspace-manager-level metadata

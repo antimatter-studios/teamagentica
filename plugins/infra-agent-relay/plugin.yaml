@@ -2,11 +2,12 @@ id: infra-agent-relay
 name: "Agent Relay"
 description: "Routes messages between messaging plugins and agent-bridge instances running in workspace containers"
 group: infrastructure
-version: "0.1.7"
+version: "0.2.7"
 image: "teamagentica-infra-agent-relay:latest"
 author: teamagentica
 tags: [infrastructure]
 capabilities: ["infra:agent-relay"]
+dependencies: ["tool:memory", "tool:aliases"]
 config_schema:
   DEFAULT_COORDINATOR:
     type: select
@@ -14,6 +15,20 @@ config_schema:
     dynamic: true
     help_text: "Fallback coordinator alias for any messaging plugin without a specific coordinator set. The first coordinator registered will be used as the default if this is unset."
     order: 1
+  MAX_ORCHESTRATION_TASKS:
+    type: number
+    label: "Max Orchestration Tasks"
+    help_text: "Maximum number of tasks allowed in a coordinator's DAG plan."
+    default: "20"
+    required: false
+    order: 2
+  TASK_TIMEOUT_SECONDS:
+    type: number
+    label: "Task Timeout (seconds)"
+    help_text: "Per-task deadline. If an agent call exceeds this, the task fails and an error is injected as its result."
+    default: "120"
+    required: false
+    order: 3
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

@@ -2,7 +2,7 @@ id: infra-mcp-server
 name: "MCP Server"
 description: "Model Context Protocol server that exposes platform tools and agent routing to all AI agents via MCP"
 group: infrastructure
-version: "1.0.2"
+version: "1.0.5"
 image: "teamagentica-infra-mcp-server:latest"
 author: teamagentica
 tags: [infrastructure, mcp, tools, routing]
