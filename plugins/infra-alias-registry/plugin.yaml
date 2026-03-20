@@ -1,0 +1,27 @@
+id: infra-alias-registry
+name: "Alias Registry"
+description: "Central alias registry — manages agents, tool aliases, and routes all addressable names"
+group: infrastructure
+version: "0.2.0"
+image: "teamagentica-infra-alias-registry:latest"
+author: teamagentica
+tags: [aliases, agents, identity, registry]
+capabilities: ["tool:aliases"]
+config_schema:
+  PLUGIN_PORT:
+    type: number
+    label: "Port"
+    default: "8090"
+    required: false
+    order: 1
+  PLUGIN_DATA_PATH:
+    type: string
+    label: "Data Path"
+    default: "/data"
+    required: false
+    order: 2
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    order: 99

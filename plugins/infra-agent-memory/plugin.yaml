@@ -1,0 +1,40 @@
+id: infra-agent-memory
+name: "Agent Memory"
+description: "Persistent conversation memory for agents — stores session history and provides a swappable memory backend"
+group: infrastructure
+version: "0.1.1"
+image: "teamagentica-infra-agent-memory:latest"
+author: teamagentica
+tags: [memory, agents, history, sessions]
+capabilities: ["tool:memory"]
+configSchema:
+  PLUGIN_PORT:
+    type: number
+    label: "Port"
+    description: "HTTP port for this plugin"
+    default: "8091"
+    required: false
+  PLUGIN_DATA_PATH:
+    type: string
+    label: "Data Path"
+    description: "Path to store the memory database"
+    default: "/data"
+    required: false
+  MAX_SESSION_MESSAGES:
+    type: number
+    label: "Max Messages Per Session"
+    description: "Maximum number of messages to retain per session before pruning oldest"
+    default: "50"
+    required: false
+  SESSION_TTL_HOURS:
+    type: number
+    label: "Session TTL (hours)"
+    description: "Hours of inactivity before a session is expired and pruned"
+    default: "24"
+    required: false
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    description: "Enable debug logging"
+    default: "false"
+    required: false
