@@ -1,12 +1,10 @@
 package storage
 
 import (
-	"path/filepath"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // WorkspaceRecord tracks workspace-manager-level metadata for each workspace.
@@ -25,15 +23,8 @@ type DB struct {
 
 // Open creates or opens the workspace manager database.
 func Open(dataPath string) (*DB, error) {
-	dbPath := filepath.Join(dataPath, "workspaces.db")
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
-	conn, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	conn, err := pluginsdk.OpenDatabase(dataPath, "workspaces.db", &WorkspaceRecord{})
 	if err != nil {
-		return nil, err
-	}
-	if err := conn.AutoMigrate(&WorkspaceRecord{}); err != nil {
 		return nil, err
 	}
 	return &DB{db: conn}, nil

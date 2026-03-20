@@ -1,11 +1,8 @@
 package storage
 
 import (
-	"path/filepath"
-
-	"gorm.io/driver/sqlite"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 type Board struct {
@@ -54,18 +51,11 @@ type DB struct {
 }
 
 func Open(dataPath string) (*DB, error) {
-	dbPath := filepath.Join(dataPath, "tasks.db")
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	conn, err := pluginsdk.OpenDatabase(dataPath, "tasks.db", &Board{}, &Column{}, &Card{}, &Comment{})
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&Board{}, &Column{}, &Card{}, &Comment{}); err != nil {
-		return nil, err
-	}
-	return &DB{db: db}, nil
+	return &DB{db: conn}, nil
 }
 
 // Boards

@@ -2,13 +2,11 @@ package storage
 
 import (
 	"errors"
-	"log"
-	"path/filepath"
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
 // Alias type constants.
@@ -37,18 +35,10 @@ type DB struct {
 
 // Open creates or opens the SQLite database at dataPath/aliases.db.
 func Open(dataPath string) (*DB, error) {
-	dbPath := filepath.Join(dataPath, "aliases.db")
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
-	conn, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	conn, err := pluginsdk.OpenDatabase(dataPath, "aliases.db", &Alias{})
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.AutoMigrate(&Alias{}); err != nil {
-		return nil, err
-	}
-	log.Printf("[storage] alias database opened at %s", dbPath)
 	return &DB{db: conn}, nil
 }
 
