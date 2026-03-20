@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,22 +20,241 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// relay is the central message routing service.
-// Messaging plugins send messages here; the relay routes to the correct
-// destination: an LLM agent plugin (via kernel) or a workspace bridge (via TCP).
+// relay is the central message routing and orchestration service.
+// Messaging plugins send messages here; the relay routes to a coordinator,
+// which returns a JSON DAG plan; the relay executes the plan and returns
+// the final result.
 type relay struct {
-	mu                  sync.RWMutex
-	conns               map[string]*bridge.Client // workspaceID → TCP connection
-	routes              *router.Table
-	sdk                 *pluginsdk.Client
-	allowFirstAsDefault bool // true when DEFAULT_COORDINATOR is unset at startup
+	mu                    sync.RWMutex
+	conns                 map[string]*bridge.Client // workspaceID → TCP connection
+	routes                *router.Table
+	sdk                   *pluginsdk.Client
+	allowFirstAsDefault   bool // true when DEFAULT_COORDINATOR is unset at startup
+	maxOrchestrationTasks int
+	taskTimeoutSeconds    int
+	personas              *personaCache
+	memoryPluginID        string // cached plugin ID for infra-agent-memory (empty = not available)
+	memoryMu              sync.RWMutex
+	memoryCheckedAt       time.Time
+}
+
+// personaInfo holds a cached persona definition from infra-alias-registry.
+type personaInfo struct {
+	Alias        string `json:"alias"`
+	SystemPrompt string `json:"system_prompt"`
+	BackendAlias string `json:"backend_alias"`
+	Model        string `json:"model"`
+}
+
+// personaCache caches all persona definitions with a TTL.
+type personaCache struct {
+	mu          sync.RWMutex
+	pluginID    string
+	personas    map[string]personaInfo
+	fetchedAt   time.Time
+	ttl         time.Duration
 }
 
 func newRelay(sdk *pluginsdk.Client) *relay {
 	return &relay{
-		conns:  make(map[string]*bridge.Client),
-		routes: router.NewTable(),
-		sdk:    sdk,
+		conns:                 make(map[string]*bridge.Client),
+		routes:                router.NewTable(),
+		sdk:                   sdk,
+		maxOrchestrationTasks: 20,
+		taskTimeoutSeconds:    120,
+		personas:              &personaCache{ttl: 60 * time.Second},
+	}
+}
+
+// fetchPersonas returns all personas from infra-alias-registry, using a TTL cache.
+// Returns an empty map if the plugin is not installed or unavailable.
+func (r *relay) fetchPersonas() map[string]personaInfo {
+	cache := r.personas
+
+	cache.mu.RLock()
+	if time.Since(cache.fetchedAt) < cache.ttl && cache.personas != nil {
+		p := cache.personas
+		cache.mu.RUnlock()
+		return p
+	}
+	cache.mu.RUnlock()
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	// Double-check after acquiring write lock.
+	if time.Since(cache.fetchedAt) < cache.ttl && cache.personas != nil {
+		return cache.personas
+	}
+
+	empty := map[string]personaInfo{}
+
+	plugins, err := r.sdk.SearchPlugins("tool:aliases")
+	if err != nil || len(plugins) == 0 {
+		cache.personas = empty
+		cache.fetchedAt = time.Now()
+		return empty
+	}
+
+	pluginID := plugins[0].ID
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET", "/personas", nil)
+	if err != nil {
+		log.Printf("relay: persona fetch from %s failed: %v", pluginID, err)
+		cache.personas = empty
+		cache.fetchedAt = time.Now()
+		return empty
+	}
+
+	var resp struct {
+		Personas []personaInfo `json:"personas"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		cache.personas = empty
+		cache.fetchedAt = time.Now()
+		return empty
+	}
+
+	personas := make(map[string]personaInfo, len(resp.Personas))
+	for _, p := range resp.Personas {
+		personas[p.Alias] = p
+	}
+	cache.personas = personas
+	cache.fetchedAt = time.Now()
+
+	if len(personas) > 0 {
+		log.Printf("relay: loaded %d personas from %s", len(personas), pluginID)
+	}
+	return personas
+}
+
+// mergedAliases returns an AliasMap that overlays persona aliases on top of
+// kernel aliases. Personas with a backend_alias become routable without a
+// corresponding kernel alias entry. Personas without a backend_alias are still
+// cached for system prompt injection but are not added as routing entries.
+func (r *relay) mergedAliases(kernelAliases *alias.AliasMap) *alias.AliasMap {
+	personas := r.fetchPersonas()
+	if len(personas) == 0 {
+		return kernelAliases
+	}
+
+	merged := kernelAliases
+	for _, p := range personas {
+		if p.BackendAlias == "" {
+			continue
+		}
+		backendTarget := kernelAliases.Resolve(p.BackendAlias)
+		if backendTarget == nil {
+			continue
+		}
+		model := p.Model
+		if model == "" {
+			model = backendTarget.Model
+		}
+		merged = merged.With(p.Alias, alias.Target{
+			PluginID: backendTarget.PluginID,
+			Model:    model,
+			Type:     alias.TargetAgent,
+		})
+	}
+	return merged
+}
+
+// lookupPersona returns the persona for agentAlias, or nil if not found.
+func (r *relay) lookupPersona(agentAlias string) *personaInfo {
+	if agentAlias == "" || r.sdk == nil {
+		return nil
+	}
+	personas := r.fetchPersonas()
+	if p, ok := personas[agentAlias]; ok {
+		return &p
+	}
+	return nil
+}
+
+// --- Memory integration ---
+
+// memoryPlugin returns the plugin ID of the infra-agent-memory plugin, or "" if unavailable.
+// Result is cached for 60 seconds to avoid repeated discovery calls.
+func (r *relay) memoryPlugin() string {
+	r.memoryMu.RLock()
+	if time.Since(r.memoryCheckedAt) < 60*time.Second {
+		id := r.memoryPluginID
+		r.memoryMu.RUnlock()
+		return id
+	}
+	r.memoryMu.RUnlock()
+
+	r.memoryMu.Lock()
+	defer r.memoryMu.Unlock()
+	if time.Since(r.memoryCheckedAt) < 60*time.Second {
+		return r.memoryPluginID
+	}
+
+	plugins, err := r.sdk.SearchPlugins("tool:memory")
+	if err != nil || len(plugins) == 0 {
+		r.memoryPluginID = ""
+	} else {
+		r.memoryPluginID = plugins[0].ID
+	}
+	r.memoryCheckedAt = time.Now()
+	return r.memoryPluginID
+}
+
+// memoryGetHistory fetches conversation history for a session from infra-agent-memory.
+// Returns nil if the memory plugin is unavailable.
+func (r *relay) memoryGetHistory(ctx context.Context, sessionID string) []conversationMsg {
+	pluginID := r.memoryPlugin()
+	if pluginID == "" {
+		return nil
+	}
+
+	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET",
+		"/sessions/"+sessionID+"/messages", nil)
+	if err != nil {
+		log.Printf("relay: memory fetch history failed: %v", err)
+		return nil
+	}
+
+	var resp struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil
+	}
+
+	msgs := make([]conversationMsg, len(resp.Messages))
+	for i, m := range resp.Messages {
+		msgs[i] = conversationMsg{Role: m.Role, Content: m.Content}
+	}
+	return msgs
+}
+
+// memoryStore appends a message to a session in infra-agent-memory.
+// Fire-and-forget: errors are logged but not returned.
+func (r *relay) memoryStore(sessionID, role, content, responder string) {
+	pluginID := r.memoryPlugin()
+	if pluginID == "" {
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]string{
+		"role":      role,
+		"content":   content,
+		"responder": responder,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST",
+		"/sessions/"+sessionID+"/messages", bytes.NewReader(payload)); err != nil {
+		log.Printf("relay: memory store failed: %v", err)
 	}
 }
 
@@ -50,8 +270,13 @@ type relayRequest struct {
 
 // relayResponse is returned to messaging plugins.
 type relayResponse struct {
-	Response  string `json:"response"`            // the response text/content
-	Responder string `json:"responder,omitempty"` // alias or plugin ID that responded
+	Response    string            `json:"response"`              // the response text/content
+	Responder   string            `json:"responder,omitempty"`   // alias or plugin ID that responded
+	Model       string            `json:"model,omitempty"`       // model that generated the response
+	Backend     string            `json:"backend,omitempty"`     // agent backend (e.g. "api_key", "cli")
+	Usage       *agentUsage       `json:"usage,omitempty"`       // token usage from the agent
+	CostUSD     float64           `json:"cost_usd,omitempty"`    // cost in USD (if reported)
+	Attachments []agentAttachment `json:"attachments,omitempty"` // media attachments from the agent
 }
 
 // handleChat is the single entry point for all messages from messaging plugins.
@@ -67,14 +292,23 @@ func (r *relay) handleChat(c *gin.Context) {
 		return
 	}
 
+	// Session ID is unique per source plugin + channel.
+	sessionID := req.SourcePlugin + ":" + req.ChannelID
+
+	// Fetch conversation history from memory plugin (if available).
+	history := r.memoryGetHistory(c.Request.Context(), sessionID)
+
+	// Store the incoming user message.
+	go r.memoryStore(sessionID, "user", req.Message, "")
+
 	// 1. Check if this channel is mapped to a workspace bridge.
 	if ws := r.routes.GetWorkspace(req.SourcePlugin, req.ChannelID); ws != nil {
 		r.routeToWorkspace(c, ws, req)
 		return
 	}
 
-	// 2. Check for @alias prefix in message.
-	aliases := r.routes.Aliases()
+	// 2. Check for @alias prefix in message — direct routing, bypasses orchestration.
+	aliases := r.mergedAliases(r.routes.Aliases())
 	if aliases != nil && !aliases.IsEmpty() {
 		result := aliases.Parse(req.Message)
 		if result.Target != nil && result.Target.Type == alias.TargetAgent {
@@ -85,13 +319,27 @@ func (r *relay) handleChat(c *gin.Context) {
 				})
 				return
 			}
-			r.routeToAgent(c, result.Target.PluginID, result.Target.Model,
-				result.Remainder, req.ImageURLs, false, result.Alias)
+			agentResp, responder, err := r.routeToAgent(c.Request.Context(), result.Target.PluginID, result.Target.Model,
+				result.Remainder, req.ImageURLs, history, false, result.Alias)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("agent: %v", err)})
+				return
+			}
+			go r.memoryStore(sessionID, "assistant", agentResp.Response, responder)
+			c.JSON(http.StatusOK, relayResponse{
+				Response:    agentResp.Response,
+				Responder:   responder,
+				Model:       agentResp.Model,
+				Backend:     agentResp.Backend,
+				Usage:       agentResp.Usage,
+				CostUSD:     agentResp.CostUSD,
+				Attachments: agentResp.Attachments,
+			})
 			return
 		}
 	}
 
-	// 3. Route to coordinator agent for this source plugin, falling back to default.
+	// 3. Route through coordinator with DAG orchestration.
 	coordinator := r.routes.GetCoordinator(req.SourcePlugin)
 	if coordinator == nil {
 		coordinator = r.routes.GetDefaultCoordinator()
@@ -101,49 +349,282 @@ func (r *relay) handleChat(c *gin.Context) {
 		return
 	}
 
-	response, err := r.callAgent(coordinator.PluginID, coordinator.Model,
-		req.Message, req.ImageURLs, true, "")
+	coordAlias := ""
+	if aliases != nil {
+		coordAlias = aliases.FindAliasByPluginID(coordinator.PluginID)
+	}
+	if coordAlias == "" {
+		coordAlias = coordinator.PluginID
+	}
+
+	response, responder, orchResp, err := r.orchestrate(c.Request.Context(), coordinator, coordAlias, req.Message, req.ImageURLs, aliases)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("coordinator: %v", err)})
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 4. Check if coordinator delegated via ROUTE:@alias.
-	if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
-		if aliases != nil {
-			if target := aliases.Resolve(delegatedAlias); target != nil && target.Type == alias.TargetAgent {
-				delegatedResp, err := r.callAgent(target.PluginID, target.Model,
-					delegatedMsg, nil, false, delegatedAlias)
-				if err != nil {
-					c.JSON(http.StatusOK, relayResponse{
-						Response:  fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, err),
-						Responder: delegatedAlias,
-					})
-					return
-				}
-				c.JSON(http.StatusOK, relayResponse{
-					Response:  delegatedResp,
-					Responder: delegatedAlias,
-				})
-				return
-			}
+	rr := relayResponse{
+		Response:  response,
+		Responder: responder,
+	}
+	if orchResp != nil {
+		rr.Model = orchResp.Model
+		rr.Backend = orchResp.Backend
+		rr.Usage = orchResp.Usage
+		rr.CostUSD = orchResp.CostUSD
+		rr.Attachments = orchResp.Attachments
+	}
+	c.JSON(http.StatusOK, rr)
+}
+
+// --- DAG Orchestration ---
+
+// taskPlan is the JSON structure the coordinator outputs.
+type taskPlan struct {
+	Tasks []dagTask `json:"tasks"`
+}
+
+// dagTask is a single task in the coordinator's plan.
+type dagTask struct {
+	ID        string   `json:"id"`
+	Alias     string   `json:"alias"`
+	Prompt    string   `json:"prompt"`
+	DependsOn []string `json:"depends_on"`
+}
+
+// parseCoordinatorPlan extracts a taskPlan from a coordinator response.
+// Handles raw JSON or ```json ... ``` fenced blocks.
+// Returns (nil, false) if the response is a plain text answer with no plan.
+func parseCoordinatorPlan(response string) (*taskPlan, bool) {
+	s := strings.TrimSpace(response)
+
+	// Extract from ```json ... ``` fence if present.
+	if idx := strings.Index(s, "```json"); idx >= 0 {
+		start := idx + len("```json")
+		rest := s[start:]
+		if end := strings.Index(rest, "```"); end >= 0 {
+			s = strings.TrimSpace(rest[:end])
 		}
 	}
 
-	// Return coordinator's direct response.
-	responderName := ""
-	if aliases != nil {
-		responderName = aliases.FindAliasByPluginID(coordinator.PluginID)
-	}
-	if responderName == "" {
-		responderName = coordinator.PluginID
+	// Must look like a JSON object.
+	if !strings.HasPrefix(s, "{") {
+		return nil, false
 	}
 
-	c.JSON(http.StatusOK, relayResponse{
-		Response:  response,
-		Responder: responderName,
-	})
+	var plan taskPlan
+	if err := json.Unmarshal([]byte(s), &plan); err != nil {
+		return nil, false
+	}
+	if len(plan.Tasks) == 0 {
+		return nil, false
+	}
+	return &plan, true
 }
+
+// interpolate substitutes {taskID} placeholders with completed task results.
+func interpolate(prompt string, results map[string]string) string {
+	for id, result := range results {
+		prompt = strings.ReplaceAll(prompt, "{"+id+"}", result)
+	}
+	return prompt
+}
+
+// detectCycle returns true if the task DAG contains a circular dependency.
+func detectCycle(tasks []dagTask) bool {
+	deps := make(map[string][]string, len(tasks))
+	for _, t := range tasks {
+		deps[t.ID] = t.DependsOn
+	}
+
+	visited := make(map[string]bool, len(tasks))
+	inStack := make(map[string]bool, len(tasks))
+
+	var hasCycle func(id string) bool
+	hasCycle = func(id string) bool {
+		visited[id] = true
+		inStack[id] = true
+		for _, dep := range deps[id] {
+			if !visited[dep] {
+				if hasCycle(dep) {
+					return true
+				}
+			} else if inStack[dep] {
+				return true
+			}
+		}
+		inStack[id] = false
+		return false
+	}
+
+	for _, t := range tasks {
+		if !visited[t.ID] {
+			if hasCycle(t.ID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// orchestrate calls the coordinator, parses its JSON DAG plan, executes tasks
+// in topological order (parallel where possible), and returns the final result.
+func (r *relay) orchestrate(
+	ctx context.Context,
+	coordinator *router.CoordinatorRoute,
+	coordAlias string,
+	message string,
+	imageURLs []string,
+	aliases *alias.AliasMap,
+) (string, string, *agentChatResponse, error) {
+
+	// Call coordinator in orchestration mode.
+	coordResp, err := r.callAgent(ctx, coordinator.PluginID, coordinator.Model,
+		message, imageURLs, nil, true, coordAlias)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("coordinator: %w", err)
+	}
+
+	// Parse plan — if no JSON DAG, coordinator answered directly.
+	plan, isDag := parseCoordinatorPlan(coordResp.Response)
+	if !isDag {
+		return coordResp.Response, coordAlias, coordResp, nil
+	}
+
+	// Validate plan.
+	if len(plan.Tasks) > r.maxOrchestrationTasks {
+		return "", "", nil, fmt.Errorf("plan has %d tasks, exceeds maximum of %d", len(plan.Tasks), r.maxOrchestrationTasks)
+	}
+	if detectCycle(plan.Tasks) {
+		return "", "", nil, fmt.Errorf("circular dependency detected in task plan")
+	}
+
+	// Execute DAG — internally we only need the text for interpolation.
+	// Track the last agentChatResponse for terminal task metadata.
+	results := make(map[string]string, len(plan.Tasks))
+	agentResps := make(map[string]*agentChatResponse, len(plan.Tasks))
+	completed := make(map[string]bool, len(plan.Tasks))
+	var mu sync.Mutex
+
+	for len(completed) < len(plan.Tasks) {
+		// Find tasks whose dependencies are all satisfied.
+		var ready []dagTask
+		for _, t := range plan.Tasks {
+			if completed[t.ID] {
+				continue
+			}
+			allDone := true
+			for _, dep := range t.DependsOn {
+				if !completed[dep] {
+					allDone = false
+					break
+				}
+			}
+			if allDone {
+				ready = append(ready, t)
+			}
+		}
+
+		if len(ready) == 0 {
+			return "", "", nil, fmt.Errorf("no tasks ready but %d incomplete — possible cycle missed", len(plan.Tasks)-len(completed))
+		}
+
+		// Snapshot results for interpolation before spawning goroutines.
+		// All deps are complete so this snapshot is valid for all ready tasks.
+		snapshot := make(map[string]string, len(results))
+		for k, v := range results {
+			snapshot[k] = v
+		}
+
+		// Run ready tasks in parallel.
+		var wg sync.WaitGroup
+		for _, task := range ready {
+			wg.Add(1)
+			go func(t dagTask) {
+				defer wg.Done()
+
+				prompt := interpolate(t.Prompt, snapshot)
+
+				taskCtx, cancel := context.WithTimeout(ctx, time.Duration(r.taskTimeoutSeconds)*time.Second)
+				defer cancel()
+
+				var result string
+				var resp *agentChatResponse
+				if t.Alias == "self" {
+					// Call coordinator back in worker mode for synthesis.
+					resp, err = r.callAgent(taskCtx, coordinator.PluginID, coordinator.Model,
+						prompt, nil, nil, false, coordAlias)
+					if err != nil {
+						result = fmt.Sprintf("[error from self: %v]", err)
+					} else {
+						result = resp.Response
+					}
+				} else {
+					target := aliases.Resolve(t.Alias)
+					if target == nil || target.Type != alias.TargetAgent {
+						result = fmt.Sprintf("[error: alias @%s not found or not an agent]", t.Alias)
+					} else {
+						resp, err = r.callAgent(taskCtx, target.PluginID, target.Model,
+							prompt, nil, nil, false, t.Alias)
+						if err != nil {
+							result = fmt.Sprintf("[error from @%s: %v]", t.Alias, err)
+						} else {
+							result = resp.Response
+						}
+					}
+				}
+
+				mu.Lock()
+				results[t.ID] = result
+				if resp != nil {
+					agentResps[t.ID] = resp
+				}
+				completed[t.ID] = true
+				mu.Unlock()
+			}(task)
+		}
+		wg.Wait()
+	}
+
+	// Find terminal tasks (nothing depends on them) — these are the outputs.
+	dependedOn := make(map[string]bool, len(plan.Tasks))
+	for _, t := range plan.Tasks {
+		for _, dep := range t.DependsOn {
+			dependedOn[dep] = true
+		}
+	}
+
+	var terminals []dagTask
+	for _, t := range plan.Tasks {
+		if !dependedOn[t.ID] {
+			terminals = append(terminals, t)
+		}
+	}
+
+	if len(terminals) == 1 {
+		t := terminals[0]
+		resp := results[t.ID]
+		a := t.Alias
+		if a == "self" {
+			a = coordAlias
+		}
+		return resp, a, agentResps[t.ID], nil
+	}
+
+	// Multiple terminal tasks — coordinator should have included a self synthesis task.
+	// Concatenate as fallback.
+	var sb strings.Builder
+	for _, t := range terminals {
+		a := t.Alias
+		if a == "self" {
+			a = coordAlias
+		}
+		fmt.Fprintf(&sb, "[@%s]: %s\n\n", a, results[t.ID])
+	}
+	return strings.TrimSpace(sb.String()), "relay", nil, nil
+}
+
+// --- Agent routing ---
 
 // routeToWorkspace forwards a message to a workspace bridge via TCP.
 func (r *relay) routeToWorkspace(c *gin.Context, ws *router.WorkspaceRoute, req relayRequest) {
@@ -173,28 +654,24 @@ func (r *relay) routeToWorkspace(c *gin.Context, ws *router.WorkspaceRoute, req 
 	})
 }
 
-// routeToAgent forwards a message to an agent plugin and returns the response.
-func (r *relay) routeToAgent(c *gin.Context, pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) {
-	response, err := r.callAgent(pluginID, model, message, imageURLs, isCoordinator, agentAlias)
+// routeToAgent calls an agent plugin and returns the full response with responder alias set.
+func (r *relay) routeToAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, isCoordinator bool, agentAlias string) (*agentChatResponse, string, error) {
+	resp, err := r.callAgent(ctx, pluginID, model, message, imageURLs, history, isCoordinator, agentAlias)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("agent: %v", err)})
-		return
+		return nil, "", err
 	}
-
-	c.JSON(http.StatusOK, relayResponse{
-		Response:  response,
-		Responder: agentAlias,
-	})
+	return resp, agentAlias, nil
 }
 
 // agentChatRequest is the standard chat format used by all agent plugins.
 type agentChatRequest struct {
-	Message       string             `json:"message"`
-	Model         string             `json:"model,omitempty"`
-	ImageURLs     []string           `json:"image_urls,omitempty"`
-	Conversation  []conversationMsg  `json:"conversation"`
-	IsCoordinator bool               `json:"is_coordinator,omitempty"`
-	AgentAlias    string             `json:"agent_alias,omitempty"`
+	Message       string            `json:"message"`
+	Model         string            `json:"model,omitempty"`
+	ImageURLs     []string          `json:"image_urls,omitempty"`
+	Conversation  []conversationMsg `json:"conversation"`
+	IsCoordinator bool              `json:"is_coordinator,omitempty"`
+	AgentAlias    string            `json:"agent_alias,omitempty"`
+	SystemPrompt  string            `json:"system_prompt,omitempty"`
 }
 
 type conversationMsg struct {
@@ -203,36 +680,66 @@ type conversationMsg struct {
 }
 
 type agentChatResponse struct {
-	Response string `json:"response"`
+	Response    string              `json:"response"`
+	Model       string              `json:"model,omitempty"`
+	Backend     string              `json:"backend,omitempty"`
+	Usage       *agentUsage         `json:"usage,omitempty"`
+	CostUSD     float64             `json:"cost_usd,omitempty"`
+	Attachments []agentAttachment   `json:"attachments,omitempty"`
+}
+
+type agentUsage struct {
+	PromptTokens     int `json:"prompt_tokens,omitempty"`
+	CompletionTokens int `json:"completion_tokens,omitempty"`
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+}
+
+type agentAttachment struct {
+	MimeType  string `json:"mime_type"`
+	ImageData string `json:"image_data"`
 }
 
 // callAgent sends a chat request to an agent plugin via the kernel route.
-func (r *relay) callAgent(pluginID, model, message string, imageURLs []string, isCoordinator bool, agentAlias string) (string, error) {
+func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, isCoordinator bool, agentAlias string) (*agentChatResponse, error) {
+	// Inject persona system prompt for worker calls.
+	systemPrompt := ""
+	if !isCoordinator && agentAlias != "" {
+		if p := r.lookupPersona(agentAlias); p != nil {
+			systemPrompt = p.SystemPrompt
+			if p.Model != "" && model == "" {
+				model = p.Model
+			}
+		}
+	}
+
+	conversation := append(history, conversationMsg{Role: "user", Content: message})
+
 	reqBody := agentChatRequest{
 		Message:       message,
 		Model:         model,
 		ImageURLs:     imageURLs,
-		Conversation:  []conversationMsg{{Role: "user", Content: message}},
+		Conversation:  conversation,
 		IsCoordinator: isCoordinator,
 		AgentAlias:    agentAlias,
+		SystemPrompt:  systemPrompt,
 	}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("marshal: %w", err)
+		return nil, fmt.Errorf("marshal: %w", err)
 	}
 
-	respBody, err := r.sdk.RouteToPlugin(context.Background(), pluginID, "POST", "/chat", bytes.NewReader(body))
+	respBody, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST", "/chat", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var chatResp agentChatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return chatResp.Response, nil
+	return &chatResp, nil
 }
 
 // --- Workspace connection management ---
@@ -270,7 +777,6 @@ func (r *relay) disconnect(workspaceID string) {
 // --- Config & routing management endpoints ---
 
 // handleSetCoordinator sets the coordinator agent for a source plugin.
-// Accepts either plugin_id directly or alias (resolved from the alias map).
 func (r *relay) handleSetCoordinator(c *gin.Context) {
 	var req struct {
 		SourcePlugin string `json:"source_plugin"`
@@ -291,7 +797,6 @@ func (r *relay) handleSetCoordinator(c *gin.Context) {
 	pluginID := req.PluginID
 	model := req.Model
 
-	// If alias is provided, resolve it to a plugin ID.
 	if req.Alias != "" && pluginID == "" {
 		aliases := r.routes.Aliases()
 		if aliases == nil {
@@ -411,7 +916,7 @@ func main() {
 		}
 	}
 
-	var relayRef *relay // set after construction
+	var relayRef *relay
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
@@ -433,21 +938,53 @@ func main() {
 	r := newRelay(sdkClient)
 	relayRef = r
 
-	// Subscribe to alias updates from kernel (before Start).
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Subscribe to alias updates from infra-alias-registry.
+	// Converts registry entries to AliasInfo and replaces the alias map.
+	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
 		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
+			Aliases []struct {
+				Name        string `json:"name"`
+				Type        string `json:"type"`
+				Plugin      string `json:"plugin"`
+				Provider    string `json:"provider"`
+				Model       string `json:"model"`
+				SystemPrompt string `json:"system_prompt"`
+			} `json:"aliases"`
 		}
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("alias update parse error: %v", err)
+			log.Printf("alias:update parse error: %v", err)
 			return
 		}
-		r.routes.SetAliases(alias.NewAliasMap(detail.Aliases))
-		log.Printf("Aliases updated: %d entries", len(detail.Aliases))
+
+		infos := make([]alias.AliasInfo, 0, len(detail.Aliases))
+		for _, a := range detail.Aliases {
+			target := a.Plugin
+			if a.Model != "" {
+				target = a.Plugin + ":" + a.Model
+			}
+			// Map registry type to SDK capabilities for correct TargetType resolution.
+			var caps []string
+			switch a.Type {
+			case "agent":
+				caps = []string{"agent:chat"}
+			case "tool_agent":
+				// Preserve the specific agent:tool sub-capability if present in the plugin.
+				// Fall back to generic agent:tool for SDK routing.
+				caps = []string{"agent:tool"}
+			default:
+				caps = []string{"tool:mcp"}
+			}
+			infos = append(infos, alias.AliasInfo{
+				Name:         a.Name,
+				Target:       target,
+				Capabilities: caps,
+			})
+		}
+
+		r.routes.SetAliases(alias.NewAliasMap(infos))
+		log.Printf("Aliases updated from registry: %d entries", len(infos))
 	}))
 
-	// Subscribe to relay:coordinator events from messaging plugins.
-	// Addressed events queue in the kernel until we're ready, solving startup ordering.
 	sdkClient.OnEvent("relay:coordinator", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			SourcePlugin string `json:"source_plugin"`
@@ -485,7 +1022,6 @@ func main() {
 
 	sdkClient.Start(context.Background())
 
-	// Fetch initial aliases.
 	entries, err := sdkClient.FetchAliases()
 	if err != nil {
 		log.Printf("Initial alias fetch failed: %v (will update via events)", err)
@@ -494,11 +1030,11 @@ func main() {
 		log.Printf("Loaded %d aliases", len(entries))
 	}
 
-	// Fetch plugin config and apply DEFAULT_COORDINATOR.
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
 		log.Printf("Failed to fetch relay config: %v (using defaults)", err)
 	}
+
 	if v := pluginConfig["DEFAULT_COORDINATOR"]; v != "" {
 		aliases := r.routes.Aliases()
 		if aliases != nil {
@@ -519,7 +1055,17 @@ func main() {
 		r.mu.Unlock()
 	}
 
-	// Subscribe to config updates for dynamic DEFAULT_COORDINATOR changes.
+	if v := pluginConfig["MAX_ORCHESTRATION_TASKS"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			r.maxOrchestrationTasks = n
+		}
+	}
+	if v := pluginConfig["TASK_TIMEOUT_SECONDS"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			r.taskTimeoutSeconds = n
+		}
+	}
+
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
@@ -528,44 +1074,57 @@ func main() {
 			log.Printf("config:update parse error: %v", err)
 			return
 		}
-		v, ok := detail.Config["DEFAULT_COORDINATOR"]
-		if !ok {
-			return
+
+		if v, ok := detail.Config["DEFAULT_COORDINATOR"]; ok {
+			aliases := r.routes.Aliases()
+			if aliases == nil {
+				log.Printf("config:update DEFAULT_COORDINATOR: aliases not loaded yet")
+				return
+			}
+			if v == "" {
+				log.Printf("DEFAULT_COORDINATOR cleared")
+				return
+			}
+			target := aliases.Resolve(v)
+			if target == nil || target.Type != alias.TargetAgent {
+				log.Printf("config:update DEFAULT_COORDINATOR: alias @%s not found", v)
+				return
+			}
+			r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
+			log.Printf("Default coordinator updated: @%s (%s)", v, target.PluginID)
 		}
-		aliases := r.routes.Aliases()
-		if aliases == nil {
-			log.Printf("config:update DEFAULT_COORDINATOR: aliases not loaded yet")
-			return
+
+		if v, ok := detail.Config["MAX_ORCHESTRATION_TASKS"]; ok {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				r.mu.Lock()
+				r.maxOrchestrationTasks = n
+				r.mu.Unlock()
+				log.Printf("MAX_ORCHESTRATION_TASKS updated: %d", n)
+			}
 		}
-		if v == "" {
-			log.Printf("DEFAULT_COORDINATOR cleared")
-			return
+
+		if v, ok := detail.Config["TASK_TIMEOUT_SECONDS"]; ok {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				r.mu.Lock()
+				r.taskTimeoutSeconds = n
+				r.mu.Unlock()
+				log.Printf("TASK_TIMEOUT_SECONDS updated: %d", n)
+			}
 		}
-		target := aliases.Resolve(v)
-		if target == nil || target.Type != alias.TargetAgent {
-			log.Printf("config:update DEFAULT_COORDINATOR: alias @%s not found", v)
-			return
-		}
-		r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
-		log.Printf("Default coordinator updated: @%s (%s)", v, target.PluginID)
 	}))
 
 	ginRouter := gin.Default()
 
-	// Health check.
 	ginRouter.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Main chat endpoint — all messaging plugins route here.
 	ginRouter.POST("/chat", r.handleChat)
 
-	// Routing config endpoints.
 	ginRouter.POST("/config/coordinator", r.handleSetCoordinator)
 	ginRouter.POST("/config/workspace/map", r.handleMapWorkspace)
 	ginRouter.POST("/config/workspace/unmap", r.handleUnmapWorkspace)
 
-	// Status endpoint.
 	ginRouter.GET("/status", r.handleStatus)
 
 	server := &http.Server{
@@ -573,10 +1132,7 @@ func main() {
 		Handler: ginRouter,
 	}
 
-	// Broadcast that the relay is ready — messaging plugins use this to
-	// (re)send their coordinator assignments after a relay restart.
 	go func() {
-		// Small delay to ensure the HTTP server is accepting connections.
 		time.Sleep(500 * time.Millisecond)
 		sdkClient.ReportEvent("relay:ready", "accepting coordinator and chat requests")
 	}()

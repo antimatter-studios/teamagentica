@@ -219,10 +219,11 @@ func TestHandleChat_CoordinatorDelegatesToAlias(t *testing.T) {
 	kernel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/route/agent-claude/chat":
-			// Coordinator delegates to @codex (newline-separated format).
-			json.NewEncoder(w).Encode(agentChatResponse{Response: "ROUTE:@codex\nfix the bug"})
+			// Coordinator returns a JSON DAG plan delegating to @codex.
+			plan := `{"tasks":[{"id":"t1","alias":"codex","prompt":"fix the bug","depends_on":[]}]}`
+			json.NewEncoder(w).Encode(agentChatResponse{Response: plan})
 		case "/api/route/agent-openai/chat":
-			// Codex handles the delegated message.
+			// Codex handles the delegated task.
 			json.NewEncoder(w).Encode(agentChatResponse{Response: "Bug fixed!"})
 		default:
 			http.NotFound(w, r)
