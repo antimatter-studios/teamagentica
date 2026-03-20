@@ -8,8 +8,8 @@ The Stability plugin generates images using Stability AI's Stable Diffusion 3 AP
 
 ## Capabilities
 
-- `tool:image` — Image generation tool
-- `tool:image:stability` — Stability AI-specific
+- `agent:tool:image` — Image generation tool
+- `agent:tool:image:stability` — Stability AI-specific
 
 ## Configuration
 

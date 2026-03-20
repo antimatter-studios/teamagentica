@@ -20,6 +20,29 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/relay"
 )
 
+// botEntry is one entry from the BOTS config (type: bot_token).
+type botEntry struct {
+	Alias string `json:"alias"`
+	Token string `json:"token"`
+}
+
+// parseBots parses the JSON bot_token array from the BOTS config field.
+func parseBots(raw string) []botEntry {
+	var entries []botEntry
+	if raw == "" {
+		return nil
+	}
+	_ = json.Unmarshal([]byte(raw), &entries)
+	// filter out incomplete entries
+	var valid []botEntry
+	for _, e := range entries {
+		if e.Alias != "" && e.Token != "" {
+			valid = append(valid, e)
+		}
+	}
+	return valid
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
@@ -57,22 +80,17 @@ func main() {
 		log.Fatalf("Failed to fetch plugin config: %v", err)
 	}
 
-	discordToken := pluginConfig["DISCORD_BOT_TOKEN"]
-	if discordToken == "" {
-		log.Fatalf("DISCORD_BOT_TOKEN not configured — set it in the plugin settings")
-	}
-
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true" || pluginConfig["PLUGIN_DEBUG"] == "1"
 
 	// Seed aliases from kernel (will update dynamically via alias:update events).
-	entries, err := sdkClient.FetchAliases()
+	aliasEntries, err := sdkClient.FetchAliases()
 	if err != nil {
 		log.Printf("Kernel alias fetch failed: %v (aliases will update via events)", err)
 	}
-	if len(entries) > 0 {
-		log.Printf("Loaded %d aliases from kernel", len(entries))
+	if len(aliasEntries) > 0 {
+		log.Printf("Loaded %d aliases from kernel", len(aliasEntries))
 	}
-	aliases := alias.NewAliasMap(entries)
+	aliases := alias.NewAliasMap(aliasEntries)
 
 	// Build the kernel base URL, respecting TLS setting.
 	scheme := "http"
@@ -80,46 +98,71 @@ func main() {
 		scheme = "https"
 	}
 	kernelBaseURL := fmt.Sprintf("%s://%s:%s", scheme, sdkCfg.KernelHost, sdkCfg.KernelPort)
-
-	// Create and start the Discord bot.
 	kernelClient := kernel.NewClient(kernelBaseURL, sdkCfg.PluginToken, sdkClient.TLSConfig())
 
-	discordBot, err := bot.New(discordToken, kernelClient, aliases)
-	if err != nil {
-		log.Fatalf("Failed to create bot: %v", err)
-	}
-
-	discordBot.SetSDK(sdkClient)
-	discordBot.SetRelayClient(relay.NewClient(sdkClient, manifest.ID))
-
-	if guildID := pluginConfig["DISCORD_GUILD_ID"]; guildID != "" {
-		discordBot.SetGuildID(guildID)
-	}
-
-	// Emit coordinator assignment to relay via addressed event.
-	if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
-		emitCoordinatorEvent(sdkClient, manifest.ID, coordAlias)
-	}
-	if debug {
-		discordBot.SetDebug(true)
-	}
+	guildID := pluginConfig["DISCORD_GUILD_ID"]
+	msgBufferMS := 0
 	if v := pluginConfig["MESSAGE_BUFFER_MS"]; v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {
-			discordBot.SetMessageBufferMS(ms)
+			msgBufferMS = ms
 		}
 	}
 
-	// Subscribe to live alias updates from kernel (debounced — coalesce rapid updates).
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
+	// --- Bot startup from BOTS config (type: bot_token) ---
+	botEntries := parseBots(pluginConfig["BOTS"])
+
+	var bots []*bot.Bot
+	if len(botEntries) == 0 {
+		log.Printf("No bot identities configured — waiting for BOTS config")
+	} else {
+		log.Printf("Starting %d bot(s)", len(botEntries))
+	}
+	for _, entry := range botEntries {
+		sourceID := manifest.ID
+		if len(botEntries) > 1 {
+			sourceID = manifest.ID + ":" + entry.Alias
 		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse kernel:alias:update detail: %v", err)
+		b, err := bot.New(entry.Token, kernelClient, aliases)
+		if err != nil {
+			log.Printf("ERROR: failed to create bot for alias %q: %v (skipping)", entry.Alias, err)
+			continue
+		}
+		b.SetVersion(pluginsdk.DevVersion(manifest.Version))
+		b.SetSDK(sdkClient)
+		b.SetRelayClient(relay.NewClient(sdkClient, sourceID))
+		if guildID != "" {
+			b.SetGuildID(guildID)
+		}
+		if debug {
+			b.SetDebug(true)
+		}
+		if msgBufferMS > 0 {
+			b.SetMessageBufferMS(msgBufferMS)
+		}
+		if err := b.Start(); err != nil {
+			log.Printf("ERROR: failed to start bot for alias %q: %v (skipping)", entry.Alias, err)
+			continue
+		}
+		emitCoordinatorEvent(sdkClient, sourceID, entry.Alias)
+		bots = append(bots, b)
+		log.Printf("Bot started for alias @%s (sourceID=%s)", entry.Alias, sourceID)
+	}
+
+	// Primary bot is the first one — used for channel management and slash commands.
+	var discordBot *bot.Bot
+	if len(bots) > 0 {
+		discordBot = bots[0]
+	}
+
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		infos := convertRegistryAliases(event.Detail)
+		if infos == nil {
+			log.Printf("Failed to parse alias:update detail")
 			return
 		}
-		aliases.Replace(detail.Aliases)
-		log.Printf("Hot-swapped %d aliases (seq=%d)", len(detail.Aliases), event.Seq)
+		aliases.Replace(infos)
+		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
 	}))
 
 	// Subscribe to soft config updates for dynamic changes (immediate).
@@ -131,55 +174,44 @@ func main() {
 			log.Printf("Failed to parse config:update detail: %v", err)
 			return
 		}
-		if d, ok := detail.Config["PLUGIN_DEBUG"]; ok {
-			discordBot.SetDebug(d == "true" || d == "1")
+		dbg := detail.Config["PLUGIN_DEBUG"] == "true" || detail.Config["PLUGIN_DEBUG"] == "1"
+		for _, b := range bots {
+			b.SetDebug(dbg)
 		}
 		if v, ok := detail.Config["MESSAGE_BUFFER_MS"]; ok {
 			if ms, err := strconv.Atoi(v); err == nil {
-				discordBot.SetMessageBufferMS(ms)
+				for _, b := range bots {
+					b.SetMessageBufferMS(ms)
+				}
 			}
-		}
-		if v, ok := detail.Config["COORDINATOR_ALIAS"]; ok {
-			emitCoordinatorEvent(sdkClient, manifest.ID, v)
 		}
 	}))
 
 	// Re-discover slash commands when any plugin registers (debounced to coalesce startup bursts).
 	sdkClient.OnEvent("plugin:registered", pluginsdk.NewTimedDebouncer(3*time.Second, func(event pluginsdk.EventCallback) {
 		log.Printf("plugin:registered — refreshing slash commands")
-		discordBot.RefreshCommands()
+		for _, b := range bots {
+			b.RefreshCommands()
+		}
 	}))
 
 	// Re-emit coordinator when the relay (re)starts — addressed events are consumed once.
 	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		if coordAlias := pluginConfig["COORDINATOR_ALIAS"]; coordAlias != "" {
-			log.Printf("Relay ready — re-emitting coordinator assignment")
-			emitCoordinatorEvent(sdkClient, manifest.ID, coordAlias)
+		log.Printf("Relay ready — re-emitting coordinator assignments")
+		for _, entry := range botEntries {
+			sourceID := manifest.ID
+			if len(botEntries) > 1 {
+				sourceID = manifest.ID + ":" + entry.Alias
+			}
+			emitCoordinatorEvent(sdkClient, sourceID, entry.Alias)
 		}
 	}))
-
-	if err := discordBot.Start(); err != nil {
-		log.Fatalf("Failed to start bot: %v", err)
-	}
-
-	// Shared callback store for interactive menus.
-	callbackStore := channels.NewCallbackStore()
-	discordBot.SetCallbackStore(callbackStore)
-
-	// Channel management tool handler (for MCP agent discovery).
-	chHandler := channels.NewHandler(discordBot.Session, discordBot.GuildID, callbackStore)
 
 	// HTTP server for config options, health, and tool endpoints.
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /config/options/{field}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		field := r.PathValue("field")
-		if field == "COORDINATOR_ALIAS" {
-			agentAliases := aliases.ListAgentAliases()
-			json.NewEncoder(w).Encode(map[string][]string{"options": agentAliases})
-			return
-		}
 		w.Write([]byte(`{"options":[]}`))
 	})
 
@@ -188,22 +220,29 @@ func main() {
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
 
-	mux.HandleFunc("GET /discord-commands", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		cmds := discordBot.ListRegisteredCommands()
-		if cmds == nil {
-			cmds = []bot.RegisteredCommand{}
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"commands": cmds})
-	})
+	// Channel management and slash commands require a running bot.
+	if discordBot != nil {
+		callbackStore := channels.NewCallbackStore()
+		discordBot.SetCallbackStore(callbackStore)
 
-	// Tool endpoints for MCP agent discovery.
-	mux.HandleFunc("GET /tools", chHandler.Tools)
-	mux.HandleFunc("POST /channels/create-category", chHandler.CreateCategory)
-	mux.HandleFunc("POST /channels/create", chHandler.CreateChannel)
-	mux.HandleFunc("POST /channels/list", chHandler.ListChannels)
-	mux.HandleFunc("POST /channels/delete", chHandler.DeleteChannel)
-	mux.HandleFunc("POST /channels/send-menu", chHandler.SendMenu)
+		chHandler := channels.NewHandler(discordBot.Session, discordBot.GuildID, callbackStore)
+
+		mux.HandleFunc("GET /discord-commands", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			cmds := discordBot.ListRegisteredCommands()
+			if cmds == nil {
+				cmds = []bot.RegisteredCommand{}
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"commands": cmds})
+		})
+
+		mux.HandleFunc("GET /tools", chHandler.Tools)
+		mux.HandleFunc("POST /channels/create-category", chHandler.CreateCategory)
+		mux.HandleFunc("POST /channels/create", chHandler.CreateChannel)
+		mux.HandleFunc("POST /channels/list", chHandler.ListChannels)
+		mux.HandleFunc("POST /channels/delete", chHandler.DeleteChannel)
+		mux.HandleFunc("POST /channels/send-menu", chHandler.SendMenu)
+	}
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", httpPort),
@@ -222,12 +261,14 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	// Deregister from kernel first, then close Discord session.
+	// Deregister from kernel first, then close all Discord sessions.
 	sdkClient.Stop()
 	cancel()
 
-	if err := discordBot.Stop(); err != nil {
-		log.Printf("Error stopping bot: %v", err)
+	for _, b := range bots {
+		if err := b.Stop(); err != nil {
+			log.Printf("Error stopping bot: %v", err)
+		}
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -235,6 +276,39 @@ func main() {
 	server.Shutdown(shutdownCtx)
 
 	log.Println("Discord plugin shut down")
+}
+
+// convertRegistryAliases converts the alias registry event detail into []alias.AliasInfo.
+// Registry shape: {"aliases": [{name, type, plugin, provider, model, system_prompt, ...}]}
+func convertRegistryAliases(detail string) []alias.AliasInfo {
+	var payload struct {
+		Aliases []struct {
+			Name   string `json:"name"`
+			Type   string `json:"type"`
+			Plugin string `json:"plugin"`
+			Model  string `json:"model"`
+		} `json:"aliases"`
+	}
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return nil
+	}
+	infos := make([]alias.AliasInfo, 0, len(payload.Aliases))
+	for _, e := range payload.Aliases {
+		target := e.Plugin
+		if e.Model != "" {
+			target = e.Plugin + ":" + e.Model
+		}
+		caps := []string{"tool:mcp"}
+		if e.Type == "agent" {
+			caps = []string{"agent:chat", "tool:mcp"}
+		}
+		infos = append(infos, alias.AliasInfo{
+			Name:         e.Name,
+			Target:       target,
+			Capabilities: caps,
+		})
+	}
+	return infos
 }
 
 // emitCoordinatorEvent tells the relay which alias should coordinate conversations for this plugin.

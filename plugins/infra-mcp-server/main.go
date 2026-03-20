@@ -74,18 +74,16 @@ func main() {
 
 	h.SetSDK(sdkClient)
 
-	// Subscribe to live alias updates so send_message resolves correctly.
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("mcp-server: failed to parse alias update: %v", err)
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		infos := convertRegistryAliases(event.Detail)
+		if infos == nil {
+			log.Printf("mcp-server: failed to parse alias:update detail")
 			return
 		}
 		if mcpSrv := h.MCPServer(); mcpSrv != nil {
-			mcpSrv.UpdateAliases(detail.Aliases)
-			log.Printf("mcp-server: hot-swapped %d aliases", len(detail.Aliases))
+			mcpSrv.UpdateAliases(infos)
+			log.Printf("mcp-server: hot-swapped %d aliases from registry", len(infos))
 		}
 	}))
 
@@ -146,4 +144,37 @@ func main() {
 	}
 
 	log.Println("mcp-server: shutdown complete")
+}
+
+// convertRegistryAliases converts the alias registry event detail into []alias.AliasInfo.
+// Registry shape: {"aliases": [{name, type, plugin, provider, model, system_prompt, ...}]}
+func convertRegistryAliases(detail string) []alias.AliasInfo {
+	var payload struct {
+		Aliases []struct {
+			Name   string `json:"name"`
+			Type   string `json:"type"`
+			Plugin string `json:"plugin"`
+			Model  string `json:"model"`
+		} `json:"aliases"`
+	}
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return nil
+	}
+	infos := make([]alias.AliasInfo, 0, len(payload.Aliases))
+	for _, e := range payload.Aliases {
+		target := e.Plugin
+		if e.Model != "" {
+			target = e.Plugin + ":" + e.Model
+		}
+		caps := []string{"tool:mcp"}
+		if e.Type == "agent" {
+			caps = []string{"agent:chat", "tool:mcp"}
+		}
+		infos = append(infos, alias.AliasInfo{
+			Name:         e.Name,
+			Target:       target,
+			Capabilities: caps,
+		})
+	}
+	return infos
 }

@@ -62,7 +62,7 @@ Plugins are separate Docker containers that communicate with the kernel over HTT
 - Each plugin is a standalone Go binary in a Docker container
 - Self-registers with kernel on startup via Plugin SDK
 - Reports health via periodic heartbeats (kernel monitors with 90s timeout)
-- Declares capabilities for discovery (e.g., `ai:chat`, `messaging:telegram`, `tool:image`)
+- Declares capabilities for discovery (e.g., `agent:chat`, `messaging:telegram`, `agent:tool:image`)
 - Declares config schema — kernel renders UI forms and injects config as environment variables
 - Subscribes to events and receives HTTP callbacks
 - Can be hot-reloaded (stopped/started without kernel restart)
@@ -151,9 +151,9 @@ Aliases map `@mention` names to specific plugins, optionally with model override
 
 **Routing paths in messaging bots:**
 
-1. **Direct `@alias`** — User types `@claude explain X` → fast-path directly to the agent
-2. **Coordinator delegation** — User types a generic message → coordinator agent receives `isCoordinator=true` flag → agent builds its own system prompt with available aliases → responds with `ROUTE:@alias\nmessage` to delegate → bot re-routes to target
-3. **Default agent** — No aliases configured → falls back to `DEFAULT_AGENT` plugin ID
+1. **Direct `@alias`** — User types `@claude explain X` → relay fast-paths directly to the agent
+2. **Coordinator** — User types a generic message → relay routes to coordinator agent → coordinator can answer directly or return a DAG plan for multi-agent orchestration
+3. **Fallback** — If no per-source coordinator is set, uses the relay's `DEFAULT_COORDINATOR` config
 
 Aliases are stored in SQLite, managed via the admin UI, and hot-swapped to plugins via `kernel:alias:update` events.
 

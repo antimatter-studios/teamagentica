@@ -14,7 +14,6 @@ The chat plugin powers the web UI chat experience. It manages conversations, rou
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `DEFAULT_AGENT` | select (dynamic) | no | `""` | Default agent alias for unaddressed messages |
 | `PLUGIN_DATA_PATH` | string | no | `/data` | Data directory |
 | `PLUGIN_PORT` | int | no | `8092` | HTTP port |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Verbose logging |
@@ -24,7 +23,7 @@ The chat plugin powers the web UI chat experience. It manages conversations, rou
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `GET` | `/config/options/:field` | Dynamic options (e.g., agent list for `DEFAULT_AGENT`) |
+| `GET` | `/config/options/:field` | Dynamic config options |
 | `GET` | `/agents` | List available agents from alias map |
 | `GET` | `/conversations` | List user's conversations (JWT auth) |
 | `POST` | `/conversations` | Create conversation |
@@ -40,15 +39,15 @@ The chat plugin powers the web UI chat experience. It manages conversations, rou
 ### Subscriptions
 
 - `kernel:alias:update` — Hot-swaps alias map (debounced 2s)
-- `config:update` — Updates `DEFAULT_AGENT` setting
+- `config:update` — Updates `PLUGIN_DEBUG` setting
 
 ## Usage
 
 ### Message Routing
 
-1. **`@alias` prefix**: Routes directly to the named agent
-2. **No prefix**: Routes to coordinator agent (or `DEFAULT_AGENT`)
-3. **Coordinator delegation**: If coordinator responds with `DELEGATE:@alias:msg`, re-routes to that agent
+1. **`@alias` prefix**: Routes directly to the named agent (via relay)
+2. **No prefix**: Routes to coordinator agent (via infra-agent-relay)
+3. **Coordinator delegation**: Coordinator can delegate to other agents via DAG orchestration
 
 ### Media Handling
 

@@ -8,8 +8,8 @@ The Seedance plugin generates videos using the Seedance API. It uses an asynchro
 
 ## Capabilities
 
-- `tool:video` — Video generation tool
-- `tool:video:seedance` — Seedance-specific
+- `agent:tool:video` — Video generation tool
+- `agent:tool:video:seedance` — Seedance-specific
 
 ## Configuration
 

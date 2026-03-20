@@ -81,8 +81,8 @@ func TestFindVideoTool_Success(t *testing.T) {
 		if r.URL.Path != "/api/plugins/search" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("capability"); got != "tool:video:veo" {
-			t.Errorf("expected capability=tool:video:veo, got %q", got)
+		if got := r.URL.Query().Get("capability"); got != "agent:tool:video:veo" {
+			t.Errorf("expected capability=agent:tool:video:veo, got %q", got)
 		}
 		resp := searchResponse{
 			Plugins: []pluginInfo{

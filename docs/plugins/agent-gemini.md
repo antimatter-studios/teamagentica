@@ -8,8 +8,8 @@ The Gemini agent plugin provides AI chat using Google's Generative Language API.
 
 ## Capabilities
 
-- `ai:chat` — General AI chat interface
-- `ai:chat:gemini` — Gemini-specific provider
+- `agent:chat` — General AI chat interface
+- `agent:chat:gemini` — Gemini-specific provider
 
 ## Configuration
 

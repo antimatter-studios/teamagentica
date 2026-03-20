@@ -22,7 +22,6 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 | `TELEGRAM_WEBHOOK_URL` | string | no | `""` | Webhook URL (visible when mode=webhook) |
 | `TELEGRAM_ALLOWED_USERS` | string | no | `""` | Comma-separated Telegram user IDs to allow |
 | `TELEGRAM_HTTP_PORT` | int | no | `8443` | HTTP port |
-| `DEFAULT_AGENT` | select | no | `""` | Coordinator agent alias (dynamic options) |
 | `MESSAGE_BUFFER_MS` | number | no | `1000` | Debounce window in ms for consolidating sequential messages. Set to 0 to disable. |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Verbose logging |
 
@@ -31,7 +30,7 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check (includes current mode) |
-| `GET` | `/config/options/:field` | Dynamic agent list for DEFAULT_AGENT |
+| `GET` | `/config/options/:field` | Dynamic config options |
 | `POST` | `/webhook` | Telegram webhook delivery |
 
 ## Events
@@ -39,7 +38,7 @@ The Telegram plugin connects TeamAgentica to Telegram. It supports both long-pol
 ### Subscriptions
 
 - `kernel:alias:update` — Hot-swaps alias map (debounced 2s)
-- `config:update` — Updates `DEFAULT_AGENT`, `MESSAGE_BUFFER_MS`, `PLUGIN_DEBUG`
+- `config:update` — Updates `MESSAGE_BUFFER_MS`, `PLUGIN_DEBUG`
 - `webhook:ready` — Registers route with network-webhook-ingress
 - `webhook:plugin:url` — Transitions from polling to webhook mode
 

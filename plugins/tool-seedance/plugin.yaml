@@ -2,10 +2,12 @@ id: tool-seedance
 name: "Seedance Video"
 description: "AI video generation tool powered by Seedance 2.0 API"
 group: tools
-version: "2.0.2"
+version: "2.0.4"
 image: "teamagentica-tool-seedance:latest"
 author: teamagentica
 tags: [video, ai, tool, seedance]
+capabilities: ["agent:tool:video-gen"]
+dependencies: ["cost:tracking"]
 config_schema:
   SEEDANCE_API_KEY:
     type: string
@@ -19,11 +21,6 @@ config_schema:
     default: seedance-2.0
     dynamic: true
     order: 2
-  PLUGIN_ALIASES:
-    type: aliases
-    label: "Aliases"
-    help_text: "Define routing aliases for this plugin."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

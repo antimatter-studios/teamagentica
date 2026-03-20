@@ -8,8 +8,8 @@ The OpenRouter agent plugin provides AI chat through OpenRouter's unified API, g
 
 ## Capabilities
 
-- `ai:chat` — General AI chat interface
-- `ai:chat:openrouter` — OpenRouter-specific provider
+- `agent:chat` — General AI chat interface
+- `agent:chat:openrouter` — OpenRouter-specific provider
 
 ## Configuration
 

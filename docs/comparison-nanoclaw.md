@@ -142,7 +142,7 @@ This is remarkably simple and debuggable — you can literally `ls` the IPC dire
 
 ### 1. Multi-Provider AI Support
 
-**TeamAgentica** supports any AI provider as a plugin: OpenAI, Gemini, Kimi, OpenRouter, Requesty, and more. Users can switch models per-chat via `/model` commands. The capability-based discovery system (`ai:chat`) means the Telegram bot automatically finds whichever AI agent is running.
+**TeamAgentica** supports any AI provider as a plugin: OpenAI, Gemini, Kimi, OpenRouter, Requesty, and more. Users can switch models per-chat via `/model` commands. The capability-based discovery system (`agent:chat`) means the Telegram bot automatically finds whichever AI agent is running.
 
 **NanoClaw** is Claude-only. It uses the Claude Agent SDK exclusively and requires a Claude Code subscription or Anthropic API key.
 
@@ -216,8 +216,8 @@ This is remarkably simple and debuggable — you can literally `ls` the IPC dire
 ### 7. Tool Plugin Ecosystem
 
 **TeamAgentica** supports tool plugins beyond AI chat:
-- **Video generation**: Veo, Seedance, Stability, NanoBanana — discoverable via `tool:video` capability
-- **Image generation**: via `tool:image` capability
+- **Video generation**: Veo, Seedance, Stability, NanoBanana — discoverable via `agent:tool:video` capability
+- **Image generation**: via `agent:tool:image` capability
 - **Cost tracking**: `system:cost-explorer`
 - **Tunnel/webhooks**: network-ngrok, network-webhook-ingress
 

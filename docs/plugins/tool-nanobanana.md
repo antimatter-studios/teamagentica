@@ -8,8 +8,8 @@ The NanoBanana plugin generates images using Google Gemini models with `response
 
 ## Capabilities
 
-- `tool:image` — Image generation tool
-- `tool:image:nanobanana` — NanoBanana-specific
+- `agent:tool:image` — Image generation tool
+- `agent:tool:image:nanobanana` — NanoBanana-specific
 
 ## Configuration
 

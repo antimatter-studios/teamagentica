@@ -73,8 +73,8 @@ func TestFindVideoTool_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/plugins/search" {
 			q := r.URL.Query().Get("capability")
-			if q != "tool:video:veo" {
-				t.Errorf("expected capability=tool:video:veo, got %q", q)
+			if q != "agent:tool:video:veo" {
+				t.Errorf("expected capability=agent:tool:video:veo, got %q", q)
 			}
 			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-veo", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)

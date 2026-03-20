@@ -16,9 +16,7 @@ The Discord plugin connects TeamAgentica to Discord via a bot. It responds to DM
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `DISCORD_BOT_TOKEN` | string (secret) | yes | — | Discord bot token from developer portal |
-| `DEFAULT_AGENT` | select | no | `""` | Coordinator agent alias (dynamic options) |
-| `MESSAGE_BUFFER_MS` | number | no | `1000` | Debounce window in ms for consolidating sequential messages. Set to 0 to disable. |
+| `BOTS` | bot_token | yes | — | Bot identities — each maps an alias to a Discord bot token. Single entry = single bot, multiple = multi-bot mode. |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Verbose logging |
 
 ## API Endpoints
@@ -26,14 +24,16 @@ The Discord plugin connects TeamAgentica to Discord via a bot. It responds to DM
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `GET` | `/config/options/:field` | Dynamic agent list for DEFAULT_AGENT |
+| `GET` | `/config/options/:field` | Dynamic config options |
 
 ## Events
 
 ### Subscriptions
 
 - `kernel:alias:update` — Hot-swaps alias map (debounced 2s)
-- `config:update` — Updates `DEFAULT_AGENT`, `MESSAGE_BUFFER_MS`, `PLUGIN_DEBUG`
+- `config:update` — Updates `MESSAGE_BUFFER_MS`, `PLUGIN_DEBUG`
+- `relay:ready` — Re-emits coordinator assignments when relay restarts
+- `plugin:registered` — Refreshes slash commands
 
 ## Usage
 
@@ -41,13 +41,13 @@ The Discord plugin connects TeamAgentica to Discord via a bot. It responds to DM
 
 1. Create a Discord bot at [discord.com/developers](https://discord.com/developers)
 2. Enable intents: Guild Messages, Direct Messages, Message Content
-3. Set `DISCORD_BOT_TOKEN` in plugin config
+3. Add bot identity in `BOTS` config (alias + token)
 4. Invite bot to your server with message read/send permissions
 
 ### Message Routing
 
 - **@alias prefix**: `@claude write a poem` → routes to the `claude` agent
-- **Direct mention or DM**: Routes to coordinator (`DEFAULT_AGENT`)
+- **Direct mention or DM**: Routes to coordinator (via infra-agent-relay)
 - **Coordinator delegation**: Coordinator can delegate via `ROUTE:@alias\nmessage`
 
 ### Message Buffering

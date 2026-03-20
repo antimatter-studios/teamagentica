@@ -8,8 +8,8 @@ The Requesty agent plugin provides AI chat through Requesty's unified routing AP
 
 ## Capabilities
 
-- `ai:chat` — General AI chat interface
-- `ai:chat:requesty` — Requesty-specific provider
+- `agent:chat` — General AI chat interface
+- `agent:chat:requesty` — Requesty-specific provider
 
 ## Configuration
 

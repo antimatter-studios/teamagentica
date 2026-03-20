@@ -8,8 +8,8 @@ The OpenAI agent plugin provides AI chat capabilities through two backends: dire
 
 ## Capabilities
 
-- `ai:chat` — General AI chat interface
-- `ai:chat:openai` — OpenAI-specific provider
+- `agent:chat` — General AI chat interface
+- `agent:chat:openai` — OpenAI-specific provider
 
 ## Configuration
 

@@ -20,7 +20,6 @@ The WhatsApp plugin connects TeamAgentica to WhatsApp via the WhatsApp Business 
 | `WHATSAPP_APP_SECRET` | string (secret) | no | `""` | App secret for webhook signature verification |
 | `PLUGIN_PORT` | int | no | `8091` | HTTP port |
 | `PLUGIN_DATA_PATH` | string | no | `/data` | Data directory |
-| `DEFAULT_AGENT` | string | no | `""` | Default agent alias |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Verbose logging |
 
 ## API Endpoints
@@ -36,7 +35,7 @@ The WhatsApp plugin connects TeamAgentica to WhatsApp via the WhatsApp Business 
 ### Subscriptions
 
 - `kernel:alias:update` — Hot-swaps alias map (debounced 2s)
-- `config:update` — Updates `DEFAULT_AGENT`
+- `config:update` — Updates `PLUGIN_DEBUG`
 - `webhook:ready` — Registers route with webhook-ingress
 - `webhook:plugin:url` — Receives assigned webhook URL
 

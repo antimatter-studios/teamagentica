@@ -8,8 +8,8 @@ The Inception plugin provides access to Inception Labs' Mercury models. It suppo
 
 ## Capabilities
 
-- `ai:chat` — AI chat provider
-- `ai:chat:inception` — Inception-specific provider
+- `agent:chat` — AI chat provider
+- `agent:chat:inception` — Inception-specific provider
 
 ## Configuration
 

@@ -8,8 +8,8 @@ The Claude plugin provides access to Anthropic's Claude models. It supports two 
 
 ## Capabilities
 
-- `ai:chat` — AI chat provider
-- `ai:chat:anthropic` — Anthropic-specific provider
+- `agent:chat` — AI chat provider
+- `agent:chat:anthropic` — Anthropic-specific provider
 
 ## Configuration
 

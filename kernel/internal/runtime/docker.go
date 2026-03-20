@@ -312,7 +312,7 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 
 	// Cross-mount the storage:volume plugin's data into workspace-aware plugins.
 	// workspace:manager is excluded — it already has storage-volume data at /data.
-	if !isWorkspaceManager && (hasCapabilityPrefix(plugin.GetCapabilities(), "ai:chat") ||
+	if !isWorkspaceManager && (hasCapabilityPrefix(plugin.GetCapabilities(), "agent:chat") ||
 		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:")) {
 		src := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Source, vars)
 		sub := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Subpath, vars)

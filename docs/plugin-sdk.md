@@ -274,7 +274,7 @@ err := client.UpdateManagedContainer(id, pluginsdk.UpdateContainerRequest{
 
 ```go
 // Find plugins by capability prefix
-plugins, err := client.SearchPlugins("tool:image")
+plugins, err := client.SearchPlugins("agent:tool:image")
 // Returns []PluginInfo{{ID: "tool-stability", Capabilities: [...]}, ...}
 
 // Proxy request to another plugin via kernel
@@ -330,9 +330,9 @@ promptWithTools := aliasMap.SystemPromptBlockWithTools(discoveredTools)
 
 ```go
 const (
-    TargetAgent TargetType = iota  // ai:chat plugins
-    TargetImage                    // tool:image plugins
-    TargetVideo                    // tool:video plugins
+    TargetAgent TargetType = iota  // agent:chat plugins
+    TargetImage                    // agent:tool:image plugins
+    TargetVideo                    // agent:tool:video plugins
 )
 ```
 
@@ -358,13 +358,13 @@ tlsConfig := client.TLSConfig()
 ### AI Agent Plugin
 
 All agent plugins follow this pattern:
-- Capabilities: `["ai:chat", "ai:chat:<provider>"]`
+- Capabilities: `["agent:chat", "agent:chat:<provider>"]`
 - Endpoints: `/health`, `/chat`, `/models`, `/config/options/:field`, `/usage`, `/usage/records`, `/pricing`
 - Events: emit `chat_request`, `chat_response`, `error` via `ReportEvent`; emit usage via `ReportUsage`
 
 ### Tool Plugin
 
-- Capabilities: `["tool:image", "tool:image:<provider>"]` or `["tool:video", ...]`
+- Capabilities: `["agent:tool:image", "agent:tool:image:<provider>"]` or `["agent:tool:video", ...]`
 - Endpoints: `/health`, `/generate`, `/pricing`, `/usage`
 - Sync tools return result immediately; async tools return `task_id` with a `/status/:taskId` poll endpoint
 

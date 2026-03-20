@@ -8,8 +8,8 @@ The Veo plugin generates videos using Google's Veo models via the Gemini API's l
 
 ## Capabilities
 
-- `tool:video` — Video generation tool
-- `tool:video:veo` — Veo-specific
+- `agent:tool:video` — Video generation tool
+- `agent:tool:video:veo` — Veo-specific
 
 ## Configuration
 

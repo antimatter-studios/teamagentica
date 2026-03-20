@@ -60,9 +60,9 @@ type imageGenerateResponse struct {
 
 // FindImageTool discovers an image generation plugin via capability search.
 func (c *Client) FindImageTool(provider string) (string, error) {
-	capability := "tool:image"
+	capability := "agent:tool:image"
 	if provider != "" {
-		capability = "tool:image:" + provider
+		capability = "agent:tool:image:" + provider
 	}
 	return c.findPluginByCapability(capability)
 }
@@ -137,9 +137,9 @@ type VideoStatusResponse struct {
 
 // FindVideoTool discovers a video generation plugin via capability search.
 func (c *Client) FindVideoTool(provider string) (string, error) {
-	capability := "tool:video"
+	capability := "agent:tool:video"
 	if provider != "" {
-		capability = "tool:video:" + provider
+		capability = "agent:tool:video:" + provider
 	}
 	return c.findPluginByCapability(capability)
 }

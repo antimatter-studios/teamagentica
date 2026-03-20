@@ -106,11 +106,11 @@ type videoStatusResponse struct {
 }
 
 // FindVideoTool discovers a video generation plugin via capability search.
-// If provider is non-empty, searches for that specific variant (e.g. "tool:video:veo").
+// If provider is non-empty, searches for that specific variant (e.g. "agent:tool:video:veo").
 func (c *Client) FindVideoTool(ctx context.Context, provider string) (string, error) {
-	capability := "tool:video"
+	capability := "agent:tool:video"
 	if provider != "" {
-		capability = "tool:video:" + provider
+		capability = "agent:tool:video:" + provider
 	}
 
 	url := fmt.Sprintf("%s/api/plugins/search?capability=%s", c.baseURL, capability)
@@ -244,11 +244,11 @@ type imageGenerateResponse struct {
 }
 
 // FindImageTool discovers an image generation plugin via capability search.
-// If provider is non-empty, searches for that specific variant (e.g. "tool:image:stability").
+// If provider is non-empty, searches for that specific variant (e.g. "agent:tool:image:stability").
 func (c *Client) FindImageTool(ctx context.Context, provider string) (string, error) {
-	capability := "tool:image"
+	capability := "agent:tool:image"
 	if provider != "" {
-		capability = "tool:image:" + provider
+		capability = "agent:tool:image:" + provider
 	}
 
 	url := fmt.Sprintf("%s/api/plugins/search?capability=%s", c.baseURL, capability)

@@ -54,7 +54,7 @@ Protocol version: `2025-03-26`
 
 | Tool | Description |
 |------|-------------|
-| `list_agents` | List all `ai:chat` plugins |
+| `list_agents` | List all `agent:chat` plugins |
 | `list_tools` | List all discovered tool plugins |
 | `send_message` | Send a chat message to any agent (`{agent_id, message, model?}`) |
 

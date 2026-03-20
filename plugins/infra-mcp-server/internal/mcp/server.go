@@ -366,7 +366,7 @@ func (s *Server) builtinTools() []ToolDef {
 }
 
 func (s *Server) callListAgents(req Request) *Response {
-	agents, err := s.sdk.SearchPlugins("ai:chat")
+	agents, err := s.sdk.SearchPlugins("agent:chat")
 	if err != nil {
 		return &Response{
 			JSONRPC: "2.0",

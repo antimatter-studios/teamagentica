@@ -8,8 +8,8 @@ The Kimi agent plugin provides AI chat using Moonshot's Kimi models through thei
 
 ## Capabilities
 
-- `ai:chat` — General AI chat interface
-- `ai:chat:kimi` — Kimi-specific provider
+- `agent:chat` — General AI chat interface
+- `agent:chat:kimi` — Kimi-specific provider
 
 ## Configuration
 

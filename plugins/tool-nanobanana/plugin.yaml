@@ -2,10 +2,12 @@ id: tool-nanobanana
 name: "Nano Banana Image"
 description: "AI image generation using Google Gemini's native image output"
 group: tools
-version: "1.0.2"
+version: "1.0.5"
 image: "teamagentica-tool-nanobanana:latest"
 author: teamagentica
 tags: [image, ai, tool, gemini, google]
+capabilities: ["agent:tool:image-gen"]
+dependencies: ["cost:tracking"]
 config_schema:
   GEMINI_API_KEY:
     type: string
@@ -19,11 +21,6 @@ config_schema:
     default: gemini-2.5-flash-image
     dynamic: true
     order: 2
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin. Each alias maps a short name to a plugin:model target."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

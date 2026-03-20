@@ -31,7 +31,7 @@ type AliasEntry struct {
 }
 
 // AliasInfo is a structured alias descriptor received from the kernel.
-// Capabilities are the plugin's registered capabilities (e.g. "tool:image", "ai:chat").
+// Capabilities are the plugin's registered capabilities (e.g. "tool:image", "agent:chat").
 type AliasInfo struct {
 	Name         string   `json:"name"`
 	Target       string   `json:"target"`
@@ -108,10 +108,10 @@ func targetFromInfo(pluginID string, capabilities []string) Target {
 // typeFromCapabilities determines the target type from plugin capabilities.
 func typeFromCapabilities(capabilities []string) TargetType {
 	for _, cap := range capabilities {
-		if strings.HasPrefix(cap, "tool:image") {
+		if strings.HasPrefix(cap, "agent:tool:image") || strings.HasPrefix(cap, "tool:image") {
 			return TargetImage
 		}
-		if strings.HasPrefix(cap, "tool:video") {
+		if strings.HasPrefix(cap, "agent:tool:video") || strings.HasPrefix(cap, "tool:video") {
 			return TargetVideo
 		}
 		if strings.HasPrefix(cap, "tool:storage") || strings.HasPrefix(cap, "storage:") {
@@ -213,6 +213,20 @@ func (m *AliasMap) ListAgentAliases() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// With returns a new AliasMap with the given alias added or overwritten.
+// The receiver is not modified.
+func (m *AliasMap) With(name string, target Target) *AliasMap {
+	old := m.getMap()
+	clone := make(map[string]Target, len(old)+1)
+	for k, v := range old {
+		clone[k] = v
+	}
+	clone[strings.ToLower(strings.TrimSpace(name))] = target
+	result := &AliasMap{}
+	result.p.Store(&clone)
+	return result
 }
 
 // IsEmpty returns true if no aliases are configured.
@@ -320,10 +334,10 @@ func (m *AliasMap) SystemPromptBlockWithTools(discoveredTools []ToolInfo) string
 	}
 
 	sb.WriteString("ROUTING INSTRUCTIONS:\n")
-	sb.WriteString("- If the user asks to delegate to a specific @agent or @tool, respond with EXACTLY:\nROUTE:@alias\nmessage to send\n")
-	sb.WriteString("- For image/video requests, delegate to the appropriate tool alias.\n")
-	sb.WriteString("- If you can answer directly, just respond normally.\n")
-	sb.WriteString("- If the user's request involves multiple agents, handle what you can and suggest @mentions for the rest.\n")
+	sb.WriteString("- If the request requires delegation, respond with a JSON task plan:\n```json\n{\"tasks\": [{\"id\": \"t1\", \"alias\": \"agentName\", \"prompt\": \"task\", \"depends_on\": []}]}\n```\n")
+	sb.WriteString("- Tasks with empty depends_on run in parallel. Reference prior results with {tN} in prompts.\n")
+	sb.WriteString("- Use alias \"self\" to synthesize results in worker mode (combine multiple outputs into a final answer).\n")
+	sb.WriteString("- If you can answer directly without delegation, just respond normally — no JSON needed.\n")
 
 	return sb.String()
 }
