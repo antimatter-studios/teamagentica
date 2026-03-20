@@ -5,6 +5,7 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type Board struct {
@@ -25,24 +26,25 @@ type Column struct {
 }
 
 type Card struct {
-	ID          string  `gorm:"primaryKey" json:"id"`
-	BoardID     string  `gorm:"index;not null" json:"board_id"`
-	ColumnID    string  `gorm:"index;not null" json:"column_id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Priority    string  `json:"priority"`   // "", "low", "medium", "high", "urgent"
-	Assignee    string  `json:"assignee"`
-	Labels      string  `json:"labels"`     // comma-separated
-	DueDate     *int64  `json:"due_date"`   // unix ms, nullable
-	Position    float64 `json:"position"`
-	CreatedAt   int64   `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt   int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	ID            string  `gorm:"primaryKey" json:"id"`
+	BoardID       string  `gorm:"index;not null" json:"board_id"`
+	ColumnID      string  `gorm:"index;not null" json:"column_id"`
+	Title         string  `json:"title"`
+	Description   string  `json:"description"`
+	Priority      string  `json:"priority"`       // "", "low", "medium", "high", "urgent"
+	AssigneeID    uint    `json:"assignee_id"`     // user ID (0 = unassigned)
+	AssigneeAgent string  `json:"assignee_agent"`  // agent alias ("" = none)
+	Labels        string  `json:"labels"`          // comma-separated
+	DueDate       *int64  `json:"due_date"`        // unix ms, nullable
+	Position      float64 `json:"position"`
+	CreatedAt     int64   `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt     int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
 }
 
 type Comment struct {
 	ID        string `gorm:"primaryKey" json:"id"`
 	CardID    string `gorm:"index;not null" json:"card_id"`
-	Author    string `json:"author"`
+	AuthorID  uint   `json:"author_id"` // user ID from X-User-ID header
 	Body      string `json:"body"`
 	CreatedAt int64  `gorm:"autoCreateTime:milli" json:"created_at"`
 }
@@ -53,8 +55,10 @@ type DB struct {
 
 func Open(dataPath string) (*DB, error) {
 	dbPath := filepath.Join(dataPath, "tasks.db")
-	dsn := dbPath + "?_journal_mode=DELETE&_synchronous=FULL"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
 	if err != nil {
 		return nil, err
 	}
