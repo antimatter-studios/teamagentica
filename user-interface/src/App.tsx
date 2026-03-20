@@ -15,8 +15,7 @@ import { useAuthStore } from "./stores/authStore";
 import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
 import { useTheme } from "./hooks/useTheme";
-
-type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "agents" | "marketplace" | "plugins" | "costs" | "console";
+import { useRouter, type Page } from "./hooks/useRouter";
 
 // Plugin lifecycle event types that can change which capabilities are available.
 const PLUGIN_LIFECYCLE_EVENTS = new Set([
@@ -30,7 +29,7 @@ export default function App() {
   );
   const logout = useAuthStore((s) => s.logout);
   const fetchUser = useAuthStore((s) => s.fetchUser);
-  const [page, setPage] = useState<Page>("dashboard");
+  const { page, subpath, navigate: setPage, setSubpath } = useRouter();
   const [hasChat, setHasChat] = useState(false);
   const [hasEditor, setHasEditor] = useState(false);
   const [hasTasks, setHasTasks] = useState(false);
@@ -223,7 +222,7 @@ export default function App() {
       </header>
 
       {page === "dashboard" && <Dashboard />}
-      {page === "files" && <FileBrowser />}
+      {page === "files" && <FileBrowser initialPath={subpath} onPathChange={setSubpath} />}
       {page === "tasks" && <KanbanBoard />}
       {page === "agents" && <Agents />}
       {page === "marketplace" && <Marketplace />}
