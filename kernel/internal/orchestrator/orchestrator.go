@@ -125,7 +125,7 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 
 	// Inject kernel connection info.
 	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
+	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.TLSPort
 
 	// Inject the service token stored on the plugin record.
 	if plugin.ServiceToken != "" {
@@ -201,7 +201,7 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	// Build env.
 	env := o.buildEnv(pluginID)
 	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.Port
+	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.TLSPort
 
 	if plugin.ServiceToken != "" {
 		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken

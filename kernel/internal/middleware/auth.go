@@ -116,13 +116,29 @@ func RequireCapability(cap string) gin.HandlerFunc {
 	}
 }
 
-// PluginTokenAuth validates a bearer token from a plugin service.
-// Uses the same JWT validation as user auth but does not require user-specific claims.
+// PluginTokenAuth validates a plugin's identity.
+// When mTLS is enabled, identity comes from the client certificate CN.
+// When mTLS is disabled (dev mode), falls back to JWT bearer token validation.
 func PluginTokenAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Try mTLS first — extract plugin ID from client certificate.
+		if c.Request.TLS != nil && len(c.Request.TLS.PeerCertificates) > 0 {
+			cert := c.Request.TLS.PeerCertificates[0]
+			pluginID := cert.Subject.CommonName
+			if pluginID != "" {
+				c.Set("plugin_id", pluginID)
+				c.Set("auth_method", "mtls")
+				c.Set("email", "plugin:"+pluginID)
+				c.Set("role", "service")
+				c.Next()
+				return
+			}
+		}
+
+		// Fallback to JWT bearer token (non-mTLS / dev mode).
 		header := c.GetHeader("Authorization")
 		if header == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing authorization (no client cert or bearer token)"})
 			return
 		}
 
@@ -141,26 +157,59 @@ func PluginTokenAuth() gin.HandlerFunc {
 		c.Set("claims", claims)
 		c.Set("email", claims.Email)
 		c.Set("role", claims.Role)
+		c.Set("auth_method", "jwt")
 		c.Next()
 	}
 }
 
-// CORS reflects the request origin and allows credentials.
-func CORS() gin.HandlerFunc {
+// CORS validates the request origin against the configured base domain
+// and only sets CORS headers for matching origins (exact or subdomain).
+func CORS(baseDomain string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
-		if origin != "" {
+		if origin != "" && isAllowedOrigin(origin, baseDomain) {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 		}
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
+		c.Next()
+	}
+}
+
+// isAllowedOrigin checks whether the origin's host matches the base domain
+// exactly or is a subdomain of it (e.g. "app.teamagentica.localhost").
+func isAllowedOrigin(origin, baseDomain string) bool {
+	// Strip scheme to get the host.
+	host := origin
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	// Strip port if present.
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	// Strip trailing slash.
+	host = strings.TrimRight(host, "/")
+
+	if host == baseDomain {
+		return true
+	}
+	return strings.HasSuffix(host, "."+baseDomain)
+}
+
+// SecurityHeaders adds standard security headers to every response.
+func SecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+		c.Writer.Header().Set("X-Frame-Options", "DENY")
+		c.Writer.Header().Set("X-XSS-Protection", "0")
 		c.Next()
 	}
 }

@@ -233,15 +233,16 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		}
 
 		certDir := d.certManager.GetPluginCertDir(plugin.ID)
+		// Translate container-internal path to host path for Docker bind mount.
+		hostCertDir := strings.Replace(certDir, "/data", d.dataDir, 1)
 
 		env["TEAMAGENTICA_TLS_CERT"] = filepath.Join("/certs", plugin.ID+".crt")
 		env["TEAMAGENTICA_TLS_KEY"] = filepath.Join("/certs", plugin.ID+".key")
 		env["TEAMAGENTICA_TLS_CA"] = "/certs/ca.crt"
-		env["TEAMAGENTICA_TLS_ENABLED"] = "true"
 
 		certMount = &mount.Mount{
 			Type:     mount.TypeBind,
-			Source:   certDir,
+			Source:   hostCertDir,
 			Target:   "/certs",
 			ReadOnly: true,
 		}

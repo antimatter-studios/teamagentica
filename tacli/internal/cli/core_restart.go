@@ -70,7 +70,7 @@ func runCoreRestart(cmd *cobra.Command, args []string) error {
 			Image:        ks.Image,
 			Hostname:     "teamagentica-kernel",
 			Env:          buildKernelEnv(ks, networkName),
-			ExposedPorts: nat.PortSet{"8080/tcp": struct{}{}},
+			ExposedPorts: nat.PortSet{"8080/tcp": struct{}{}, "8081/tcp": struct{}{}},
 			Labels:       labels,
 		},
 		&container.HostConfig{

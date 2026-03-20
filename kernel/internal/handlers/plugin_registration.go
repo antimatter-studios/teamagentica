@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +21,56 @@ import (
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
+
+// containerNameRe matches valid Docker container names (alphanumeric, hyphens, underscores, dots).
+var containerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// validatePluginHost checks that the host provided by a self-registering plugin
+// is not a loopback, link-local, or metadata address. Docker network IPs
+// (10.0.0.0/8, 172.16.0.0/12) and container-name hostnames are allowed.
+func validatePluginHost(host string) error {
+	if host == "" {
+		return fmt.Errorf("host is required")
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(host))
+
+	// Reject localhost explicitly.
+	if lower == "localhost" {
+		return fmt.Errorf("host %q is not allowed: localhost rejected", host)
+	}
+
+	// If it looks like a container name (not an IP), allow it.
+	if net.ParseIP(host) == nil && containerNameRe.MatchString(host) {
+		return nil
+	}
+
+	// Resolve hostname to IPs.
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// If we can't resolve and it's not a valid container name, reject.
+		return fmt.Errorf("host %q cannot be resolved: %v", host, err)
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+
+		// Reject loopback: 127.0.0.0/8, ::1
+		if ip.IsLoopback() {
+			return fmt.Errorf("host %q resolves to loopback address %s", host, ipStr)
+		}
+
+		// Reject link-local: 169.254.0.0/16 (includes cloud metadata endpoints)
+		if ip.IsLinkLocalUnicast() {
+			return fmt.Errorf("host %q resolves to link-local address %s", host, ipStr)
+		}
+	}
+
+	return nil
+}
 
 // proxyClient returns an http.Client for proxying requests to plugins.
 // Uses mTLS if clientTLS is configured, otherwise uses the default client.
@@ -81,6 +134,14 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		return
 	}
 
+	// Validate the plugin's host to prevent SSRF via host spoofing.
+	// Blocks loopback (127.x), link-local/metadata (169.254.x), and ::1.
+	// Allows Docker network IPs and container-name hostnames.
+	if err := validatePluginHost(req.Host); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid host: %v", err)})
+		return
+	}
+
 	var plugin models.Plugin
 	if result := h.db.First(&plugin, "id = ?", req.ID); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found in registry"})
@@ -127,7 +188,7 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 	}
 
 	if req.Name != "" {
-		updates["name"] = req.Name
+		updates["name"] = stripHTMLTags(req.Name)
 	}
 
 	if req.Capabilities != nil {
@@ -397,10 +458,11 @@ func (h *PluginHandler) handleAddressedEvent(sourceID, eventType, detail, destID
 }
 
 // callbackPort returns the port to use for event callbacks.
-// If the plugin registered an EventPort (ephemeral SDK event server), use that.
-// Otherwise fall back to the plugin's HTTP port.
-func callbackPort(plugin models.Plugin) int {
-	if plugin.EventPort > 0 {
+// The SDK internal server (EventPort) only serves /events and /schema.
+// Custom callback paths (e.g. /events/usage) are registered on the plugin's
+// main HTTP server, so those must use HTTPPort.
+func callbackPort(plugin models.Plugin, callbackPath string) int {
+	if callbackPath == "/events" && plugin.EventPort > 0 {
 		return plugin.EventPort
 	}
 	return plugin.HTTPPort
@@ -409,7 +471,7 @@ func callbackPort(plugin models.Plugin) int {
 // tryDispatch attempts to deliver an event payload to a plugin via HTTP POST.
 // Returns true on success (HTTP 200), false otherwise.
 func (h *PluginHandler) tryDispatch(plugin models.Plugin, callbackPath string, body []byte) bool {
-	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin), callbackPath)
+	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin, callbackPath), callbackPath)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	if h.clientTLS != nil {
@@ -516,7 +578,7 @@ func (h *PluginHandler) dispatchEvent(sub events.Subscription, body []byte) {
 		return
 	}
 
-	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin), sub.CallbackPath)
+	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin, sub.CallbackPath), sub.CallbackPath)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	if h.clientTLS != nil {

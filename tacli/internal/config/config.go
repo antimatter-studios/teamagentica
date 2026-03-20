@@ -15,7 +15,6 @@ type KernelState struct {
 	DataDir     string            `json:"data_dir,omitempty"`
 	Name        string            `json:"name,omitempty"`
 	DevMode     bool              `json:"dev_mode"`
-	MTLS        bool              `json:"mtls"`
 	NetworkName string            `json:"network_name,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 }
@@ -118,7 +117,6 @@ func (c *Config) SetProfile(p Profile) {
 			// bools are always applied when any other Kernel field is set
 			if p.Kernel.Image != "" || p.Kernel.Port != 0 || p.Kernel.Domain != "" {
 				c.Profiles[i].Kernel.DevMode = p.Kernel.DevMode
-				c.Profiles[i].Kernel.MTLS = p.Kernel.MTLS
 			}
 			return
 		}

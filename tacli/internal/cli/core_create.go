@@ -109,7 +109,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		"TEAMAGENTICA_DATA_DIR=" + dataDir,
 		"TEAMAGENTICA_DOCKER_NETWORK=" + networkName,
 		"TEAMAGENTICA_BASE_DOMAIN=" + tc.Kernel.Domain,
-		fmt.Sprintf("TEAMAGENTICA_MTLS_ENABLED=%t", tc.Kernel.MTLS),
 	}
 	if tc.Kernel.Name != "" {
 		env = append(env, "APP_NAME="+tc.Kernel.Name)
@@ -132,7 +131,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		Image:        tc.Kernel.Image,
 		Hostname:     containerName,
 		Env:          env,
-		ExposedPorts: nat.PortSet{"8080/tcp": struct{}{}},
+		ExposedPorts: nat.PortSet{"8080/tcp": struct{}{}, "8081/tcp": struct{}{}},
 		Labels:       labels,
 	}
 
@@ -201,7 +200,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			DataDir:     dataDir,
 			Name:        tc.Kernel.Name,
 			DevMode:     tc.Kernel.DevMode,
-			MTLS:        tc.Kernel.MTLS,
 			NetworkName: networkName,
 			Labels:      tc.Kernel.Labels,
 		},

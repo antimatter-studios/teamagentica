@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,13 +24,14 @@ import (
 
 // MarketplaceHandler handles marketplace endpoints: provider management, catalog browsing, install.
 type MarketplaceHandler struct {
-	db     *gorm.DB
-	Events *events.Hub
+	db         *gorm.DB
+	Events     *events.Hub
+	httpClient *http.Client // mTLS-aware client for calling provider plugins
 }
 
 // NewMarketplaceHandler creates a new MarketplaceHandler.
-func NewMarketplaceHandler(db *gorm.DB, hub *events.Hub) *MarketplaceHandler {
-	return &MarketplaceHandler{db: db, Events: hub}
+func NewMarketplaceHandler(db *gorm.DB, hub *events.Hub, client *http.Client) *MarketplaceHandler {
+	return &MarketplaceHandler{db: db, Events: hub, httpClient: client}
 }
 
 // --- request/response types ---
@@ -65,6 +69,63 @@ type CatalogGroup struct {
 	Order       int    `json:"order"`
 }
 
+// validateProviderURL checks that a provider URL is safe to fetch from.
+// It rejects non-HTTP schemes, localhost, and private/link-local IP ranges.
+func validateProviderURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("unsupported scheme %q: only http and https are allowed", parsed.Scheme)
+	}
+
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("URL has no hostname")
+	}
+
+	if strings.EqualFold(hostname, "localhost") {
+		return fmt.Errorf("localhost is not allowed as a provider URL")
+	}
+
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		return fmt.Errorf("failed to resolve hostname %q: %w", hostname, err)
+	}
+
+	privateCIDRs := []string{
+		"127.0.0.0/8",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16",
+		"::1/128",
+		"fc00::/7",
+	}
+	var privateNets []*net.IPNet
+	for _, cidr := range privateCIDRs {
+		_, n, _ := net.ParseCIDR(cidr)
+		privateNets = append(privateNets, n)
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		for _, n := range privateNets {
+			if n.Contains(ip) {
+				return fmt.Errorf("provider URL resolves to private/reserved address %s", ipStr)
+			}
+		}
+	}
+
+	return nil
+}
+
 // --- Provider management ---
 
 // ListProviders handles GET /api/marketplace/providers.
@@ -82,6 +143,11 @@ func (h *MarketplaceHandler) AddProvider(c *gin.Context) {
 	var req addProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := validateProviderURL(req.URL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider URL: " + err.Error()})
 		return
 	}
 
@@ -134,7 +200,7 @@ func (h *MarketplaceHandler) ProviderPlugins(c *gin.Context) {
 		return
 	}
 
-	entries, groups, err := fetchProviderCatalog(provider.URL, provider.Name, c.Query("q"))
+	entries, groups, err := fetchProviderCatalog(h.httpClient, provider.URL, provider.Name, c.Query("q"))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch from provider: " + err.Error()})
 		return
@@ -178,7 +244,7 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 		wg.Add(1)
 		go func(idx int, p models.Provider) {
 			defer wg.Done()
-			entries, groups, err := fetchProviderCatalog(p.URL, p.Name, q)
+			entries, groups, err := fetchProviderCatalog(h.httpClient, p.URL, p.Name, q)
 			results[idx] = providerResult{entries: entries, groups: groups, err: err}
 		}(i, prov)
 	}
@@ -218,14 +284,13 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 }
 
 // fetchProviderCatalog fetches the plugin catalog from a provider URL.
-func fetchProviderCatalog(providerURL, providerName, query string) ([]CatalogEntry, []CatalogGroup, error) {
-	url := providerURL + "/plugins"
+func fetchProviderCatalog(client *http.Client, providerURL, providerName, query string) ([]CatalogEntry, []CatalogGroup, error) {
+	fetchURL := providerURL + "/plugins"
 	if query != "" {
-		url += "?q=" + query
+		fetchURL += "?q=" + url.QueryEscape(query)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(fetchURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch %s: %w", providerURL, err)
 	}
@@ -274,7 +339,7 @@ func (h *MarketplaceHandler) SubmitManifest(c *gin.Context) {
 		return
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := h.httpClient
 	resp, err := client.Post(provider.URL+"/manifests", "application/json", bytes.NewReader(body))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach provider: " + err.Error()})
@@ -319,7 +384,7 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	}
 
 	// Fetch plugin info from provider.
-	entries, _, err := fetchProviderCatalog(provider.URL, provider.Name, req.PluginID)
+	entries, _, err := fetchProviderCatalog(h.httpClient, provider.URL, provider.Name, req.PluginID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch from provider: " + err.Error()})
 		return
@@ -370,7 +435,7 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugin, error) {
 	plugin := models.Plugin{
 		ID:      entry.PluginID,
-		Name:    entry.Name,
+		Name:    stripHTMLTags(entry.Name),
 		Version: entry.Version,
 		Image:   entry.Image,
 	}
@@ -410,7 +475,7 @@ func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models
 	}
 	visited[plugin.ID] = true
 
-	manifest, err := fetchPluginManifest(provider.URL, plugin.ID)
+	manifest, err := fetchPluginManifest(h.httpClient, provider.URL, plugin.ID)
 	if err != nil {
 		return fmt.Errorf("could not fetch manifest for %s: %w", plugin.ID, err)
 	}
@@ -447,10 +512,9 @@ func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models
 }
 
 // fetchPluginManifest fetches the full plugin.yaml manifest from a provider.
-func fetchPluginManifest(providerURL, pluginID string) (map[string]interface{}, error) {
-	url := providerURL + "/plugins/" + pluginID + "/manifest"
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
+func fetchPluginManifest(client *http.Client, providerURL, pluginID string) (map[string]interface{}, error) {
+	manifestURL := providerURL + "/plugins/" + pluginID + "/manifest"
+	resp, err := client.Get(manifestURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
@@ -570,14 +634,14 @@ func applyManifest(plugin *models.Plugin, manifest map[string]interface{}, db *g
 // findProviderPluginByCapability searches the provider catalog for a plugin
 // that declares a given capability in its manifest.
 func (h *MarketplaceHandler) findProviderPluginByCapability(provider models.Provider, capability string) *CatalogEntry {
-	entries, _, err := fetchProviderCatalog(provider.URL, provider.Name, "")
+	entries, _, err := fetchProviderCatalog(h.httpClient, provider.URL, provider.Name, "")
 	if err != nil {
 		log.Printf("marketplace: failed to fetch catalog for dep resolution: %v", err)
 		return nil
 	}
 
 	for _, e := range entries {
-		manifest, err := fetchPluginManifest(provider.URL, e.PluginID)
+		manifest, err := fetchPluginManifest(h.httpClient, provider.URL, e.PluginID)
 		if err != nil {
 			continue
 		}

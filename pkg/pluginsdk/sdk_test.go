@@ -23,7 +23,6 @@ func testEnv(t *testing.T, handler http.Handler) (*Client, *httptest.Server) {
 		KernelHost:  u.Hostname(),
 		KernelPort:  u.Port(),
 		PluginToken: "tok-abc",
-		TLSEnabled:  false,
 	}
 	reg := Registration{
 		ID:           "test-plugin",
@@ -38,7 +37,7 @@ func testEnv(t *testing.T, handler http.Handler) (*Client, *httptest.Server) {
 // --- kernelURL ---
 
 func TestKernelURL_HTTP(t *testing.T) {
-	cfg := Config{KernelHost: "10.0.0.1", KernelPort: "8080", TLSEnabled: false}
+	cfg := Config{KernelHost: "10.0.0.1", KernelPort: "8080"}
 	c := NewClient(cfg, Registration{})
 	got := c.kernelURL()
 	want := "http://10.0.0.1:8080"
@@ -48,7 +47,7 @@ func TestKernelURL_HTTP(t *testing.T) {
 }
 
 func TestKernelURL_HTTPS(t *testing.T) {
-	cfg := Config{KernelHost: "kernel.local", KernelPort: "443", TLSEnabled: true}
+	cfg := Config{KernelHost: "kernel.local", KernelPort: "443", TLSCert: "/cert.pem"}
 	c := NewClient(cfg, Registration{})
 	got := c.kernelURL()
 	want := "https://kernel.local:443"
@@ -67,7 +66,6 @@ func TestLoadConfig(t *testing.T) {
 		"TEAMAGENTICA_TLS_CERT":     "/cert.pem",
 		"TEAMAGENTICA_TLS_KEY":      "/key.pem",
 		"TEAMAGENTICA_TLS_CA":       "/ca.pem",
-		"TEAMAGENTICA_TLS_ENABLED":  "true",
 	}
 	for k, v := range envs {
 		os.Setenv(k, v)
@@ -93,19 +91,6 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.TLSCA != "/ca.pem" {
 		t.Errorf("TLSCA = %q, want %q", cfg.TLSCA, "/ca.pem")
-	}
-	if !cfg.TLSEnabled {
-		t.Errorf("TLSEnabled = false, want true")
-	}
-}
-
-func TestLoadConfig_TLSDisabledWhenNotTrue(t *testing.T) {
-	os.Setenv("TEAMAGENTICA_TLS_ENABLED", "false")
-	defer os.Unsetenv("TEAMAGENTICA_TLS_ENABLED")
-
-	cfg := LoadConfig()
-	if cfg.TLSEnabled {
-		t.Errorf("TLSEnabled = true when env is 'false', want false")
 	}
 }
 
@@ -410,8 +395,7 @@ func TestNewClient_BadTLSPaths(t *testing.T) {
 	cfg := Config{
 		KernelHost: "localhost",
 		KernelPort: "8080",
-		TLSEnabled: true,
-		TLSCert:    "/nonexistent/cert.pem",
+		TLSCert: "/nonexistent/cert.pem",
 		TLSKey:     "/nonexistent/key.pem",
 		TLSCA:      "/nonexistent/ca.pem",
 	}
@@ -427,7 +411,7 @@ func TestNewClient_BadTLSPaths(t *testing.T) {
 // --- GetServerTLSConfig with TLS disabled ---
 
 func TestGetServerTLSConfig_Disabled(t *testing.T) {
-	cfg := Config{TLSEnabled: false}
+	cfg := Config{}
 	tlsCfg, err := GetServerTLSConfig(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -438,8 +422,8 @@ func TestGetServerTLSConfig_Disabled(t *testing.T) {
 }
 
 func TestGetServerTLSConfig_MissingFields(t *testing.T) {
-	// TLS enabled but missing cert paths — should return nil, nil.
-	cfg := Config{TLSEnabled: true, TLSCert: "", TLSKey: "", TLSCA: ""}
+	// Missing cert paths — should return nil, nil.
+	cfg := Config{TLSCert: "", TLSKey: "", TLSCA: ""}
 	tlsCfg, err := GetServerTLSConfig(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

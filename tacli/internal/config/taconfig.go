@@ -29,7 +29,6 @@ type KernelConfig struct {
 	Domain  string            `yaml:"domain"`
 	DataDir string            `yaml:"data_dir"`
 	DevMode bool              `yaml:"dev_mode"`
-	MTLS    bool              `yaml:"mtls"`
 	Labels  map[string]string `yaml:"labels"`
 }
 

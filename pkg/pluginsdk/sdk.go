@@ -192,11 +192,10 @@ type Config struct {
 	KernelHost  string // TEAMAGENTICA_KERNEL_HOST
 	KernelPort  string // TEAMAGENTICA_KERNEL_PORT
 	PluginToken string // TEAMAGENTICA_PLUGIN_TOKEN (service token for auth)
-	TLSCert     string // TEAMAGENTICA_TLS_CERT
-	TLSKey      string // TEAMAGENTICA_TLS_KEY
-	TLSCA       string // TEAMAGENTICA_TLS_CA
-	TLSEnabled  bool   // TEAMAGENTICA_TLS_ENABLED
-	Candidate   bool   // TEAMAGENTICA_CANDIDATE — true if running as a candidate container
+	TLSCert   string // TEAMAGENTICA_TLS_CERT
+	TLSKey    string // TEAMAGENTICA_TLS_KEY
+	TLSCA     string // TEAMAGENTICA_TLS_CA
+	Candidate bool   // TEAMAGENTICA_CANDIDATE — true if running as a candidate container
 }
 
 // LoadConfig reads plugin SDK config from environment variables.
@@ -208,8 +207,7 @@ func LoadConfig() Config {
 		TLSCert:     os.Getenv("TEAMAGENTICA_TLS_CERT"),
 		TLSKey:      os.Getenv("TEAMAGENTICA_TLS_KEY"),
 		TLSCA:       os.Getenv("TEAMAGENTICA_TLS_CA"),
-		TLSEnabled:  os.Getenv("TEAMAGENTICA_TLS_ENABLED") == "true",
-		Candidate:   os.Getenv("TEAMAGENTICA_CANDIDATE") == "true",
+		Candidate: os.Getenv("TEAMAGENTICA_CANDIDATE") == "true",
 	}
 }
 
@@ -243,7 +241,7 @@ func NewClient(cfg Config, reg Registration) *Client {
 		IdleConnTimeout:     90 * time.Second,
 	}
 
-	if cfg.TLSEnabled && cfg.TLSCert != "" && cfg.TLSKey != "" && cfg.TLSCA != "" {
+	if cfg.TLSCert != "" && cfg.TLSKey != "" && cfg.TLSCA != "" {
 		tlsCfg, err := buildClientTLSConfig(cfg.TLSCert, cfg.TLSKey, cfg.TLSCA)
 		if err != nil {
 			log.Printf("pluginsdk: WARNING: failed to configure mTLS client: %v — falling back to plain HTTP", err)
@@ -286,7 +284,7 @@ func (c *Client) TLSConfig() *tls.Config {
 // kernelURL returns the base URL for the kernel API.
 func (c *Client) kernelURL() string {
 	scheme := "http"
-	if c.config.TLSEnabled {
+	if c.config.TLSCert != "" {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%s", scheme, c.config.KernelHost, c.config.KernelPort)
@@ -1374,7 +1372,7 @@ func buildClientTLSConfig(certPath, keyPath, caPath string) (*tls.Config, error)
 // Requires client certs from the CA for mutual authentication.
 // Returns nil if TLS is not enabled.
 func GetServerTLSConfig(cfg Config) (*tls.Config, error) {
-	if !cfg.TLSEnabled || cfg.TLSCert == "" || cfg.TLSKey == "" || cfg.TLSCA == "" {
+	if cfg.TLSCert == "" || cfg.TLSKey == "" || cfg.TLSCA == "" {
 		return nil, nil
 	}
 

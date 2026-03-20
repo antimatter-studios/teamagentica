@@ -94,7 +94,7 @@ func main() {
 
 	// Build the kernel base URL, respecting TLS setting.
 	scheme := "http"
-	if sdkCfg.TLSEnabled {
+	if sdkCfg.TLSCert != "" {
 		scheme = "https"
 	}
 	kernelBaseURL := fmt.Sprintf("%s://%s:%s", scheme, sdkCfg.KernelHost, sdkCfg.KernelPort)

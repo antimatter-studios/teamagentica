@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,6 +38,13 @@ type PluginHandler struct {
 // clientTLS is optional; pass nil to disable mTLS for proxied requests.
 func NewPluginHandler(db *gorm.DB, rt runtime.ContainerRuntime, cfg *config.Config, clientTLS *tls.Config) *PluginHandler {
 	return &PluginHandler{db: db, runtime: rt, cfg: cfg, clientTLS: clientTLS, Events: events.NewHub(), Subs: events.NewPersistentSubscriptionManager(db)}
+}
+
+// stripHTMLTags removes all HTML tags from a string to prevent XSS.
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+
+func stripHTMLTags(s string) string {
+	return strings.TrimSpace(htmlTagRe.ReplaceAllString(s, ""))
 }
 
 // --- request/response types ---
@@ -80,7 +88,7 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 
 	plugin := models.Plugin{
 		ID:       req.ID,
-		Name:     req.Name,
+		Name:     stripHTMLTags(req.Name),
 		Version:  req.Version,
 		Image:    req.Image,
 		GRPCPort: req.GRPCPort,
@@ -282,7 +290,7 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 	// Build env from config table.
 	env := h.buildEnv(plugin.ID)
 	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.TLSPort
 
 	// Pull image (non-fatal — image may be local-only).
 	if err := h.runtime.PullImage(ctx, plugin.Image); err != nil {
@@ -412,7 +420,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	// Re-start with current config.
 	env := h.buildEnv(id)
 	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.Port
+	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.TLSPort
 
 	h.Events.Emit(events.DebugEvent{
 		Type:     "start",

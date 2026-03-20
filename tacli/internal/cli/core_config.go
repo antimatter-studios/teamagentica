@@ -20,12 +20,12 @@ func init() {
 		Long: `Write kernel config values to the active profile.
 Changes take effect on next 'tacli core restart'.
 
-Supported keys: domain, mtls, name, dev_mode, port
+Supported keys: domain, name, dev_mode, port
 Labels:         label.KEY=VALUE (e.g. label.docker-proxy.foo=bar)
 Remove label:   label.KEY= (empty value removes it)
 
 Example:
-  tacli core config set mtls=false label.traefik.enable=true`,
+  tacli core config set label.traefik.enable=true`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: runCoreConfigSet,
 	}
@@ -70,8 +70,6 @@ func runCoreConfigSet(cmd *cobra.Command, args []string) error {
 		switch k {
 		case "domain":
 			profile.Kernel.Domain = v
-		case "mtls":
-			profile.Kernel.MTLS = v == "true"
 		case "name":
 			profile.Kernel.Name = v
 		case "dev_mode":
@@ -90,7 +88,7 @@ func runCoreConfigSet(cmd *cobra.Command, args []string) error {
 			profile.Kernel.Port = p
 			profile.URL = fmt.Sprintf("http://localhost:%d", p)
 		default:
-			return fmt.Errorf("unknown config key %q — valid keys: domain, mtls, name, dev_mode, data_dir, port, label.KEY", k)
+			return fmt.Errorf("unknown config key %q — valid keys: domain, name, dev_mode, data_dir, port, label.KEY", k)
 		}
 	}
 
@@ -114,7 +112,6 @@ func printKernelConfig(ks config.KernelState) {
 	r.Item(render.Fields{"name": "name", "status": ks.Name})
 	r.Item(render.Fields{"name": "data_dir", "status": ks.DataDir})
 	r.Item(render.Fields{"name": "network", "status": ks.NetworkName})
-	r.Item(render.Fields{"name": "mtls", "status": strconv.FormatBool(ks.MTLS)})
 	r.Item(render.Fields{"name": "dev_mode", "status": strconv.FormatBool(ks.DevMode)})
 
 	if len(ks.Labels) > 0 {
@@ -141,7 +138,6 @@ func buildKernelEnv(ks config.KernelState, networkName string) []string {
 		"TEAMAGENTICA_DATA_DIR=" + ks.DataDir,
 		"TEAMAGENTICA_DOCKER_NETWORK=" + networkName,
 		"TEAMAGENTICA_BASE_DOMAIN=" + ks.Domain,
-		fmt.Sprintf("TEAMAGENTICA_MTLS_ENABLED=%t", ks.MTLS),
 	}
 	if ks.Name != "" {
 		env = append(env, "APP_NAME="+ks.Name)
