@@ -200,18 +200,12 @@ func main() {
 		marketplaceGroup.POST("/upgrade", marketplaceHandler.UpgradePlugin)
 	}
 
-	// Alias routes — read available to plugin tokens, mutations require admin.
+	// Alias routes — read-only endpoint kept for migration (FetchAliases).
+	// Alias management has moved to infra-alias-registry.
 	aliasReadGroup := r.Group("/api/aliases")
 	aliasReadGroup.Use(middleware.PluginTokenAuth())
 	{
 		aliasReadGroup.GET("", pluginHandler.ListAliases)
-	}
-	aliasAdminGroup := r.Group("/api/aliases")
-	aliasAdminGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
-	{
-		aliasAdminGroup.POST("", pluginHandler.UpsertAlias)
-		aliasAdminGroup.PUT("", pluginHandler.BulkReplaceAliases)
-		aliasAdminGroup.DELETE("/:name", pluginHandler.DeleteAlias)
 	}
 
 	// Plugin self-registration routes (plugin token auth, not user auth).

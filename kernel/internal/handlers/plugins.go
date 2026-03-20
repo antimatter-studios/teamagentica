@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,17 +25,12 @@ import (
 
 // PluginHandler holds dependencies for plugin management endpoints.
 type PluginHandler struct {
-	db           *gorm.DB
-	runtime      runtime.ContainerRuntime
-	cfg          *config.Config
-	clientTLS    *tls.Config
-	Events       *events.Hub
-	Subs         *events.SubscriptionManager
-	broadcastSeq atomic.Uint64 // monotonic sequence number for broadcast events
-
-	// Kernel-side debounce for alias broadcasts.
-	aliasDebounceMu    sync.Mutex
-	aliasDebounceTimer *time.Timer
+	db        *gorm.DB
+	runtime   runtime.ContainerRuntime
+	cfg       *config.Config
+	clientTLS *tls.Config
+	Events    *events.Hub
+	Subs      *events.SubscriptionManager
 }
 
 // NewPluginHandler creates a new PluginHandler.
@@ -756,11 +749,6 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		}
 	}
 
-	// Sync PLUGIN_ALIASES config → aliases table.
-	if entry, ok := req.Config["PLUGIN_ALIASES"]; ok {
-		h.syncPluginAliases(id, entry.Value)
-	}
-
 	// Emit config:update event to the running plugin.
 	if plugin.Status == "running" && plugin.Host != "" {
 		var keys []string
@@ -963,50 +951,3 @@ func (h *PluginHandler) buildEnv(pluginID string) map[string]string {
 	return env
 }
 
-// syncPluginAliases parses a JSON array of {name, target} pairs and replaces
-// all aliases owned by this plugin in a single transaction.
-func (h *PluginHandler) syncPluginAliases(pluginID, aliasJSON string) {
-	type aliasEntry struct {
-		Name   string `json:"name"`
-		Target string `json:"target"`
-	}
-
-	var entries []aliasEntry
-	if aliasJSON != "" {
-		if err := json.Unmarshal([]byte(aliasJSON), &entries); err != nil {
-			log.Printf("syncPluginAliases: bad JSON for plugin %s: %v", pluginID, err)
-			return
-		}
-	}
-
-	tx := h.db.Begin()
-
-	// Delete all aliases owned by this plugin.
-	if err := tx.Where("plugin_id = ?", pluginID).Delete(&models.Alias{}).Error; err != nil {
-		tx.Rollback()
-		log.Printf("syncPluginAliases: failed to delete old aliases for %s: %v", pluginID, err)
-		return
-	}
-
-	// Insert new aliases.
-	for _, e := range entries {
-		if e.Name == "" || e.Target == "" {
-			continue
-		}
-		a := models.Alias{
-			Name:     e.Name,
-			Target:   e.Target,
-			PluginID: pluginID,
-		}
-		if err := tx.Create(&a).Error; err != nil {
-			tx.Rollback()
-			log.Printf("syncPluginAliases: failed to insert alias %s for %s: %v", e.Name, pluginID, err)
-			return
-		}
-	}
-
-	tx.Commit()
-	log.Printf("syncPluginAliases: plugin %s → %d aliases", pluginID, len(entries))
-
-	h.broadcastAliasUpdate()
-}
