@@ -2,7 +2,7 @@ id: storage-sss3
 name: "S3 Storage"
 description: "S3-compatible object storage powered by stupid-simple-s3"
 group: storage
-version: "1.0.3"
+version: "1.0.5"
 image: "teamagentica-storage-sss3:latest"
 author: teamagentica
 tags: [storage, s3, files, media, tool]
@@ -39,11 +39,6 @@ config_schema:
     label: "Region"
     default: us-east-1
     order: 5
-  PLUGIN_ALIASES:
-    type: aliases
-    label: Aliases
-    help_text: "Define routing aliases for this plugin."
-    order: 90
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

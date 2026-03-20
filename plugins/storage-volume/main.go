@@ -2,19 +2,16 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-volume/internal/handlers"
 )
 
@@ -74,30 +71,7 @@ func main() {
 			}
 		},
 	})
-	// Seed aliases from kernel (will update dynamically via alias:update events).
-	entries, err := sdkClient.FetchAliases()
-	if err != nil {
-		log.Printf("Kernel alias fetch failed: %v (aliases will update via events)", err)
-	}
-	if len(entries) > 0 {
-		log.Printf("Loaded %d aliases from kernel", len(entries))
-	}
-	aliases := alias.NewAliasMap(entries)
-
 	sdkClient.Start(ctx)
-
-	// Subscribe to live alias updates from kernel (debounced).
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse kernel:alias:update detail: %v", err)
-			return
-		}
-		aliases.Replace(detail.Aliases)
-		log.Printf("Hot-swapped %d aliases (seq=%d)", len(detail.Aliases), event.Seq)
-	}))
 
 	// Subscribe to config updates.
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -119,7 +93,7 @@ func main() {
 	// Ensure volumes and metadata directories exist.
 	for _, dir := range []string{volumesPath, filepath.Join(dataPath, "meta")} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Fatalf("[storage-volume] failed to create directory %s: %v", dir, err)
+			log.Printf("[storage-volume] WARNING: failed to create directory %s: %v (some operations may fail)", dir, err)
 		}
 	}
 

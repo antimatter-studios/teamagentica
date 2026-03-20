@@ -55,9 +55,6 @@ func main() {
 	}
 
 	ngrokAuthToken := pluginConfig["NGROK_AUTHTOKEN"]
-	if ngrokAuthToken == "" {
-		log.Fatalf("NGROK_AUTHTOKEN not configured — set it in the plugin settings")
-	}
 
 	ngrokDomain := pluginConfig["NGROK_DOMAIN"]
 
@@ -73,21 +70,29 @@ func main() {
 		}
 	}
 
-	// Start ngrok tunnel.
-	mgr := tunnel.NewManager(ngrokAuthToken, ngrokDomain, tunnelTarget)
+	var mgr *tunnel.Manager
 
-	url, err := mgr.Start(ctx)
-	if err != nil {
-		log.Fatalf("Failed to start ngrok tunnel: %v", err)
+	if ngrokAuthToken == "" {
+		log.Printf("WARNING: NGROK_AUTHTOKEN not configured — running idle, set it in plugin settings")
+	} else {
+		// Start ngrok tunnel.
+		mgr = tunnel.NewManager(ngrokAuthToken, ngrokDomain, tunnelTarget)
+
+		url, err := mgr.Start(ctx)
+		if err != nil {
+			log.Printf("WARNING: failed to start ngrok tunnel (running idle): %v", err)
+			mgr = nil
+		} else {
+			log.Printf("ngrok tunnel established: %s -> %s", url, tunnelTarget)
+
+			tunnelURLMu.Lock()
+			tunnelURL = url
+			tunnelURLMu.Unlock()
+
+			// Send addressed event to network-webhook-ingress (kernel queues if it's not up yet).
+			reportTunnelUpdate(sdkClient)
+		}
 	}
-	log.Printf("ngrok tunnel established: %s -> %s", url, tunnelTarget)
-
-	tunnelURLMu.Lock()
-	tunnelURL = url
-	tunnelURLMu.Unlock()
-
-	// Send addressed event to network-webhook-ingress (kernel queues if it's not up yet).
-	reportTunnelUpdate(sdkClient)
 
 	// Minimal HTTP server for health.
 	mux := http.NewServeMux()
@@ -108,8 +113,10 @@ func main() {
 	log.Printf("ngrok plugin starting on :%d", httpPort)
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
 
-	if err := mgr.Close(); err != nil {
-		log.Printf("Error closing tunnel: %v", err)
+	if mgr != nil {
+		if err := mgr.Close(); err != nil {
+			log.Printf("Error closing tunnel: %v", err)
+		}
 	}
 	log.Println("ngrok plugin shut down")
 }

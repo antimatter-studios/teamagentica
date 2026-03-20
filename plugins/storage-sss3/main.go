@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,12 +9,10 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/index"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/s3client"
@@ -48,30 +45,7 @@ func main() {
 			}
 		},
 	})
-	// Seed aliases from kernel (will update dynamically via alias:update events).
-	entries, err := sdkClient.FetchAliases()
-	if err != nil {
-		log.Printf("Kernel alias fetch failed: %v (aliases will update via events)", err)
-	}
-	if len(entries) > 0 {
-		log.Printf("Loaded %d aliases from kernel", len(entries))
-	}
-	aliases := alias.NewAliasMap(entries)
-
 	sdkClient.Start(ctx)
-
-	// Subscribe to live alias updates from kernel (debounced).
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse kernel:alias:update detail: %v", err)
-			return
-		}
-		aliases.Replace(detail.Aliases)
-		log.Printf("Hot-swapped %d aliases (seq=%d)", len(detail.Aliases), event.Seq)
-	}))
 
 	// Subscribe to config updates.
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -96,6 +70,9 @@ func main() {
 	s3Port := parseIntOrDefault(configOrDefault(pluginConfig, "SSS3_PORT", ""), 5553)
 
 	// Start sss3 subprocess.
+	var client *s3client.Client
+	var idx *index.Index
+
 	if err := sss3proc.Start(ctx, sss3proc.Config{
 		Port:        s3Port,
 		StoragePath: storagePath,
@@ -103,26 +80,26 @@ func main() {
 		SecretKey:   s3SecretKey,
 		Bucket:      s3Bucket,
 	}); err != nil {
-		log.Fatalf("[storage-sss3] failed to start sss3: %v", err)
-	}
+		log.Printf("[storage-sss3] WARNING: failed to start sss3 (running degraded): %v", err)
+	} else {
+		// Initialize S3 client only if sss3 started successfully.
+		client = s3client.New(s3client.S3Config{
+			Port:      s3Port,
+			Region:    s3Region,
+			AccessKey: s3AccessKey,
+			SecretKey: s3SecretKey,
+			Bucket:    s3Bucket,
+			Debug:     debug,
+		})
+		if err := client.EnsureBucket(ctx); err != nil {
+			log.Printf("[storage-sss3] WARNING: bucket setup failed (will retry on first use): %v", err)
+		}
 
-	// Initialize S3 client.
-	client := s3client.New(s3client.S3Config{
-		Port:      s3Port,
-		Region:    s3Region,
-		AccessKey: s3AccessKey,
-		SecretKey: s3SecretKey,
-		Bucket:    s3Bucket,
-		Debug:     debug,
-	})
-	if err := client.EnsureBucket(ctx); err != nil {
-		log.Printf("[storage-sss3] WARNING: bucket setup failed (will retry on first use): %v", err)
-	}
-
-	// Initialize and warm the metadata index.
-	idx := index.New(client)
-	if err := idx.Warm(ctx); err != nil {
-		log.Printf("[storage-sss3] WARNING: index warm failed (will retry on refresh): %v", err)
+		// Initialize and warm the metadata index.
+		idx = index.New(client)
+		if err := idx.Warm(ctx); err != nil {
+			log.Printf("[storage-sss3] WARNING: index warm failed (will retry on refresh): %v", err)
+		}
 	}
 
 	// Set up routes.
