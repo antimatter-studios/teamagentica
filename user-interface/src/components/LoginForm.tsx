@@ -1,10 +1,12 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { useAuthStore } from "../stores/authStore";
-import KoiBackground from "./KoiBackground";
+import { useVantaWaves } from "./KoiBackground";
 
 export default function LoginForm() {
   const login = useAuthStore((s) => s.login);
   const register = useAuthStore((s) => s.register);
+  const pageRef = useRef<HTMLDivElement>(null);
+  useVantaWaves(pageRef);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,8 +39,7 @@ export default function LoginForm() {
   }
 
   return (
-    <div className="login-page">
-      <KoiBackground />
+    <div className="login-page" ref={pageRef}>
       <div className="login-container">
         <div className="login-card">
           <div className="login-header">
