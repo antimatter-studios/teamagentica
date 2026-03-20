@@ -2,6 +2,7 @@ package console
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,7 +72,7 @@ func (t pluginsTab) update(msg tea.Msg) (pluginsTab, tea.Cmd) {
 			t.status = "plugins error: " + msg.err.Error()
 			return t, nil
 		}
-		t.plugins = msg.plugins
+		t.plugins = sortPluginsByType(msg.plugins)
 		if t.cursor >= len(t.plugins) {
 			t.cursor = max(0, len(t.plugins)-1)
 		}
@@ -365,7 +366,18 @@ func (t pluginsTab) renderList(w, h int) []string {
 		nameW = 8
 	}
 
+	lastType := ""
 	for i, p := range t.plugins {
+		// Insert group header when type changes.
+		pType := pluginTypeFromID(p.ID)
+		if pType != lastType {
+			if lastType != "" {
+				lines = append(lines, "") // blank separator between groups
+			}
+			lines = append(lines, sCyan.Render(" "+strings.ToUpper(pType)))
+			lastType = pType
+		}
+
 		m := metas[i]
 		icon := pluginIcon(m.displayStatus, p.Enabled)
 		name := trunc(p.Name, nameW)
@@ -505,6 +517,45 @@ func (t pluginsTab) selected() *client.PluginSummary {
 	}
 	p := t.plugins[t.cursor]
 	return &p
+}
+
+// ── sorting helpers ──────────────────────────────────────────────────────────
+
+// pluginTypeOrder defines the display order for plugin type groups.
+var pluginTypeOrder = map[string]int{
+	"agent": 0, "infra": 1, "messaging": 2, "network": 3,
+	"storage": 4, "tool": 5, "user": 6,
+}
+
+func pluginTypeFromID(id string) string {
+	if i := strings.Index(id, "-"); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
+func sortPluginsByType(plugins []client.PluginSummary) []client.PluginSummary {
+	sorted := make([]client.PluginSummary, len(plugins))
+	copy(sorted, plugins)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, tj := pluginTypeFromID(sorted[i].ID), pluginTypeFromID(sorted[j].ID)
+		oi, oki := pluginTypeOrder[ti]
+		oj, okj := pluginTypeOrder[tj]
+		if !oki {
+			oi = 100
+		}
+		if !okj {
+			oj = 100
+		}
+		if oi != oj {
+			return oi < oj
+		}
+		if ti != tj {
+			return ti < tj
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	return sorted
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────

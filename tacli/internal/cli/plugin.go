@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -428,6 +429,41 @@ func pluginConfigGet(c *client.Client, pluginID string, keys []string) error {
 	return nil
 }
 
+// pluginTypeFromID extracts the type prefix from a plugin ID (e.g. "agent-claude" → "agent").
+func pluginTypeFromID(id string) string {
+	if i := strings.Index(id, "-"); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
+// pluginTypeOrder defines the display order for plugin type groups.
+var pluginTypeOrder = map[string]int{
+	"agent": 0, "infra": 1, "messaging": 2, "network": 3,
+	"storage": 4, "tool": 5, "user": 6,
+}
+
+func sortPluginsByType(plugins []client.PluginSummary) {
+	sort.SliceStable(plugins, func(i, j int) bool {
+		ti, tj := pluginTypeFromID(plugins[i].ID), pluginTypeFromID(plugins[j].ID)
+		oi, oki := pluginTypeOrder[ti]
+		oj, okj := pluginTypeOrder[tj]
+		if !oki {
+			oi = 100
+		}
+		if !okj {
+			oj = 100
+		}
+		if oi != oj {
+			return oi < oj
+		}
+		if ti != tj {
+			return ti < tj
+		}
+		return plugins[i].Name < plugins[j].Name
+	})
+}
+
 func runPluginList(c *client.Client) error {
 	plugins, err := c.ListPlugins()
 	if err != nil {
@@ -438,6 +474,8 @@ func runPluginList(c *client.Client) error {
 		return nil
 	}
 
+	sortPluginsByType(plugins)
+
 	r := getRenderer()
 	r.GroupStart("Plugins")
 	for _, p := range plugins {
@@ -446,6 +484,7 @@ func runPluginList(c *client.Client) error {
 			enabled = "enabled"
 		}
 		r.Item(render.Fields{
+			"group":   pluginTypeFromID(p.ID),
 			"id":      p.ID,
 			"name":    p.Name,
 			"enabled": enabled,

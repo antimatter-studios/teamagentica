@@ -66,7 +66,7 @@ type configField struct {
 	Key      string
 	Label    string
 	Value    string
-	Type     string // "string", "select", "boolean", "oauth", "number", "text", "aliases"
+	Type     string // "string", "select", "boolean", "oauth", "number", "text", "aliases", "bot_token"
 	Secret   bool
 	Required bool
 	ReadOnly bool
@@ -83,13 +83,19 @@ type aliasEntry struct {
 	Target string `json:"target"`
 }
 
+// botTokenEntry is a single alias→token pair stored as JSON in a bot_token field.
+type botTokenEntry struct {
+	Alias string `json:"alias"`
+	Token string `json:"token"`
+}
+
 // visibleItem represents one row in the config editor's navigable list.
-// Regular fields have aliasIdx == -1. Alias sub-rows have aliasIdx >= 0.
+// Regular fields have aliasIdx == -1. Alias/bot_token sub-rows have aliasIdx >= 0.
 type visibleItem struct {
 	fieldIdx int
-	aliasIdx int // -1 = normal field, >=0 = alias row index
-	aliasCol int // 0=name, 1=target, 2=[X] delete — tracks focused cell within the row
-	isAdd    bool // true = the [Add] button for aliases
+	aliasIdx int // -1 = normal field, >=0 = sub-row index (aliases or bot_token entries)
+	aliasCol int // 0=name/alias, 1=target/token, 2=[X] delete — tracks focused cell within the row
+	isAdd    bool // true = the [Add] button for aliases/bot_token
 }
 
 func (v *visibleItem) nextCol() {
@@ -222,6 +228,26 @@ func (e configEditor) getAliases(f *configField) []aliasEntry {
 }
 
 func (e *configEditor) setAliases(f *configField, entries []aliasEntry) {
+	b, _ := json.Marshal(entries)
+	if len(entries) == 0 {
+		b = []byte("[]")
+	}
+	e.dirty[f.Key] = string(b)
+	e.applyDirty(f.Key, string(b))
+}
+
+// ── bot_token helpers ────────────────────────────────────────────────────────
+
+func (e configEditor) getBotTokens(f *configField) []botTokenEntry {
+	val := e.currentValue(f)
+	var entries []botTokenEntry
+	if val != "" {
+		_ = json.Unmarshal([]byte(val), &entries)
+	}
+	return entries
+}
+
+func (e *configEditor) setBotTokens(f *configField, entries []botTokenEntry) {
 	b, _ := json.Marshal(entries)
 	if len(entries) == 0 {
 		b = []byte("[]")
@@ -390,45 +416,87 @@ func (e configEditor) updateNavigating(msg tea.KeyPressMsg) (configEditor, tea.C
 		f := &e.fields[item.fieldIdx]
 
 		// alias sub-row actions
-		if item.isAdd {
-			entries := e.getAliases(f)
-			entries = append(entries, aliasEntry{})
-			e.setAliases(f, entries)
-			e.recomputeVisible()
-			// move cursor to the new row's name column
-			for i, v := range e.visible {
-				if v.fieldIdx == item.fieldIdx && v.aliasIdx == len(entries)-1 && v.aliasCol == 0 {
-					e.cursor = i
-					break
-				}
-			}
-			e.startEditing("")
-			break
-		}
-		if item.aliasCol == 2 {
-			// [X] delete
-			entries := e.getAliases(f)
-			if item.aliasIdx < len(entries) {
-				entries = append(entries[:item.aliasIdx], entries[item.aliasIdx+1:]...)
+		if f.Type == "aliases" {
+			if item.isAdd {
+				entries := e.getAliases(f)
+				entries = append(entries, aliasEntry{})
 				e.setAliases(f, entries)
 				e.recomputeVisible()
-				if e.cursor >= len(e.visible) {
-					e.cursor = max(0, len(e.visible)-1)
+				for i, v := range e.visible {
+					if v.fieldIdx == item.fieldIdx && v.aliasIdx == len(entries)-1 && v.aliasCol == 0 {
+						e.cursor = i
+						break
+					}
 				}
+				e.startEditing("")
+				break
 			}
-			break
+			if item.aliasCol == 2 {
+				entries := e.getAliases(f)
+				if item.aliasIdx < len(entries) {
+					entries = append(entries[:item.aliasIdx], entries[item.aliasIdx+1:]...)
+					e.setAliases(f, entries)
+					e.recomputeVisible()
+					if e.cursor >= len(e.visible) {
+						e.cursor = max(0, len(e.visible)-1)
+					}
+				}
+				break
+			}
+			if item.aliasIdx >= 0 {
+				entries := e.getAliases(f)
+				if item.aliasIdx < len(entries) {
+					val := entries[item.aliasIdx].Name
+					if item.aliasCol == 1 {
+						val = entries[item.aliasIdx].Target
+					}
+					e.startEditing(val)
+				}
+				break
+			}
 		}
-		if item.aliasIdx >= 0 {
-			// edit alias name or target
-			entries := e.getAliases(f)
-			if item.aliasIdx < len(entries) {
-				val := entries[item.aliasIdx].Name
-				if item.aliasCol == 1 {
-					val = entries[item.aliasIdx].Target
+
+		// bot_token sub-row actions
+		if f.Type == "bot_token" {
+			if item.isAdd {
+				entries := e.getBotTokens(f)
+				entries = append(entries, botTokenEntry{})
+				e.setBotTokens(f, entries)
+				e.recomputeVisible()
+				for i, v := range e.visible {
+					if v.fieldIdx == item.fieldIdx && v.aliasIdx == len(entries)-1 && v.aliasCol == 0 {
+						e.cursor = i
+						break
+					}
 				}
-				e.startEditing(val)
+				e.startEditing("")
+				break
 			}
-			break
+			if item.aliasCol == 2 {
+				entries := e.getBotTokens(f)
+				if item.aliasIdx < len(entries) {
+					entries = append(entries[:item.aliasIdx], entries[item.aliasIdx+1:]...)
+					e.setBotTokens(f, entries)
+					e.recomputeVisible()
+					if e.cursor >= len(e.visible) {
+						e.cursor = max(0, len(e.visible)-1)
+					}
+				}
+				break
+			}
+			if item.aliasIdx >= 0 {
+				entries := e.getBotTokens(f)
+				if item.aliasIdx < len(entries) {
+					if item.aliasCol == 1 {
+						// token — start empty for secret entry with masked input
+						e.startEditing("")
+						e.input.EchoMode = textinput.EchoPassword
+					} else {
+						e.startEditing(entries[item.aliasIdx].Alias)
+					}
+				}
+				break
+			}
 		}
 
 		// regular field actions
@@ -462,7 +530,7 @@ func (e configEditor) updateNavigating(msg tea.KeyPressMsg) (configEditor, tea.C
 			}
 			return e, nil
 		}
-		if f.Type == "aliases" {
+		if f.Type == "aliases" || f.Type == "bot_token" {
 			// label row — do nothing, user navigates to sub-rows
 			break
 		}
@@ -543,32 +611,57 @@ func (e configEditor) updateEditing(msg tea.KeyPressMsg) (configEditor, tea.Cmd)
 		value := e.input.Value()
 		item := e.selectedItem()
 		if item != nil && item.aliasIdx >= 0 {
-			// save alias cell
 			f := &e.fields[item.fieldIdx]
-			entries := e.getAliases(f)
-			if item.aliasIdx < len(entries) {
-				if item.aliasCol == 0 {
-					entries[item.aliasIdx].Name = value
-				} else {
-					entries[item.aliasIdx].Target = value
-				}
-				e.setAliases(f, entries)
-				e.recomputeVisible()
-			}
-			// auto-advance: name → target (same row, just switch column)
-			if item.aliasCol == 0 {
-				e.visible[e.cursor].aliasCol = 1
-				entries = e.getAliases(f)
-				val := ""
+
+			if f.Type == "bot_token" {
+				// save bot_token cell
+				entries := e.getBotTokens(f)
 				if item.aliasIdx < len(entries) {
-					val = entries[item.aliasIdx].Target
+					if item.aliasCol == 0 {
+						entries[item.aliasIdx].Alias = value
+					} else {
+						entries[item.aliasIdx].Token = value
+					}
+					e.setBotTokens(f, entries)
+					e.recomputeVisible()
 				}
-				e.input.Reset()
-				e.input.EchoMode = textinput.EchoNormal
-				e.input.SetValue(val)
-				e.input.CursorEnd()
-				e.input.Focus()
-				return e, nil // stay in editing mode
+				// auto-advance: alias → token (same row, switch column)
+				if item.aliasCol == 0 {
+					e.visible[e.cursor].aliasCol = 1
+					e.input.Reset()
+					e.input.EchoMode = textinput.EchoPassword
+					e.input.SetValue("")
+					e.input.CursorEnd()
+					e.input.Focus()
+					return e, nil // stay in editing mode
+				}
+			} else {
+				// save alias cell
+				entries := e.getAliases(f)
+				if item.aliasIdx < len(entries) {
+					if item.aliasCol == 0 {
+						entries[item.aliasIdx].Name = value
+					} else {
+						entries[item.aliasIdx].Target = value
+					}
+					e.setAliases(f, entries)
+					e.recomputeVisible()
+				}
+				// auto-advance: name → target (same row, switch column)
+				if item.aliasCol == 0 {
+					e.visible[e.cursor].aliasCol = 1
+					entries = e.getAliases(f)
+					val := ""
+					if item.aliasIdx < len(entries) {
+						val = entries[item.aliasIdx].Target
+					}
+					e.input.Reset()
+					e.input.EchoMode = textinput.EchoNormal
+					e.input.SetValue(val)
+					e.input.CursorEnd()
+					e.input.Focus()
+					return e, nil // stay in editing mode
+				}
 			}
 		} else if item != nil {
 			f := &e.fields[item.fieldIdx]
@@ -603,6 +696,16 @@ func (e *configEditor) recomputeVisible() {
 			entries := e.getAliases(&e.fields[i])
 			for ai := range entries {
 				e.visible = append(e.visible, visibleItem{fieldIdx: i, aliasIdx: ai, aliasCol: 0})
+			}
+			// [Add] button
+			e.visible = append(e.visible, visibleItem{fieldIdx: i, aliasIdx: -1, isAdd: true})
+		} else if f.Type == "bot_token" {
+			// label row
+			e.visible = append(e.visible, visibleItem{fieldIdx: i, aliasIdx: -1})
+			// one row per bot — left/right switches aliasCol within the row
+			entries := e.getBotTokens(&e.fields[i])
+			for bi := range entries {
+				e.visible = append(e.visible, visibleItem{fieldIdx: i, aliasIdx: bi, aliasCol: 0})
 			}
 			// [Add] button
 			e.visible = append(e.visible, visibleItem{fieldIdx: i, aliasIdx: -1, isAdd: true})
@@ -769,8 +872,65 @@ func (e configEditor) render(w, h int, summary *client.PluginSummary, detail *cl
 		selected := vi == e.cursor
 
 		if item.isAdd {
-			// [Add] button
-			line := "      " + sMuted.Render("[Add alias]")
+			// [Add] button — label varies by field type
+			addLabel := "[Add alias]"
+			if f.Type == "bot_token" {
+				addLabel = "[+ Add bot]"
+			}
+			line := "      " + sMuted.Render(addLabel)
+			if selected {
+				line = sSel.Render(pad(stripANSI(line), w))
+			}
+			lines = append(lines, line)
+			continue
+		}
+
+		if item.aliasIdx >= 0 && f.Type == "bot_token" {
+			// bot_token row: render [alias] [token] [X] on one line
+			entries := e.getBotTokens(&f)
+			if item.aliasIdx >= len(entries) {
+				continue
+			}
+			be := entries[item.aliasIdx]
+			aliasW := (w - 14) * 35 / 100
+			if aliasW < 8 {
+				aliasW = 8
+			}
+			tokenW := w - aliasW - 14
+
+			aliasVal := be.Alias
+			tokenVal := "********"
+			if be.Token == "" {
+				tokenVal = ""
+			}
+			if e.editing && selected && item.aliasCol == 0 {
+				aliasVal = e.input.View()
+			}
+			if e.editing && selected && item.aliasCol == 1 {
+				tokenVal = e.input.View()
+			}
+
+			aliasStr := trunc(aliasVal, aliasW)
+			tokenStr := trunc(tokenVal, tokenW)
+			delStr := "[X]"
+
+			if selected {
+				switch item.aliasCol {
+				case 0:
+					aliasStr = sBold.Render(aliasStr)
+				case 1:
+					tokenStr = sBold.Render(tokenStr)
+				case 2:
+					delStr = sBold.Render(delStr)
+				}
+			}
+
+			line := fmt.Sprintf("    %-*s  %-*s  %s",
+				aliasW, aliasStr,
+				tokenW, tokenStr,
+				delStr,
+			)
+
 			if selected {
 				line = sSel.Render(pad(stripANSI(line), w))
 			}
@@ -861,6 +1021,13 @@ func (e configEditor) render(w, h int, summary *client.PluginSummary, detail *cl
 			case "aliases":
 				entries := e.getAliases(&f)
 				valStr = fmt.Sprintf("%d aliases", len(entries))
+			case "bot_token":
+				entries := e.getBotTokens(&f)
+				if len(entries) == 1 {
+					valStr = "1 bot"
+				} else {
+					valStr = fmt.Sprintf("%d bots", len(entries))
+				}
 			case "oauth":
 				if e.oauthAuthed {
 					valStr = sOK.Render("✓ authenticated")
@@ -956,7 +1123,13 @@ func titleCase(s string) string {
 	if s == "" {
 		return s
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	parts := strings.Split(s, "_")
+	for i, p := range parts {
+		if p != "" {
+			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func joinOpts(opts []string) string {

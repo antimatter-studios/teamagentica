@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -88,7 +89,7 @@ func (t marketplaceTab) update(msg tea.Msg) (marketplaceTab, tea.Cmd) {
 		if msg.err != nil {
 			t.err = msg.err.Error()
 		} else {
-			t.catalog = msg.plugins
+			t.catalog = sortCatalogByGroup(msg.plugins)
 			t.err = ""
 		}
 		if t.cursor >= len(t.catalog) {
@@ -439,6 +440,32 @@ func (t marketplaceTab) helpLine() string {
 		return "type code to confirm  esc: cancel"
 	}
 	return "j/k: navigate  i: install  u: upgrade  d: uninstall  r: refresh"
+}
+
+// ── sorting ──────────────────────────────────────────────────────────────────
+
+func sortCatalogByGroup(plugins []client.CatalogPlugin) []client.CatalogPlugin {
+	sorted := make([]client.CatalogPlugin, len(plugins))
+	copy(sorted, plugins)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		gi, gj := sorted[i].Group, sorted[j].Group
+		oi, oki := pluginTypeOrder[gi]
+		oj, okj := pluginTypeOrder[gj]
+		if !oki {
+			oi = 100
+		}
+		if !okj {
+			oj = 100
+		}
+		if oi != oj {
+			return oi < oj
+		}
+		if gi != gj {
+			return gi < gj
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	return sorted
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────

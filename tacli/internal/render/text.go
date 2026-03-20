@@ -46,6 +46,7 @@ type column struct {
 
 // columns defines the render order and styling for each field.
 var columns = []column{
+	{"group", "GROUP", func(v string, _ Fields) string { return detailStyle.Render(v) }},
 	{"name", "NAME", func(v string, _ Fields) string { return nameStyle.Render(v) }},
 	{"version", "VERSION", func(v string, _ Fields) string { return verStyle.Render(v) }},
 	{"enabled", "ENABLED", func(v string, _ Fields) string {
