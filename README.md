@@ -89,7 +89,7 @@ First visit: register at the web UI — first user becomes admin.
 | storage-sss3 | S3-compatible storage | storage:api, storage:object |
 | storage-volume | Block storage | storage:volume |
 | user-vscode-server | VS Code environment | workspace:environment |
-| builtin-provider | Plugin catalog | marketplace:provider |
+| system-teamagentica-plugin-provider | Plugin catalog | marketplace:provider |
 
 ## Documentation
 
@@ -97,6 +97,55 @@ First visit: register at the web UI — first user becomes admin.
 - [Kernel](docs/kernel.md) — API reference and configuration
 - [Plugin SDK](docs/plugin-sdk.md) — Building plugins
 - [Plugin docs](docs/) — Individual plugin documentation
+
+## Database Standard
+
+All SQLite databases across the kernel and every plugin **must** use the same connection configuration. This ensures consistent behavior for journaling, concurrency, and durability.
+
+### ORM & Driver
+
+- **ORM**: `gorm.io/gorm`
+- **Driver**: `gorm.io/driver/sqlite` (wraps `github.com/mattn/go-sqlite3`)
+- **Logger**: `logger.Default.LogMode(logger.Warn)`
+
+### DSN Parameters
+
+Append these pragma parameters to every SQLite database path:
+
+```
+?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON
+```
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `_journal_mode` | `WAL` | Write-Ahead Logging — concurrent reads during writes |
+| `_busy_timeout` | `5000` | Wait up to 5s for locked database before returning SQLITE_BUSY |
+| `_synchronous` | `NORMAL` | Safe for WAL mode — fsync on checkpoint only |
+| `_foreign_keys` | `ON` | Enforce foreign key constraints |
+
+### Example
+
+```go
+import (
+    "gorm.io/driver/sqlite"
+    "gorm.io/gorm"
+    "gorm.io/gorm/logger"
+)
+
+func OpenDB(dbPath string) (*gorm.DB, error) {
+    dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
+    return gorm.Open(sqlite.Open(dsn), &gorm.Config{
+        Logger: logger.Default.LogMode(logger.Warn),
+    })
+}
+```
+
+### Rules
+
+- **Never** use `database/sql` directly with `go-sqlite3` — always go through GORM
+- **Never** use alternative SQLite drivers (e.g. `glebarez/sqlite`) — always use `gorm.io/driver/sqlite`
+- **Never** use different journal modes (`DELETE`, `TRUNCATE`) or sync levels (`FULL`, `OFF`)
+- **Always** use `AutoMigrate()` for schema management
 
 ## Development
 
