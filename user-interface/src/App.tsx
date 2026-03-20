@@ -11,6 +11,8 @@ import CostDashboard from "./components/CostDashboard";
 import CodeEditor from "./components/CodeEditor";
 import KanbanBoard from "./components/KanbanBoard";
 import Agents from "./components/Agents";
+import Users from "./components/Users";
+import CronScheduler from "./components/CronScheduler";
 import { useAuthStore } from "./stores/authStore";
 import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
@@ -34,23 +36,20 @@ export default function App() {
   const [hasEditor, setHasEditor] = useState(false);
   const [hasTasks, setHasTasks] = useState(false);
   const [hasAgents, setHasAgents] = useState(false);
+  const [hasScheduler, setHasScheduler] = useState(false);
+  const [capabilitiesLoaded, setCapabilitiesLoaded] = useState(false);
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
   const disconnectEvents = useEventStore((s) => s.disconnect);
 
   const checkCapabilities = useCallback(() => {
-    apiClient.plugins.search("system:chat")
-      .then((p) => setHasChat(p.length > 0))
-      .catch(() => {});
-    apiClient.plugins.search("workspace:manager")
-      .then((p) => setHasEditor(p.length > 0))
-      .catch(() => {});
-    apiClient.plugins.search("system:tasks")
-      .then((p) => setHasTasks(p.length > 0))
-      .catch(() => {});
-    apiClient.plugins.search("tool:aliases")
-      .then((p) => setHasAgents(p.length > 0))
-      .catch(() => {});
+    Promise.all([
+      apiClient.plugins.search("system:chat").then((p) => setHasChat(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("workspace:manager").then((p) => setHasEditor(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("system:tasks").then((p) => setHasTasks(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("tool:aliases").then((p) => setHasAgents(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("infra:cron").then((p) => setHasScheduler(p.length > 0)).catch(() => {}),
+    ]).finally(() => setCapabilitiesLoaded(true));
   }, []);
 
   // Connect SSE event stream and run initial capability check on auth.
@@ -65,6 +64,7 @@ export default function App() {
       setHasEditor(false);
       setHasTasks(false);
       setHasAgents(false);
+      setHasScheduler(false);
     }
     return () => disconnectEvents();
   }, [authenticated, fetchUser, connectEvents, disconnectEvents, checkCapabilities]);
@@ -85,12 +85,15 @@ export default function App() {
   }, [events, checkCapabilities]);
 
   // If user is on a capability page and it becomes unavailable, redirect to dashboard.
+  // Only check after capabilities have loaded at least once to avoid premature redirects.
   useEffect(() => {
+    if (!capabilitiesLoaded) return;
     if (!hasChat && page === "chat") setPage("dashboard");
     if (!hasEditor && page === "code") setPage("dashboard");
     if (!hasTasks && page === "tasks") setPage("dashboard");
     if (!hasAgents && page === "agents") setPage("dashboard");
-  }, [hasChat, hasEditor, hasTasks, hasAgents, page]);
+    if (!hasScheduler && page === "scheduler") setPage("dashboard");
+  }, [capabilitiesLoaded, hasChat, hasEditor, hasTasks, hasAgents, hasScheduler, page]);
 
   const canAccessPlugins = user?.role === "admin";
   const { theme, setTheme, themes } = useTheme();
@@ -110,6 +113,7 @@ export default function App() {
   }, [userMenuOpen]);
 
   const adminPages = useMemo(() => [
+    { id: "users" as Page, label: "Users" },
     { id: "marketplace" as Page, label: "Marketplace" },
     { id: "plugins" as Page, label: "Plugins" },
     { id: "costs" as Page, label: "Costs" },
@@ -164,6 +168,14 @@ export default function App() {
               onClick={() => setPage("tasks")}
             >
               TASKS
+            </button>
+          )}
+          {hasScheduler && (
+            <button
+              className={`nav-tab ${page === "scheduler" ? "active" : ""}`}
+              onClick={() => setPage("scheduler")}
+            >
+              SCHEDULER
             </button>
           )}
           {hasAgents && canAccessPlugins && (
@@ -223,12 +235,14 @@ export default function App() {
 
       {page === "dashboard" && <Dashboard />}
       {page === "files" && <FileBrowser initialPath={subpath} onPathChange={setSubpath} />}
-      {page === "tasks" && <KanbanBoard />}
+      {page === "tasks" && <KanbanBoard initialSlug={subpath} onBoardChange={setSubpath} />}
       {page === "agents" && <Agents />}
       {page === "marketplace" && <Marketplace />}
       {page === "plugins" && <PluginSettings />}
       {page === "costs" && <CostDashboard />}
       {page === "console" && <DebugConsole />}
+      {page === "users" && <Users />}
+      {page === "scheduler" && <CronScheduler />}
 
       {/* Chat and Code stay mounted (hidden) to preserve iframe/websocket state */}
       {hasChat && (

@@ -10,6 +10,8 @@ import { ChatAPI } from "./chat.js";
 import { FilesAPI } from "./files.js";
 import { TasksAPI } from "./tasks.js";
 import { AgentRegistryAPI } from "./agents.js";
+import { UsersAPI } from "./users.js";
+import { SchedulerAPI } from "./scheduler.js";
 
 export class TeamAgenticaClient {
   readonly http: HttpTransport;
@@ -24,6 +26,8 @@ export class TeamAgenticaClient {
   readonly files: FilesAPI;
   readonly tasks: TasksAPI;
   readonly agents: AgentRegistryAPI;
+  readonly users: UsersAPI;
+  readonly scheduler: SchedulerAPI;
 
   constructor(config: ClientConfig) {
     this.http = new HttpTransport(config);
@@ -38,6 +42,8 @@ export class TeamAgenticaClient {
     this.files = new FilesAPI(this.http, (cap) => this.plugins.search(cap));
     this.tasks = new TasksAPI(this.http);
     this.agents = new AgentRegistryAPI(this.http);
+    this.users = new UsersAPI(this.http);
+    this.scheduler = new SchedulerAPI(this.http);
   }
 
   get baseUrl(): string {
@@ -103,3 +109,9 @@ export { TasksAPI } from "./tasks.js";
 
 export type { RegistryAlias, AgentType, CreateAliasRequest, UpdateAliasRequest, PluginModels } from "./agents.js";
 export { AgentRegistryAPI } from "./agents.js";
+
+export type { UserDetails, ServiceToken, ExternalUserMapping as UserExternalMapping, AuditLogEntry } from "./users.js";
+export { UsersAPI } from "./users.js";
+
+export type { ScheduledEvent, EventLogEntry, CreateEventRequest, UpdateEventRequest } from "./scheduler.js";
+export { SchedulerAPI } from "./scheduler.js";

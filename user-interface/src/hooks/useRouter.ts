@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 
-export type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "agents" | "marketplace" | "plugins" | "costs" | "console";
+export type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "scheduler" | "agents" | "marketplace" | "plugins" | "costs" | "console" | "users";
 
 const VALID_PAGES = new Set<Page>([
-  "dashboard", "chat", "code", "files", "tasks",
-  "agents", "marketplace", "plugins", "costs", "console",
+  "dashboard", "chat", "code", "files", "tasks", "scheduler",
+  "agents", "marketplace", "plugins", "costs", "console", "users",
 ]);
 
 function parsePath(pathname: string): { page: Page; subpath: string } {
@@ -49,6 +49,13 @@ export function useRouter() {
       return newSubpath;
     });
   }, []);
+
+  // Update page title.
+  useEffect(() => {
+    const appName = import.meta.env.VITE_APP_NAME || "TeamAgentica";
+    const label = page.charAt(0).toUpperCase() + page.slice(1);
+    document.title = `${appName} | ${label}`;
+  }, [page]);
 
   // Handle browser back/forward buttons.
   useEffect(() => {
