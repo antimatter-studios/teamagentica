@@ -28,6 +28,7 @@ type Bot struct {
 	relayClient  *relay.Client
 	botUserID    string
 	guildID      string
+	version      string
 	aliases      *alias.AliasMap
 	debug        atomic.Bool
 	sdk          *pluginsdk.Client
@@ -134,6 +135,11 @@ func (b *Bot) SetCallbackStore(cs *channels.CallbackStore) {
 	b.callbacks = cs
 }
 
+// SetVersion sets the plugin version for startup announcements.
+func (b *Bot) SetVersion(v string) {
+	b.version = v
+}
+
 // SetDebug atomically updates the debug mode.
 func (b *Bot) SetDebug(enabled bool) {
 	b.debug.Store(enabled)
@@ -198,6 +204,13 @@ func (b *Bot) Stop() error {
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	b.botUserID = r.User.ID
 	log.Printf("Connected to Discord as %s#%s (ID: %s)", r.User.Username, r.User.Discriminator, r.User.ID)
+
+	// Auto-detect guild ID from connected guilds if not explicitly configured.
+	if b.guildID == "" && len(r.Guilds) > 0 {
+		b.guildID = r.Guilds[0].ID
+		log.Printf("Auto-detected guild ID: %s", b.guildID)
+	}
+
 	// Discover slash commands in a background goroutine with retries — other plugins
 	// may not have registered with the kernel yet when onReady fires.
 	go b.discoverCommandsWithRetry(r.User.ID)
@@ -254,7 +267,11 @@ func (b *Bot) sendStartupAnnouncement(status string) {
 // buildStartupMessage constructs the announcement text.
 func (b *Bot) buildStartupMessage(status string) string {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("**%s**", status))
+	if b.version != "" {
+		lines = append(lines, fmt.Sprintf("**%s** (v%s)", status, b.version))
+	} else {
+		lines = append(lines, fmt.Sprintf("**%s**", status))
+	}
 
 	// List available slash commands.
 	if len(b.cmdOwners) > 0 {

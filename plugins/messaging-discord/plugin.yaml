@@ -2,24 +2,24 @@ id: messaging-discord
 name: "Discord Bot"
 description: "Discord bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.3"
+version: "1.0.14"
 image: "teamagentica-messaging-discord:latest"
 author: teamagentica
 tags: [chat, discord, bot]
+capabilities: ["messaging:discord", "messaging:bot", "messaging:chat"]
 dependencies: ["infra:agent-relay"]
 config_schema:
-  DISCORD_BOT_TOKEN:
-    type: string
-    label: "Discord Bot Token"
+  BOTS:
+    type: bot_token
+    label: "Bot Identities"
     required: true
-    secret: true
+    help_text: "Each bot identity maps an alias to a Discord bot token. Single entry = single bot, multiple = multi-bot mode."
     order: 1
-  COORDINATOR_ALIAS:
-    type: select
-    label: "Coordinator Alias"
-    dynamic: true
-    help_text: "Select the coordinator alias to handle messages from this bot"
-    order: 5
+  DISCORD_GUILD_ID:
+    type: string
+    label: "Guild ID"
+    help_text: "Discord server (guild) ID. If empty, auto-detected from the first connected guild."
+    order: 2
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

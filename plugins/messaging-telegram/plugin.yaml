@@ -2,18 +2,18 @@ id: messaging-telegram
 name: "Telegram Bot"
 description: "Telegram bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.6"
+version: "1.0.18"
 image: "teamagentica-messaging-telegram:latest"
 author: teamagentica
 tags: [chat, telegram, bot]
-dependencies: ["infra:agent-relay", "network:ingress", "network:webhook", "agent:chat"]
+dependencies: ["infra:agent-relay"]
 capabilities: ["messaging:telegram", "messaging:bot", "messaging:chat"]
 config_schema:
-  TELEGRAM_BOT_TOKEN:
-    type: string
-    label: "Telegram Bot Token"
+  BOTS:
+    type: bot_token
+    label: "Bot Identities"
     required: true
-    secret: true
+    help_text: "Each bot identity maps an alias to a Telegram bot token. Single entry = single bot, multiple = multi-bot mode."
     order: 1
   TELEGRAM_MODE:
     type: select
@@ -43,12 +43,6 @@ config_schema:
     label: "Allowed Users"
     help_text: "Comma-separated Telegram user IDs that are allowed to interact with the bot"
     order: 4
-  COORDINATOR_ALIAS:
-    type: select
-    label: "Coordinator Alias"
-    dynamic: true
-    help_text: "Select the coordinator alias to handle messages from this bot"
-    order: 5
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

@@ -32,6 +32,7 @@ type Bot struct {
 	token        string
 	kernelClient *kernel.Client
 	pluginID     string
+	version      string
 	allowedUsers map[int64]bool
 	pollTimeout  int
 	debug        bool
@@ -51,7 +52,7 @@ type Bot struct {
 	shutdownCh    chan struct{}
 	shutdownOnce  sync.Once
 
-	knownGroups map[int64]bool // tracked group chat IDs
+	knownChats map[int64]bool // tracked chat IDs (groups + DMs)
 }
 
 // New creates a new Bot instance and validates the token via GetMe().
@@ -84,10 +85,10 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		cancel:       cancel,
 		pollStopCh:   make(chan struct{}),
 		shutdownCh:   make(chan struct{}),
-		knownGroups:  make(map[int64]bool),
+		knownChats:  make(map[int64]bool),
 	}
 
-	b.loadKnownGroups()
+	b.loadKnownChats()
 
 	b.msgBuffer = msgbuffer.New(1*time.Second, func(channelID string, text string, mediaURLs []string) {
 		chatID, _ := strconv.ParseInt(channelID, 10, 64)
@@ -109,6 +110,11 @@ func (b *Bot) SetMessageBufferMS(ms int) {
 // SetRelayClient attaches the relay client for routing messages.
 func (b *Bot) SetRelayClient(rc *relay.Client) {
 	b.relayClient = rc
+}
+
+// SetVersion sets the plugin version for startup announcements.
+func (b *Bot) SetVersion(v string) {
+	b.version = v
 }
 
 // emitEvent sends a debug event to the kernel console.
@@ -463,9 +469,9 @@ func (b *Bot) registerCommands() {
 // handleMessage processes an incoming Telegram message.
 // Commands are handled immediately; all other messages are buffered per-chat.
 func (b *Bot) handleMessage(msg *tgbotapi.Message) {
-	// Track group chats for startup announcements.
-	if msg.Chat != nil && (msg.Chat.IsGroup() || msg.Chat.IsSuperGroup()) {
-		b.trackGroup(msg.Chat.ID)
+	// Track chats (groups + DMs) for startup announcements.
+	if msg.Chat != nil {
+		b.trackChat(msg.Chat.ID)
 	}
 
 	// Ignore messages from bots.
@@ -993,95 +999,100 @@ func splitMessage(text string, maxLen int) []string {
 	return chunks
 }
 
-// --- Known groups tracking & startup announcements ---
+// --- Known chats tracking & startup announcements ---
 
-const knownGroupsFile = "known_groups.json"
+const knownChatsFile = "known_chats.json"
 
-// knownGroupsPath returns the path to the known groups JSON file.
-func (b *Bot) knownGroupsPath() string {
-	return filepath.Join(b.dataDir, knownGroupsFile)
+// knownChatsPath returns the path to the known chats JSON file.
+func (b *Bot) knownChatsPath() string {
+	return filepath.Join(b.dataDir, knownChatsFile)
 }
 
-// loadKnownGroups reads tracked group IDs from disk.
-func (b *Bot) loadKnownGroups() {
-	data, err := os.ReadFile(b.knownGroupsPath())
+// loadKnownChats reads tracked chat IDs from disk.
+func (b *Bot) loadKnownChats() {
+	data, err := os.ReadFile(b.knownChatsPath())
 	if err != nil {
-		return // file doesn't exist yet — that's fine
+		return // file doesn't exist yet
 	}
 	var ids []int64
 	if err := json.Unmarshal(data, &ids); err != nil {
-		log.Printf("[groups] failed to parse known_groups.json: %v", err)
+		log.Printf("[chats] failed to parse %s: %v", knownChatsFile, err)
 		return
 	}
 	for _, id := range ids {
-		b.knownGroups[id] = true
+		b.knownChats[id] = true
 	}
-	log.Printf("Loaded %d known group(s)", len(b.knownGroups))
+	log.Printf("Loaded %d known chat(s)", len(b.knownChats))
 }
 
-// saveKnownGroups writes tracked group IDs to disk.
-func (b *Bot) saveKnownGroups() {
+// saveKnownChats writes tracked chat IDs to disk.
+func (b *Bot) saveKnownChats() {
 	var ids []int64
-	for id := range b.knownGroups {
+	for id := range b.knownChats {
 		ids = append(ids, id)
 	}
 	data, _ := json.Marshal(ids)
-	if err := os.WriteFile(b.knownGroupsPath(), data, 0644); err != nil {
-		log.Printf("[groups] failed to save known_groups.json: %v", err)
+	if err := os.WriteFile(b.knownChatsPath(), data, 0644); err != nil {
+		log.Printf("[chats] failed to save %s: %v", knownChatsFile, err)
 	}
 }
 
-// trackGroup records a group chat ID. Persists to disk if new.
-func (b *Bot) trackGroup(chatID int64) {
+// trackChat records a chat ID (group or DM). Persists to disk if new.
+func (b *Bot) trackChat(chatID int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.knownGroups[chatID] {
+	if b.knownChats[chatID] {
 		return
 	}
-	b.knownGroups[chatID] = true
-	log.Printf("[groups] tracking new group chat %d (total: %d)", chatID, len(b.knownGroups))
-	b.saveKnownGroups()
+	b.knownChats[chatID] = true
+	log.Printf("[chats] tracking new chat %d (total: %d)", chatID, len(b.knownChats))
+	b.saveKnownChats()
 }
 
-// sendStartupAnnouncement sends a status message to all known group chats.
+// sendStartupAnnouncement sends a status message to all known chats.
 func (b *Bot) sendStartupAnnouncement(status string) {
 	b.mu.Lock()
-	groups := make([]int64, 0, len(b.knownGroups))
-	for id := range b.knownGroups {
-		groups = append(groups, id)
+	chats := make([]int64, 0, len(b.knownChats))
+	for id := range b.knownChats {
+		chats = append(chats, id)
 	}
 	b.mu.Unlock()
 
-	if len(groups) == 0 {
-		log.Println("[announce] no known groups to announce to")
+	if len(chats) == 0 {
+		log.Println("[announce] no known chats to announce to")
 		return
 	}
 
 	msg := b.buildStartupMessage(status)
 	sent := 0
-	for _, chatID := range groups {
+	for _, chatID := range chats {
 		tgMsg := tgbotapi.NewMessage(chatID, msg)
+		tgMsg.ParseMode = tgbotapi.ModeMarkdown
 		if _, err := b.api.Send(tgMsg); err != nil {
-			log.Printf("[announce] group %d: %v", chatID, err)
-			// If the bot was removed from the group, untrack it.
+			log.Printf("[announce] chat %d: %v", chatID, err)
+			// If the bot was removed from the chat, untrack it.
 			if strings.Contains(err.Error(), "Forbidden") || strings.Contains(err.Error(), "chat not found") {
 				b.mu.Lock()
-				delete(b.knownGroups, chatID)
-				b.saveKnownGroups()
+				delete(b.knownChats, chatID)
+				b.saveKnownChats()
 				b.mu.Unlock()
-				log.Printf("[announce] removed stale group %d", chatID)
+				log.Printf("[announce] removed stale chat %d", chatID)
 			}
 		} else {
 			sent++
 		}
 	}
-	log.Printf("[announce] sent to %d/%d group(s)", sent, len(groups))
+	log.Printf("[announce] sent to %d/%d chat(s)", sent, len(chats))
 }
 
 // buildStartupMessage constructs the announcement text.
 func (b *Bot) buildStartupMessage(status string) string {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("*%s*", status))
+	if b.version != "" {
+		lines = append(lines, fmt.Sprintf("*%s* (v%s)", status, b.version))
+	} else {
+		lines = append(lines, fmt.Sprintf("*%s*", status))
+	}
 
 	if !b.aliases.IsEmpty() {
 		var aliasNames []string
