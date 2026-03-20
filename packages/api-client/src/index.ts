@@ -9,6 +9,7 @@ import { MarketplaceAPI } from "./marketplace.js";
 import { ChatAPI } from "./chat.js";
 import { FilesAPI } from "./files.js";
 import { TasksAPI } from "./tasks.js";
+import { AgentRegistryAPI } from "./agents.js";
 
 export class TeamAgenticaClient {
   readonly http: HttpTransport;
@@ -22,6 +23,7 @@ export class TeamAgenticaClient {
   readonly chat: ChatAPI;
   readonly files: FilesAPI;
   readonly tasks: TasksAPI;
+  readonly agents: AgentRegistryAPI;
 
   constructor(config: ClientConfig) {
     this.http = new HttpTransport(config);
@@ -35,6 +37,7 @@ export class TeamAgenticaClient {
     this.chat = new ChatAPI(this.http);
     this.files = new FilesAPI(this.http, (cap) => this.plugins.search(cap));
     this.tasks = new TasksAPI(this.http);
+    this.agents = new AgentRegistryAPI(this.http);
   }
 
   get baseUrl(): string {
@@ -97,3 +100,6 @@ export { FilesAPI, formatBytes, filenameFromKey, folderName } from "./files.js";
 
 export type { Board, Column, Card, Comment } from "./tasks.js";
 export { TasksAPI } from "./tasks.js";
+
+export type { RegistryAlias, AgentType, CreateAliasRequest, UpdateAliasRequest, PluginModels } from "./agents.js";
+export { AgentRegistryAPI } from "./agents.js";

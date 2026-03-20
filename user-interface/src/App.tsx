@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import LoginForm from "./components/LoginForm";
 import Dashboard from "./components/Dashboard";
@@ -10,12 +10,13 @@ import DebugConsole from "./components/DebugConsole";
 import CostDashboard from "./components/CostDashboard";
 import CodeEditor from "./components/CodeEditor";
 import KanbanBoard from "./components/KanbanBoard";
+import Agents from "./components/Agents";
 import { useAuthStore } from "./stores/authStore";
 import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
 import { useTheme } from "./hooks/useTheme";
 
-type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "marketplace" | "plugins" | "costs" | "console";
+type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "agents" | "marketplace" | "plugins" | "costs" | "console";
 
 // Plugin lifecycle event types that can change which capabilities are available.
 const PLUGIN_LIFECYCLE_EVENTS = new Set([
@@ -33,6 +34,7 @@ export default function App() {
   const [hasChat, setHasChat] = useState(false);
   const [hasEditor, setHasEditor] = useState(false);
   const [hasTasks, setHasTasks] = useState(false);
+  const [hasAgents, setHasAgents] = useState(false);
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
   const disconnectEvents = useEventStore((s) => s.disconnect);
@@ -47,6 +49,9 @@ export default function App() {
     apiClient.plugins.search("system:tasks")
       .then((p) => setHasTasks(p.length > 0))
       .catch(() => {});
+    apiClient.plugins.search("tool:aliases")
+      .then((p) => setHasAgents(p.length > 0))
+      .catch(() => {});
   }, []);
 
   // Connect SSE event stream and run initial capability check on auth.
@@ -60,6 +65,7 @@ export default function App() {
       setHasChat(false);
       setHasEditor(false);
       setHasTasks(false);
+      setHasAgents(false);
     }
     return () => disconnectEvents();
   }, [authenticated, fetchUser, connectEvents, disconnectEvents, checkCapabilities]);
@@ -84,10 +90,32 @@ export default function App() {
     if (!hasChat && page === "chat") setPage("dashboard");
     if (!hasEditor && page === "code") setPage("dashboard");
     if (!hasTasks && page === "tasks") setPage("dashboard");
-  }, [hasChat, hasEditor, hasTasks, page]);
+    if (!hasAgents && page === "agents") setPage("dashboard");
+  }, [hasChat, hasEditor, hasTasks, hasAgents, page]);
 
   const canAccessPlugins = user?.role === "admin";
   const { theme, setTheme, themes } = useTheme();
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close user menu when clicking outside.
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [userMenuOpen]);
+
+  const adminPages = useMemo(() => [
+    { id: "marketplace" as Page, label: "Marketplace" },
+    { id: "plugins" as Page, label: "Plugins" },
+    { id: "costs" as Page, label: "Costs" },
+    { id: "console" as Page, label: "Console" },
+  ], []);
 
   if (!authenticated) {
     return <LoginForm />;
@@ -139,36 +167,12 @@ export default function App() {
               TASKS
             </button>
           )}
-          {canAccessPlugins && (
+          {hasAgents && canAccessPlugins && (
             <button
-              className={`nav-tab ${page === "marketplace" ? "active" : ""}`}
-              onClick={() => setPage("marketplace")}
+              className={`nav-tab ${page === "agents" ? "active" : ""}`}
+              onClick={() => setPage("agents")}
             >
-              MARKETPLACE
-            </button>
-          )}
-          {canAccessPlugins && (
-            <button
-              className={`nav-tab ${page === "plugins" ? "active" : ""}`}
-              onClick={() => setPage("plugins")}
-            >
-              PLUGINS
-            </button>
-          )}
-          {canAccessPlugins && (
-            <button
-              className={`nav-tab ${page === "costs" ? "active" : ""}`}
-              onClick={() => setPage("costs")}
-            >
-              COSTS
-            </button>
-          )}
-          {canAccessPlugins && (
-            <button
-              className={`nav-tab ${page === "console" ? "active" : ""}`}
-              onClick={() => setPage("console")}
-            >
-              CONSOLE
+              AGENTS
             </button>
           )}
         </nav>
@@ -183,21 +187,45 @@ export default function App() {
               <option key={t.id} value={t.id}>{t.label}</option>
             ))}
           </select>
-          <div className="header-user">
-            <span className="user-email">{user?.email}</span>
-            <span className={`user-role role-${user?.role}`}>
-              {user?.role?.toUpperCase()}
-            </span>
+          <div className="user-menu" ref={userMenuRef}>
+            <button
+              className={`user-menu-btn ${userMenuOpen ? "open" : ""}`}
+              onClick={() => setUserMenuOpen((v) => !v)}
+            >
+              <span className="user-menu-email">{user?.email}</span>
+              <span className={`user-role role-${user?.role}`}>
+                {user?.role?.toUpperCase()}
+              </span>
+              <span className="user-menu-chevron">{userMenuOpen ? "▲" : "▼"}</span>
+            </button>
+            {userMenuOpen && (
+              <div className="user-menu-dropdown">
+                {canAccessPlugins && adminPages.map((p) => (
+                  <button
+                    key={p.id}
+                    className={`user-menu-item ${page === p.id ? "active" : ""}`}
+                    onClick={() => { setPage(p.id); setUserMenuOpen(false); }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                {canAccessPlugins && <div className="user-menu-divider" />}
+                <button
+                  className="user-menu-item user-menu-disconnect"
+                  onClick={() => { setUserMenuOpen(false); logout(); }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            )}
           </div>
-          <button className="logout-btn" onClick={logout}>
-            DISCONNECT
-          </button>
         </div>
       </header>
 
       {page === "dashboard" && <Dashboard />}
       {page === "files" && <FileBrowser />}
       {page === "tasks" && <KanbanBoard />}
+      {page === "agents" && <Agents />}
       {page === "marketplace" && <Marketplace />}
       {page === "plugins" && <PluginSettings />}
       {page === "costs" && <CostDashboard />}
