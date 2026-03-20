@@ -5,54 +5,37 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
-	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/relay"
 	waClient "github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/whatsapp"
 )
 
 // Bot handles incoming WhatsApp messages.
 type Bot struct {
-	wa           *waClient.Client
-	kernelClient *kernel.Client
-	sdk          *pluginsdk.Client
-	pluginID     string
-	debug        bool
-	aliases      *alias.AliasMap
-	defaultAgent atomic.Pointer[string]
+	wa       *waClient.Client
+	relay    *relay.Client
+	sdk      *pluginsdk.Client
+	pluginID string
+	debug    bool
+	aliases  *alias.AliasMap
 }
 
 // NewBot creates a new WhatsApp bot.
-// The default agent must be set via the plugin config UI (config:update event).
-func NewBot(wa *waClient.Client, kernelClient *kernel.Client, pluginID string, debug bool, aliases *alias.AliasMap) *Bot {
+func NewBot(wa *waClient.Client, rc *relay.Client, pluginID string, debug bool, aliases *alias.AliasMap) *Bot {
 	if !aliases.IsEmpty() {
 		log.Printf("Configured %d aliases", len(aliases.List()))
 	}
 	return &Bot{
-		wa:           wa,
-		kernelClient: kernelClient,
-		pluginID:     pluginID,
-		debug:        debug,
-		aliases:      aliases,
+		wa:       wa,
+		relay:    rc,
+		pluginID: pluginID,
+		debug:    debug,
+		aliases:  aliases,
 	}
-}
-
-// SetDefaultAgent atomically updates the coordinator agent plugin ID.
-func (b *Bot) SetDefaultAgent(agent string) {
-	b.defaultAgent.Store(&agent)
-	log.Printf("Coordinator agent updated: %s", agent)
-}
-
-// getDefaultAgent atomically reads the coordinator agent plugin ID.
-func (b *Bot) getDefaultAgent() string {
-	if p := b.defaultAgent.Load(); p != nil {
-		return *p
-	}
-	return ""
 }
 
 // SetSDK attaches the plugin SDK client.
@@ -147,54 +130,23 @@ func (b *Bot) handleMessage(msg waClient.Message, senderName string) {
 
 	// Handle commands.
 	if strings.HasPrefix(text, "/") {
-		b.handleCommand(chatID, senderName, text)
+		b.handleCommand(chatID, text)
 		return
 	}
 
-	// Check for direct @mention routing (fast path).
-	if !b.aliases.IsEmpty() {
-		result := b.aliases.Parse(text)
-		if result.Target != nil {
-			b.handleAliasRoute(chatID, senderName, result, imageURLs)
-			return
-		}
-	}
-
-	// Route to coordinator agent — requires DEFAULT_AGENT to be set in plugin config.
-	coordinator := b.resolveDefaultAgent()
-	if coordinator == nil {
-		log.Printf("[message] No coordinator agent configured — rejecting message from %s", senderName)
-		b.emitEvent("error", "no coordinator agent configured")
-		b.wa.SendText(chatID, "No coordinator agent configured. Please set the Coordinator Agent in the plugin settings.")
-		return
-	}
-
-	response, err := b.kernelClient.ChatWithAgentDirect(chatID, coordinator.PluginID, coordinator.Model, text, imageURLs, true, "")
-
+	// Route everything through the relay — it handles @alias routing,
+	// coordinator resolution, persona injection, and conversation memory.
+	resp, err := b.relay.Chat(chatID, text, imageURLs)
 	if err != nil {
-		log.Printf("[message] Agent error: %v", err)
-		b.emitEvent("error", fmt.Sprintf("agent error: %v", err))
+		log.Printf("[message] relay error: %v", err)
+		b.emitEvent("error", fmt.Sprintf("relay error: %v", err))
 		b.wa.SendText(chatID, "Sorry, I encountered an error processing your message.")
 		return
-	} else {
-		b.emitEvent("agent_response", fmt.Sprintf("len=%d chars", len(response)))
-
-		// Check if coordinator delegated.
-		if delegatedAlias, delegatedMsg, ok := alias.ParseCoordinatorResponse(response); ok {
-			if target := b.aliases.Resolve(delegatedAlias); target != nil {
-				b.emitEvent("coordinator_delegate", fmt.Sprintf("@%s → %s", delegatedAlias, target.PluginID))
-				delegatedResp, delegErr := b.kernelClient.ChatWithAgentDirect(
-					chatID, target.PluginID, target.Model, delegatedMsg, nil, false, delegatedAlias)
-				if delegErr != nil {
-					response = fmt.Sprintf("Failed to reach @%s: %v", delegatedAlias, delegErr)
-				} else {
-					response = delegatedResp
-				}
-			}
-		}
 	}
 
-	if err := b.wa.SendText(chatID, response); err != nil {
+	b.emitEvent("agent_response", fmt.Sprintf("responder=%s len=%d chars", resp.Responder, len(resp.Response)))
+
+	if err := b.wa.SendText(chatID, resp.Response); err != nil {
 		log.Printf("[message] send error: %v", err)
 		b.emitEvent("error", fmt.Sprintf("send error: %v", err))
 	}
@@ -274,11 +226,10 @@ func (b *Bot) extractContent(msg waClient.Message) (string, []string) {
 }
 
 // handleCommand processes bot commands.
-func (b *Bot) handleCommand(chatID, senderName, text string) {
+func (b *Bot) handleCommand(chatID, text string) {
 	switch {
 	case text == "/help" || text == "/start":
 		helpMsg := "Available commands:\n\n" +
-			"/clear — Clear conversation history\n" +
 			"/aliases — List configured @mention aliases\n" +
 			"/help — Show this message\n\n"
 		if !b.aliases.IsEmpty() {
@@ -289,10 +240,6 @@ func (b *Bot) handleCommand(chatID, senderName, text string) {
 		}
 		b.wa.SendText(chatID, helpMsg)
 
-	case text == "/clear" || text == "/reset":
-		b.kernelClient.ClearHistory(chatID)
-		b.wa.SendText(chatID, "Conversation cleared.")
-
 	case text == "/aliases":
 		b.handleAliasesCommand(chatID)
 
@@ -301,31 +248,10 @@ func (b *Bot) handleCommand(chatID, senderName, text string) {
 	}
 }
 
-// handleAliasRoute routes a message based on an @mention match.
-func (b *Bot) handleAliasRoute(chatID, senderName string, result alias.ParseResult, imageURLs []string) {
-	target := result.Target
-	message := result.Remainder
-	if message == "" {
-		b.wa.SendText(chatID, fmt.Sprintf("Usage: @%s <message>", result.Alias))
-		return
-	}
-
-	b.emitEvent("alias_route", fmt.Sprintf("@%s → %s from %s", result.Alias, target.PluginID, senderName))
-
-	response, err := b.kernelClient.ChatWithAgentDirect(chatID, target.PluginID, target.Model, message, imageURLs, false, result.Alias)
-	if err != nil {
-		log.Printf("[alias] error @%s → %s: %v", result.Alias, target.PluginID, err)
-		b.wa.SendText(chatID, fmt.Sprintf("@%s is not available: %v", result.Alias, err))
-		return
-	}
-
-	b.wa.SendText(chatID, response)
-}
-
 // handleAliasesCommand lists all configured @mention aliases.
 func (b *Bot) handleAliasesCommand(chatID string) {
 	if b.aliases.IsEmpty() {
-		b.wa.SendText(chatID, "No aliases configured.\n\nSet the ALIASES environment variable to enable @mention routing.")
+		b.wa.SendText(chatID, "No aliases configured.")
 		return
 	}
 
@@ -345,31 +271,8 @@ func (b *Bot) handleAliasesCommand(chatID string) {
 			sb.WriteString(fmt.Sprintf("@%s → video: %s\n", entry.Alias, entry.Target.PluginID))
 		}
 	}
-	if da := b.getDefaultAgent(); da != "" {
-		sb.WriteString(fmt.Sprintf("\nCoordinator: %s", da))
-	}
-	sb.WriteString("\n\nUsage: @nickname <message>")
+	sb.WriteString("\nUsage: @nickname <message>")
 	b.wa.SendText(chatID, sb.String())
-}
-
-// resolvedAgent holds the plugin ID and optional model for a resolved coordinator.
-type resolvedAgent struct {
-	PluginID string
-	Model    string
-}
-
-// resolveDefaultAgent returns the configured coordinator agent.
-// Returns nil if no default agent is set — callers must treat this as an error.
-// The DEFAULT_AGENT config stores an alias name, so we resolve it via the alias map.
-func (b *Bot) resolveDefaultAgent() *resolvedAgent {
-	da := b.getDefaultAgent()
-	if da == "" {
-		return nil
-	}
-	if target := b.aliases.Resolve(da); target != nil {
-		return &resolvedAgent{PluginID: target.PluginID, Model: target.Model}
-	}
-	return &resolvedAgent{PluginID: da}
 }
 
 func truncate(s string, maxLen int) string {

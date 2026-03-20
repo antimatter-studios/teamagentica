@@ -14,7 +14,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/handlers"
-	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/relay"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/storage"
 )
 
@@ -79,17 +79,10 @@ func main() {
 	}
 
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true" || pluginConfig["PLUGIN_DEBUG"] == "1"
-	defaultAgent := pluginConfig["DEFAULT_AGENT"]
 
-	// Build the kernel base URL, respecting TLS setting.
-	scheme := "http"
-	if sdkCfg.TLSEnabled {
-		scheme = "https"
-	}
-	kernelBaseURL := fmt.Sprintf("%s://%s:%s", scheme, sdkCfg.KernelHost, sdkCfg.KernelPort)
-	kc := kernel.NewClient(kernelBaseURL, sdkCfg.PluginToken, debug)
+	rc := relay.NewClient(sdkClient, manifest.ID)
 
-	h := handlers.NewHandler(db, files, kc, sdkClient, aliases, defaultAgent, debug)
+	h := handlers.NewHandler(db, files, rc, sdkClient, aliases, debug)
 
 	router := gin.Default()
 	router.GET("/health", h.Health)
@@ -104,20 +97,18 @@ func main() {
 	router.POST("/upload", h.Upload)
 	router.GET("/files/*filepath", h.ServeFile)
 
-	// Subscribe to live alias updates (debounced 2s).
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse kernel:alias:update: %v", err)
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		infos := convertRegistryAliases(event.Detail)
+		if infos == nil {
+			log.Printf("Failed to parse alias:update detail")
 			return
 		}
-		aliases.Replace(detail.Aliases)
-		log.Printf("Hot-swapped %d aliases (seq=%d)", len(detail.Aliases), event.Seq)
+		aliases.Replace(infos)
+		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
 	}))
 
-	// Subscribe to config updates for DEFAULT_AGENT and PLUGIN_DEBUG.
+	// Subscribe to config updates for PLUGIN_DEBUG.
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
@@ -125,10 +116,8 @@ func main() {
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
 			return
 		}
-		if agent, ok := detail.Config["DEFAULT_AGENT"]; ok {
-			h.SetDefaultAgent(agent)
-			log.Printf("DEFAULT_AGENT updated to %q", agent)
-		}
+		// Future: handle PLUGIN_DEBUG toggle here.
+		_ = detail
 	}))
 
 	server := &http.Server{
@@ -136,6 +125,44 @@ func main() {
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+}
+
+// convertRegistryAliases converts the alias registry event detail into []alias.AliasInfo.
+// Registry shape: {"aliases": [{name, type, plugin, provider, model, system_prompt, ...}]}
+func convertRegistryAliases(detail string) []alias.AliasInfo {
+	var payload struct {
+		Aliases []struct {
+			Name   string `json:"name"`
+			Type   string `json:"type"`
+			Plugin string `json:"plugin"`
+			Model  string `json:"model"`
+		} `json:"aliases"`
+	}
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return nil
+	}
+	infos := make([]alias.AliasInfo, 0, len(payload.Aliases))
+	for _, e := range payload.Aliases {
+		target := e.Plugin
+		if e.Model != "" {
+			target = e.Plugin + ":" + e.Model
+		}
+		var caps []string
+		switch e.Type {
+		case "agent":
+			caps = []string{"agent:chat"}
+		case "tool_agent":
+			caps = []string{"agent:tool"}
+		default:
+			caps = []string{"tool:mcp"}
+		}
+		infos = append(infos, alias.AliasInfo{
+			Name:         e.Name,
+			Target:       target,
+			Capabilities: caps,
+		})
+	}
+	return infos
 }
 
 func getHostname() string {

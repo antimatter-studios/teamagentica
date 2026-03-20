@@ -5,9 +5,8 @@ import "time"
 type Conversation struct {
 	ID           uint      `json:"id" gorm:"primaryKey"`
 	UserID       uint      `json:"user_id" gorm:"index;not null"`
-	Title        string    `json:"title" gorm:"not null;default:'New Chat'"`
-	DefaultAgent string    `json:"default_agent"`
-	CreatedAt    time.Time `json:"created_at"`
+	Title     string    `json:"title" gorm:"not null;default:'New Chat'"`
+	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 

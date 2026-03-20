@@ -2,17 +2,13 @@ id: messaging-chat
 name: "Web Chat"
 description: "Built-in web chat interface for conversing with AI agents"
 group: messaging
-version: "1.0.2"
+version: "1.0.9"
 image: "teamagentica-messaging-chat:latest"
 author: teamagentica
 tags: [system, chat, ui]
+capabilities: ["messaging:web", "messaging:chat"]
 dependencies: ["infra:agent-relay"]
 config_schema:
-  DEFAULT_AGENT:
-    type: select
-    label: "Default Agent"
-    dynamic: true
-    order: 1
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

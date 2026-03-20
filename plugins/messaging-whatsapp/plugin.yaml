@@ -2,10 +2,11 @@ id: messaging-whatsapp
 name: "WhatsApp Bot"
 description: "WhatsApp bot integration using the WhatsApp Business Cloud API for receiving and responding to messages"
 group: messaging
-version: "1.0.2"
+version: "1.0.9"
 image: "teamagentica-messaging-whatsapp:latest"
 author: teamagentica
 tags: [chat, whatsapp, bot, messaging]
+capabilities: ["messaging:whatsapp", "messaging:bot", "messaging:chat"]
 dependencies: ["infra:agent-relay"]
 config_schema:
   WHATSAPP_ACCESS_TOKEN:
@@ -29,12 +30,6 @@ config_schema:
     label: "App Secret"
     secret: true
     order: 4
-  DEFAULT_AGENT:
-    type: select
-    label: "Coordinator Agent"
-    dynamic: true
-    help_text: "Select the default agent to handle messages"
-    order: 5
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

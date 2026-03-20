@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,7 +23,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
-	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/relay"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/storage"
 )
 
@@ -46,37 +45,23 @@ var allowedMimeTypes = map[string]bool{
 }
 
 type Handler struct {
-	db           *storage.DB
-	files        *storage.FileStore
-	kernel       *kernel.Client
-	sdk          *pluginsdk.Client
-	aliases      *alias.AliasMap
-	defaultAgent atomic.Pointer[string]
-	debug        bool
+	db      *storage.DB
+	files   *storage.FileStore
+	relay   *relay.Client
+	sdk     *pluginsdk.Client
+	aliases *alias.AliasMap
+	debug   bool
 }
 
-func NewHandler(db *storage.DB, files *storage.FileStore, kc *kernel.Client, sdk *pluginsdk.Client, aliases *alias.AliasMap, defaultAgent string, debug bool) *Handler {
-	h := &Handler{
+func NewHandler(db *storage.DB, files *storage.FileStore, rc *relay.Client, sdk *pluginsdk.Client, aliases *alias.AliasMap, debug bool) *Handler {
+	return &Handler{
 		db:      db,
 		files:   files,
-		kernel:  kc,
+		relay:   rc,
 		sdk:     sdk,
 		aliases: aliases,
 		debug:   debug,
 	}
-	h.SetDefaultAgent(defaultAgent)
-	return h
-}
-
-func (h *Handler) DefaultAgent() string {
-	if p := h.defaultAgent.Load(); p != nil {
-		return *p
-	}
-	return ""
-}
-
-func (h *Handler) SetDefaultAgent(agent string) {
-	h.defaultAgent.Store(&agent)
 }
 
 func (h *Handler) Health(c *gin.Context) {
@@ -87,18 +72,6 @@ func (h *Handler) Health(c *gin.Context) {
 
 // ConfigOptions handles GET /config/options/:field — returns dynamic options for config fields.
 func (h *Handler) ConfigOptions(c *gin.Context) {
-	field := c.Param("field")
-	if field == "DEFAULT_AGENT" {
-		entries := h.aliases.List()
-		var names []string
-		for _, e := range entries {
-			if e.Target.Type == alias.TargetAgent {
-				names = append(names, e.Alias)
-			}
-		}
-		c.JSON(http.StatusOK, gin.H{"options": names})
-		return
-	}
 	c.JSON(http.StatusOK, gin.H{"options": []string{}})
 }
 
@@ -118,8 +91,7 @@ func (h *Handler) ListAgents(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"agents":          agents,
-		"has_coordinator": h.DefaultAgent() != "",
+		"agents": agents,
 	})
 }
 
@@ -160,9 +132,8 @@ func (h *Handler) CreateConversation(c *gin.Context) {
 		title = "New Chat"
 	}
 	conv := &storage.Conversation{
-		UserID:       userID,
-		Title:        title,
-		DefaultAgent: req.AgentAlias,
+		UserID: userID,
+		Title:  title,
 	}
 	if err := h.db.CreateConversation(conv); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -327,50 +298,11 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// --- Phase 1: @alias prefix → direct route, strip prefix ---
+	// Build the message to send to the relay.
+	// If user specified @alias prefix, pass it through — the relay handles routing.
 	messageText := req.Content
-	var agentAlias string
-	useCoordinator := false
 
-	if strings.HasPrefix(messageText, "@") {
-		parsed := h.aliases.Parse(messageText)
-		if parsed.Target != nil && parsed.Target.Type == alias.TargetAgent {
-			agentAlias = parsed.Alias
-			messageText = parsed.Remainder
-			if messageText == "" {
-				messageText = req.Content // fallback: send original if no remainder
-			}
-		}
-	}
-
-	// --- Phase 2: No prefix, no explicit agent → coordinator ---
-	if agentAlias == "" {
-		agentAlias = req.AgentAlias
-	}
-	if agentAlias == "" {
-		agentAlias = conv.DefaultAgent
-	}
-	if agentAlias == "" {
-		coordAlias := h.DefaultAgent()
-		if coordAlias != "" {
-			agentAlias = coordAlias
-			useCoordinator = true
-		}
-	}
-
-	// --- Phase 3: Still nothing → error ---
-	if agentAlias == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no agent selected"})
-		return
-	}
-
-	target := h.aliases.Resolve(agentAlias)
-	if target == nil || target.Type != alias.TargetAgent {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown agent alias: %s", agentAlias)})
-		return
-	}
-
-	// Build user message attachments JSON.
+	// Build user message attachments JSON and image URLs for the relay.
 	var attachmentsJSON string
 	var imageURLs []string
 	if len(req.AttachmentIDs) > 0 {
@@ -404,12 +336,14 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		}
 	}
 
+	// Channel ID for relay routing: use conversation ID as the channel.
+	channelID := fmt.Sprintf("chat:%d:%d", userID, convID)
+
 	// Store user message (always with original content).
 	userMsg := &storage.Message{
 		ConversationID: uint(convID),
 		Role:           "user",
 		Content:        req.Content,
-		AgentAlias:     agentAlias,
 		Attachments:    attachmentsJSON,
 	}
 	if err := h.db.CreateMessage(userMsg); err != nil {
@@ -417,28 +351,12 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Build conversation history for agent.
-	history, err := h.db.ListMessagesForContext(uint(convID), 80)
-	if err != nil {
-		log.Printf("[chat] error loading history: %v", err)
-	}
-	convMsgs := make([]kernel.ConversationMsg, 0, len(history))
-	for _, m := range history {
-		if m.ID == userMsg.ID {
-			continue // Skip the just-created user message (we'll send it as the current message).
-		}
-		convMsgs = append(convMsgs, kernel.ConversationMsg{
-			Role:    m.Role,
-			Content: m.Content,
-		})
-	}
-
-	// Send to agent via kernel.
+	// Send to relay — it handles coordinator resolution, @alias routing, persona injection, and memory.
 	start := time.Now()
-	agentResp, err := h.kernel.ChatWithAgent(userID, target.PluginID, target.Model, messageText, imageURLs, convMsgs, useCoordinator, agentAlias)
+	relayResp, err := h.relay.Chat(channelID, messageText, imageURLs)
 	elapsed := time.Since(start)
 	if err != nil {
-		log.Printf("[chat] agent error: %v", err)
+		log.Printf("[chat] relay error: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error":        "agent request failed: " + err.Error(),
 			"user_message": userMsg,
@@ -446,36 +364,11 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// --- Coordinator delegation check ---
-	if useCoordinator {
-		if delegateAlias, delegateMsg, isDelegation := alias.ParseCoordinatorResponse(agentResp.Response); isDelegation {
-			delegateTarget := h.aliases.Resolve(delegateAlias)
-			if delegateTarget != nil {
-				if delegateMsg == "" {
-					delegateMsg = messageText
-				}
-				log.Printf("[chat] coordinator delegated to @%s", delegateAlias)
-				dStart := time.Now()
-				delegateResp, dErr := h.kernel.ChatWithAgent(userID, delegateTarget.PluginID, delegateTarget.Model, delegateMsg, imageURLs, convMsgs, false, delegateAlias)
-				dElapsed := time.Since(dStart)
-				if dErr == nil {
-					agentResp = delegateResp
-					elapsed = dElapsed
-					agentAlias = delegateAlias
-					target = delegateTarget
-				} else {
-					log.Printf("[chat] delegate @%s failed: %v, returning coordinator response", delegateAlias, dErr)
-				}
-			}
-		}
-	}
+	agentAlias := relayResp.Responder
 
-	// Store the raw LLM response exactly as received.
-	responseText := agentResp.Response
-
-	// Process structured media attachments from agent response into local files.
+	// Process structured media attachments from relay response into local files.
 	var allAttachments []storage.Attachment
-	for _, att := range agentResp.Attachments {
+	for _, att := range relayResp.Attachments {
 		saved, err := h.saveMediaAttachment(att.MimeType, att.ImageData)
 		if err != nil {
 			log.Printf("[chat] failed to save attachment: %v", err)
@@ -490,29 +383,25 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		mediaAttJSON = string(b)
 	}
 
-	// Store assistant message.
+	// Store assistant message with rich metadata for web UI display.
 	assistantMsg := &storage.Message{
 		ConversationID: uint(convID),
 		Role:           "assistant",
-		Content:        responseText,
+		Content:        relayResp.Response,
 		AgentAlias:     agentAlias,
-		AgentPlugin:    target.PluginID,
-		Model:          agentResp.Model,
+		Model:          relayResp.Model,
 		DurationMs:     elapsed.Milliseconds(),
 		Attachments:    mediaAttJSON,
 	}
-	if agentResp.Usage != nil {
-		assistantMsg.InputTokens = agentResp.Usage.PromptTokens
-		assistantMsg.OutputTokens = agentResp.Usage.CompletionTokens
+	if relayResp.Usage != nil {
+		assistantMsg.InputTokens = relayResp.Usage.PromptTokens
+		assistantMsg.OutputTokens = relayResp.Usage.CompletionTokens
 	}
 	if err := h.db.CreateMessage(assistantMsg); err != nil {
 		log.Printf("[chat] error storing assistant message: %v", err)
 	}
 
 	// Update conversation metadata.
-	if !useCoordinator {
-		conv.DefaultAgent = agentAlias
-	}
 	conv.UpdatedAt = time.Now()
 	// Auto-title on first exchange.
 	if conv.Title == "New Chat" {

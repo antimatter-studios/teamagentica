@@ -70,9 +70,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: data.messages || [],
         loading: false,
       });
-      if (data.conversation.default_agent) {
-        set({ selectedAgent: data.conversation.default_agent });
-      }
     } catch (e: unknown) {
       set({
         loading: false,

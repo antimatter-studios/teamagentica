@@ -14,7 +14,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/bot"
-	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/kernel"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/relay"
 	waClient "github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/whatsapp"
 )
 
@@ -67,19 +67,14 @@ func main() {
 	verifyToken := pluginConfig["WHATSAPP_VERIFY_TOKEN"]
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true" || pluginConfig["PLUGIN_DEBUG"] == "1"
 
-	// Build the kernel base URL, respecting TLS setting.
-	scheme := "http"
-	if sdkCfg.TLSEnabled {
-		scheme = "https"
-	}
-	kernelURL := fmt.Sprintf("%s://%s:%s", scheme, sdkCfg.KernelHost, sdkCfg.KernelPort)
-	kernelClient := kernel.NewClient(kernelURL, sdkCfg.PluginToken, debug)
+	// Relay client for routing messages through infra-agent-relay.
+	rc := relay.NewClient(sdkClient, manifest.ID)
 
 	// WhatsApp Cloud API client.
 	wa := waClient.NewClient(accessToken, phoneNumberID, debug)
 
 	// Bot handler.
-	b := bot.NewBot(wa, kernelClient, manifest.ID, debug, aliases)
+	b := bot.NewBot(wa, rc, manifest.ID, debug, aliases)
 	b.SetSDK(sdkClient)
 
 	router := gin.Default()
@@ -97,18 +92,6 @@ func main() {
 
 	// Config options endpoint for dynamic selects.
 	router.GET("/config/options/:field", func(c *gin.Context) {
-		field := c.Param("field")
-		if field == "DEFAULT_AGENT" {
-			entries := aliases.List()
-			var names []string
-			for _, e := range entries {
-				if e.Target.Type == alias.TargetAgent {
-					names = append(names, e.Alias)
-				}
-			}
-			c.JSON(http.StatusOK, gin.H{"options": names})
-			return
-		}
 		c.JSON(http.StatusOK, gin.H{"options": []string{}})
 	})
 
@@ -116,20 +99,18 @@ func main() {
 	router.GET("/webhook", b.VerifyWebhook(verifyToken))
 	router.POST("/webhook", b.HandleWebhook)
 
-	// Subscribe to live alias updates from kernel (debounced — coalesce rapid updates).
-	sdkClient.OnEvent("kernel:alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Aliases []alias.AliasInfo `json:"aliases"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse kernel:alias:update detail: %v", err)
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		infos := convertRegistryAliases(event.Detail)
+		if infos == nil {
+			log.Printf("Failed to parse alias:update detail")
 			return
 		}
-		aliases.Replace(detail.Aliases)
-		log.Printf("Hot-swapped %d aliases (seq=%d)", len(detail.Aliases), event.Seq)
+		aliases.Replace(infos)
+		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
 	}))
 
-	// Subscribe to soft config updates for dynamic DEFAULT_AGENT changes (immediate).
+	// Subscribe to config updates.
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
@@ -138,9 +119,8 @@ func main() {
 			log.Printf("Failed to parse config:update detail: %v", err)
 			return
 		}
-		if agent, ok := detail.Config["DEFAULT_AGENT"]; ok {
-			b.SetDefaultAgent(agent)
-		}
+		// Future: handle PLUGIN_DEBUG toggle here.
+		_ = detail
 	}))
 
 	// When network-webhook-ingress broadcasts webhook:ready, send our route info.
@@ -176,6 +156,44 @@ func main() {
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+}
+
+// convertRegistryAliases converts the alias registry event detail into []alias.AliasInfo.
+// Registry shape: {"aliases": [{name, type, plugin, provider, model, system_prompt, ...}]}
+func convertRegistryAliases(detail string) []alias.AliasInfo {
+	var payload struct {
+		Aliases []struct {
+			Name   string `json:"name"`
+			Type   string `json:"type"`
+			Plugin string `json:"plugin"`
+			Model  string `json:"model"`
+		} `json:"aliases"`
+	}
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return nil
+	}
+	infos := make([]alias.AliasInfo, 0, len(payload.Aliases))
+	for _, e := range payload.Aliases {
+		target := e.Plugin
+		if e.Model != "" {
+			target = e.Plugin + ":" + e.Model
+		}
+		var caps []string
+		switch e.Type {
+		case "agent":
+			caps = []string{"agent:chat"}
+		case "tool_agent":
+			caps = []string{"agent:tool"}
+		default:
+			caps = []string{"tool:mcp"}
+		}
+		infos = append(infos, alias.AliasInfo{
+			Name:         e.Name,
+			Target:       target,
+			Capabilities: caps,
+		})
+	}
+	return infos
 }
 
 func getHostname() string {
