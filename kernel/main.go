@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -43,42 +42,32 @@ func main() {
 	defer backupCancel()
 	database.StartBackups(backupCtx, kernelDataDir, cfg.BackupInterval)
 
-	// mTLS setup (optional).
-	var certManager *certs.CertManager
-	var serverTLS *tls.Config
-	var clientTLS *tls.Config
+	// mTLS — always enabled. Kernel generates CA and certs for itself and all plugins.
+	certManager, err := certs.NewCertManager(kernelDataDir)
+	if err != nil {
+		log.Fatalf("failed to init cert manager: %v", err)
+	}
 
-	if cfg.MTLSEnabled {
-		var err error
-		certManager, err = certs.NewCertManager(kernelDataDir)
-		if err != nil {
-			log.Fatalf("failed to init cert manager: %v", err)
-		}
+	if _, _, err := certManager.GenerateKernelCert(); err != nil {
+		log.Fatalf("failed to generate kernel cert: %v", err)
+	}
 
-		if _, _, err := certManager.GenerateKernelCert(); err != nil {
-			log.Fatalf("failed to generate kernel cert: %v", err)
-		}
+	serverTLS, err := certManager.GetServerTLSConfig()
+	if err != nil {
+		log.Fatalf("failed to get server TLS config: %v", err)
+	}
 
-		serverTLS, err = certManager.GetServerTLSConfig()
-		if err != nil {
-			log.Fatalf("failed to get server TLS config: %v", err)
-		}
-
-		clientTLS, err = certManager.GetClientTLSConfig()
-		if err != nil {
-			log.Fatalf("failed to get client TLS config: %v", err)
-		}
-
-		log.Println("mTLS enabled — kernel will serve HTTPS and proxy to plugins over HTTPS")
-	} else {
-		log.Println("mTLS disabled — running in plain HTTP mode")
+	clientTLS, err := certManager.GetClientTLSConfig()
+	if err != nil {
+		log.Fatalf("failed to get client TLS config: %v", err)
 	}
 
 	// Audit logger.
 	auditLogger := audit.NewLogger(database.DB)
 
 	r := gin.Default()
-	r.Use(middleware.CORS())
+	r.Use(middleware.CORS(cfg.BaseDomain))
+	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.AuditInjector(auditLogger))
 
 	// Health check.
@@ -90,38 +79,6 @@ func main() {
 		})
 	})
 
-	// Auth routes (public).
-	authGroup := r.Group("/api/auth")
-	{
-		authGroup.POST("/register", middleware.AuthOptional(), handlers.Register)
-		authGroup.POST("/login", handlers.Login)
-		authGroup.POST("/session", middleware.AuthRequired(), handlers.CreateSession)
-	}
-
-	// Service token routes (authenticated, admin only).
-	serviceTokenGroup := r.Group("/api/auth")
-	serviceTokenGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
-	{
-		serviceTokenGroup.POST("/service-token", handlers.CreateServiceToken)
-		serviceTokenGroup.GET("/service-tokens", handlers.ListServiceTokens)
-		serviceTokenGroup.DELETE("/service-token/:id", handlers.RevokeServiceToken)
-	}
-
-	// Audit log routes (admin only).
-	auditGroup := r.Group("/api/audit")
-	auditGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
-	{
-		auditGroup.GET("", handlers.ListAuditLogs)
-	}
-
-	// User routes (authenticated).
-	usersGroup := r.Group("/api/users")
-	usersGroup.Use(middleware.AuthRequired())
-	{
-		usersGroup.GET("/me", handlers.Me)
-		usersGroup.GET("", middleware.RequireCapability("users:read"), handlers.ListUsers)
-	}
-
 	// Pricing routes (admin only).
 	pricingHandler := handlers.NewPricingHandler(database.DB)
 	pricingGroup := r.Group("/api/pricing")
@@ -131,17 +88,6 @@ func main() {
 		pricingGroup.GET("/current", pricingHandler.ListCurrentPrices)
 		pricingGroup.POST("", pricingHandler.SavePrice)
 		pricingGroup.DELETE("/:id", pricingHandler.DeletePrice)
-	}
-
-	// External user mapping routes (admin only).
-	extUserHandler := handlers.NewExternalUserHandler(database.DB)
-	extUserGroup := r.Group("/api/external-users")
-	extUserGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
-	{
-		extUserGroup.GET("", extUserHandler.List)
-		extUserGroup.POST("", extUserHandler.Create)
-		extUserGroup.PUT("/:id", extUserHandler.Update)
-		extUserGroup.DELETE("/:id", extUserHandler.Delete)
 	}
 
 	// Load runtime config (dev vs prod mounts, env vars, etc.).
@@ -158,6 +104,52 @@ func main() {
 
 	// Plugin routes (authenticated).
 	pluginHandler := handlers.NewPluginHandler(database.DB, dockerRT, cfg, clientTLS)
+
+	// --- Auth/User routes — proxied to system-user-manager plugin ---
+	authProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/auth")
+	authGroup := r.Group("/api/auth")
+	{
+		authGroup.POST("/register", middleware.AuthOptional(), authProxy)
+		authGroup.POST("/login", authProxy)
+		authGroup.POST("/session", middleware.AuthRequired(), authProxy)
+	}
+	serviceTokenGroup := r.Group("/api/auth")
+	serviceTokenGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		serviceTokenGroup.POST("/service-token", authProxy)
+		serviceTokenGroup.GET("/service-tokens", authProxy)
+		serviceTokenGroup.DELETE("/service-token/:id", authProxy)
+	}
+
+	auditProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/audit")
+	auditGroup := r.Group("/api/audit")
+	auditGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		auditGroup.GET("", auditProxy)
+	}
+
+	usersProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/users")
+	usersGroup := r.Group("/api/users")
+	usersGroup.Use(middleware.AuthRequired())
+	{
+		usersGroup.GET("/me", usersProxy)
+		usersGroup.GET("", middleware.RequireCapability("users:read"), usersProxy)
+		usersGroup.GET("/:id", middleware.RequireCapability("users:read"), usersProxy)
+		usersGroup.PUT("/:id", middleware.RequireCapability("users:write"), usersProxy)
+		usersGroup.PUT("/:id/ban", middleware.RequireCapability("users:write"), usersProxy)
+		usersGroup.DELETE("/:id", middleware.RequireCapability("users:write"), usersProxy)
+	}
+
+	extUsersProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/external-users")
+	extUserGroup := r.Group("/api/external-users")
+	extUserGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	{
+		extUserGroup.GET("", extUsersProxy)
+		extUserGroup.GET("/lookup", extUsersProxy)
+		extUserGroup.POST("", extUsersProxy)
+		extUserGroup.PUT("/:id", extUsersProxy)
+		extUserGroup.DELETE("/:id", extUsersProxy)
+	}
 
 	// Health monitor (started after pluginHandler so it can emit to the event hub).
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
@@ -186,7 +178,11 @@ func main() {
 	}
 
 	// Marketplace routes (authenticated, plugins:manage).
-	marketplaceHandler := handlers.NewMarketplaceHandler(database.DB, pluginHandler.Events)
+	marketplaceClient := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: clientTLS},
+	}
+	marketplaceHandler := handlers.NewMarketplaceHandler(database.DB, pluginHandler.Events, marketplaceClient)
 	marketplaceGroup := r.Group("/api/marketplace")
 	marketplaceGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("plugins:manage"))
 	{
@@ -295,37 +291,44 @@ func main() {
 			log.Printf("orchestrator: boot error: %v", err)
 		}
 		orch.RecoverManagedContainers(orchCtx)
+
+		// Fetch JWT secret from the user-manager plugin.
+		// The plugin owns the secret; the kernel only needs it for middleware validation.
+		if err := fetchJWTSecretFromPlugin(clientTLS); err != nil {
+			log.Printf("WARNING: failed to fetch JWT secret from user-manager: %v", err)
+			log.Printf("WARNING: auth middleware will reject all tokens until the plugin is reachable")
+		}
 	}()
 
-	addr := cfg.Host + ":" + cfg.Port
-
-	var server *http.Server
-	if cfg.MTLSEnabled && serverTLS != nil {
-		server = &http.Server{
-			Addr:      addr,
-			Handler:   r,
-			TLSConfig: serverTLS,
-		}
-		certPath := kernelDataDir + "/certs/kernel.crt"
-		keyPath := kernelDataDir + "/certs/kernel.key"
-		log.Printf("%s kernel starting on https://%s (v%s)\n", cfg.AppName, addr, version)
-		go func() {
-			if err := server.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("server failed: %v", err)
-			}
-		}()
-	} else {
-		server = &http.Server{
-			Addr:    addr,
-			Handler: r,
-		}
-		log.Printf("%s kernel starting on http://%s (v%s)\n", cfg.AppName, addr, version)
-		go func() {
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("server failed: %v", err)
-			}
-		}()
+	// Two listeners:
+	// 1. HTTP  on cfg.Port (8080) — user traffic (browser, tacli, external API)
+	// 2. HTTPS on cfg.Port+1 (8081) — plugin traffic (mTLS, Docker network only)
+	httpAddr := cfg.Host + ":" + cfg.Port
+	server := &http.Server{
+		Addr:    httpAddr,
+		Handler: r,
 	}
+	log.Printf("%s kernel starting on http://%s (v%s)\n", cfg.AppName, httpAddr, version)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("http server failed: %v", err)
+		}
+	}()
+
+	certPath := kernelDataDir + "/certs/kernel.crt"
+	keyPath := kernelDataDir + "/certs/kernel.key"
+	tlsAddr := cfg.Host + ":" + cfg.TLSPort
+	tlsServer := &http.Server{
+		Addr:      tlsAddr,
+		Handler:   r,
+		TLSConfig: serverTLS,
+	}
+	log.Printf("%s kernel mTLS on https://%s\n", cfg.AppName, tlsAddr)
+	go func() {
+		if err := tlsServer.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("tls server failed: %v", err)
+		}
+	}()
 
 	// Graceful shutdown.
 	quit := make(chan os.Signal, 1)
@@ -346,9 +349,12 @@ func main() {
 		log.Printf("orchestrator: shutdown error: %v", err)
 	}
 
-	// Shutdown HTTP server.
+	// Shutdown both HTTP servers.
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v", err)
+		log.Printf("http server shutdown error: %v", err)
+	}
+	if err := tlsServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("tls server shutdown error: %v", err)
 	}
 
 	log.Println("kernel stopped")

@@ -31,9 +31,9 @@ includes:
   agent-requesty:
     taskfile: ./plugins/agent-requesty/Taskfile.yml
     dir: ./plugins/agent-requesty
-  builtin-provider:
-    taskfile: ./plugins/builtin-provider/Taskfile.yml
-    dir: ./plugins/builtin-provider
+  system-teamagentica-plugin-provider:
+    taskfile: ./plugins/system-teamagentica-plugin-provider/Taskfile.yml
+    dir: ./plugins/system-teamagentica-plugin-provider
   infra-agent-memory:
     taskfile: ./plugins/infra-agent-memory/Taskfile.yml
     dir: ./plugins/infra-agent-memory
@@ -82,6 +82,9 @@ includes:
   storage-volume:
     taskfile: ./plugins/storage-volume/Taskfile.yml
     dir: ./plugins/storage-volume
+  system-user-manager:
+    taskfile: ./plugins/system-user-manager/Taskfile.yml
+    dir: ./plugins/system-user-manager
   tool-nanobanana:
     taskfile: ./plugins/tool-nanobanana/Taskfile.yml
     dir: ./plugins/tool-nanobanana
@@ -188,7 +191,7 @@ tasks:
       - task: agent-openai:build
       - task: agent-openrouter:build
       - task: agent-requesty:build
-      - task: builtin-provider:build
+      - task: system-teamagentica-plugin-provider:build
       - task: infra-agent-relay:build
       - task: infra-builder:build
       - task: infra-cost-tracking:build
@@ -225,7 +228,7 @@ tasks:
       - task: agent-openai:build:dev
       - task: agent-openrouter:build:dev
       - task: agent-requesty:build:dev
-      - task: builtin-provider:build:dev
+      - task: system-teamagentica-plugin-provider:build:dev
       - task: infra-agent-relay:build:dev
       - task: infra-builder:build:dev
       - task: infra-cost-tracking:build:dev

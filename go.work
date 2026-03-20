@@ -10,7 +10,7 @@ use (
 	./plugins/agent-openai
 	./plugins/agent-openrouter
 	./plugins/agent-requesty
-	./plugins/builtin-provider
+	./plugins/system-teamagentica-plugin-provider
 	./plugins/infra-agent-memory
 	./plugins/infra-alias-registry
 	./plugins/infra-agent-relay
@@ -26,6 +26,7 @@ use (
 	./plugins/network-ngrok
 	./plugins/network-webhook-ingress
 	./plugins/storage-sss3
+	./plugins/system-user-manager
 	./plugins/storage-volume
 	./plugins/tool-nanobanana
 	./plugins/tool-seedance

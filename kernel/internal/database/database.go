@@ -1,9 +1,7 @@
 package database
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"time"
@@ -45,7 +43,7 @@ func Init(path string) {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
-	bootstrapJWTSecret(DB)
+	loadCachedJWTSecret(DB)
 	seedDefaultProvider(DB)
 	seedSystemPlugins(DB)
 
@@ -72,21 +70,21 @@ func Reinit() error {
 }
 
 // seedDefaultProvider idempotently creates the default marketplace provider
-// record, deriving the URL from the builtin-provider system plugin definition.
+// record, deriving the URL from the system-teamagentica-plugin-provider system plugin definition.
 func seedDefaultProvider(db *gorm.DB) {
 	var sp *systemPlugin
 	for i := range systemPlugins {
-		if systemPlugins[i].ID == "builtin-provider" {
+		if systemPlugins[i].ID == "system-teamagentica-plugin-provider" {
 			sp = &systemPlugins[i]
 			break
 		}
 	}
 	if sp == nil {
-		log.Println("database: no builtin-provider in systemPlugins, skipping default provider seed")
+		log.Println("database: no system-teamagentica-plugin-provider in systemPlugins, skipping default provider seed")
 		return
 	}
 
-	providerURL := fmt.Sprintf("http://teamagentica-plugin-%s:%d", sp.ID, sp.HTTPPort)
+	providerURL := fmt.Sprintf("https://teamagentica-plugin-%s:%d", sp.ID, sp.HTTPPort)
 
 	var existing models.Provider
 	if db.First(&existing, "name = ?", sp.Name).Error == nil {
@@ -124,12 +122,20 @@ type systemPlugin struct {
 // systemPlugins is the list of plugins that are always installed and enabled.
 var systemPlugins = []systemPlugin{
 	{
-		ID:           "builtin-provider",
-		Name:         "Builtin Plugin Provider",
+		ID:           "system-teamagentica-plugin-provider",
+		Name:         "TeamAgentica Plugin Provider",
 		Version:      "1.0.0",
-		Image:        "teamagentica-builtin-provider:latest",
+		Image:        "teamagentica-system-teamagentica-plugin-provider:latest",
 		HTTPPort:     8083,
 		Capabilities: []string{"marketplace:provider"},
+	},
+	{
+		ID:           "system-user-manager",
+		Name:         "User Manager",
+		Version:      "0.1.0",
+		Image:        "teamagentica-system-user-manager:latest",
+		HTTPPort:     8090,
+		Capabilities: []string{"system:users"},
 	},
 }
 
@@ -212,41 +218,18 @@ func ensureServiceToken(db *gorm.DB, pluginID string) {
 	db.Model(&models.Plugin{}).Where("id = ?", pluginID).Update("service_token", token)
 }
 
-// upsertConfig sets a single config row, creating or updating as needed.
-func upsertConfig(db *gorm.DB, ownerID, key, value string, isSecret bool) {
+// loadCachedJWTSecret loads a cached copy of the JWT secret from the configs
+// table so the kernel can validate service tokens at boot. The authoritative
+// secret lives in the user-manager plugin; the kernel refreshes its cache
+// after the plugin starts (see fetchJWTSecretFromPlugin in jwt_bootstrap.go).
+func loadCachedJWTSecret(db *gorm.DB) {
 	var row models.Config
-	if db.Where("owner_id = ? AND key = ?", ownerID, key).First(&row).Error == nil {
-		db.Model(&row).Updates(map[string]interface{}{"value": value, "is_secret": isSecret})
-	} else {
-		db.Create(&models.Config{OwnerID: ownerID, Key: key, Value: value, IsSecret: isSecret})
-	}
-}
-
-// bootstrapJWTSecret loads the JWT secret from the configs table (owner_id="kernel", key="jwt_secret").
-// If no secret exists yet, a random one is generated and persisted.
-func bootstrapJWTSecret(db *gorm.DB) {
-	const ownerID = "kernel"
-	const key = "jwt_secret"
-
-	var row models.Config
-	if db.Where("owner_id = ? AND key = ?", ownerID, key).First(&row).Error == nil {
+	if db.Where("owner_id = ? AND key = ?", "kernel", "jwt_secret").First(&row).Error == nil {
 		auth.InitJWT(row.Value)
-		log.Println("database: JWT secret loaded from configs table")
+		log.Println("database: JWT secret loaded from cache (will refresh from user-manager)")
 		return
 	}
-
-	// Generate a new secret.
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		log.Fatalf("database: failed to generate JWT secret: %v", err)
-	}
-	secret := hex.EncodeToString(b)
-
-	row = models.Config{OwnerID: ownerID, Key: key, Value: secret, IsSecret: true}
-	if err := db.Create(&row).Error; err != nil {
-		log.Fatalf("database: failed to persist JWT secret: %v", err)
-	}
-
-	auth.InitJWT(secret)
-	log.Println("database: new JWT secret generated and persisted")
+	log.Println("database: no cached JWT secret — auth will be unavailable until user-manager starts")
 }
+
+
