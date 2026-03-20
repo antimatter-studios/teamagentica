@@ -45,7 +45,7 @@ func TestHealth(t *testing.T) {
 		t.Errorf("expected status ok, got %v", body["status"])
 	}
 	if body["plugin"] != "infra-cost-tracking" {
-		t.Errorf("expected plugin cost-explorer, got %v", body["plugin"])
+		t.Errorf("expected plugin infra-cost-tracking, got %v", body["plugin"])
 	}
 }
 
