@@ -440,7 +440,7 @@ func pluginTypeFromID(id string) string {
 // pluginTypeOrder defines the display order for plugin type groups.
 var pluginTypeOrder = map[string]int{
 	"agent": 0, "infra": 1, "messaging": 2, "network": 3,
-	"storage": 4, "tool": 5, "user": 6,
+	"storage": 4, "tool": 5, "user": 6, "system": 7,
 }
 
 func sortPluginsByType(plugins []client.PluginSummary) {

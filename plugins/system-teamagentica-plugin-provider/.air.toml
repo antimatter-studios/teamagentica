@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "build"
 
 [build]
-  bin = "./build/air-builtin-provider"
-  cmd = "go build -o ./build/air-builtin-provider ."
+  bin = "./build/air-system-teamagentica-plugin-provider"
+  cmd = "go build -o ./build/air-system-teamagentica-plugin-provider ."
   delay = 1000
   exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []

@@ -1,10 +1,10 @@
-# builtin-provider
+# system-teamagentica-plugin-provider
 
 Default marketplace provider serving the official plugin catalog.
 
 ## Overview
 
-A package manager / catalog service. Stores versioned plugin manifests (full plugin.yaml content) in a SQLite database and serves them for marketplace browsing and plugin installation. Manifests are submitted via POST and retrieved by plugin ID (latest semver version returned). This is the **only** thing it does -- once a plugin is installed, you never ask the builtin-provider about it again.
+A package manager / catalog service. Stores versioned plugin manifests (full plugin.yaml content) in a SQLite database and serves them for marketplace browsing and plugin installation. Manifests are submitted via POST and retrieved by plugin ID (latest semver version returned). This is the **only** thing it does -- once a plugin is installed, you never ask the system-teamagentica-plugin-provider about it again.
 
 ## Capabilities
 

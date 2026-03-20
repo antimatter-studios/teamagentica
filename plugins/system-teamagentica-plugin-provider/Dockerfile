@@ -9,8 +9,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/builtin-provider/ plugins/builtin-provider/
-WORKDIR /build/plugins/builtin-provider
+COPY plugins/system-teamagentica-plugin-provider/ plugins/system-teamagentica-plugin-provider/
+WORKDIR /build/plugins/system-teamagentica-plugin-provider
 
 RUN go mod download
 
@@ -24,9 +24,9 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/builtin-provider/ plugins/builtin-provider/
-WORKDIR /build/plugins/builtin-provider
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /builtin-provider .
+COPY plugins/system-teamagentica-plugin-provider/ plugins/system-teamagentica-plugin-provider/
+WORKDIR /build/plugins/system-teamagentica-plugin-provider
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /system-teamagentica-plugin-provider .
 
 # ── Prod stage ──
 FROM alpine:3.19 AS prod
@@ -35,10 +35,10 @@ RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica \
     && mkdir -p /data && chown teamagentica:teamagentica /data
 
-COPY --from=builder /builtin-provider /usr/local/bin/builtin-provider
+COPY --from=builder /system-teamagentica-plugin-provider /usr/local/bin/system-teamagentica-plugin-provider
 
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/builtin-provider/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/system-teamagentica-plugin-provider/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 EXPOSE 8083
-CMD ["builtin-provider"]
+CMD ["system-teamagentica-plugin-provider"]

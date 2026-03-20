@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: builtin-provider
+  BINARY_NAME: system-teamagentica-plugin-provider
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-builtin-provider:dev
+  DEV_IMAGE: teamagentica-system-teamagentica-plugin-provider:dev
 
 tasks:
   default:

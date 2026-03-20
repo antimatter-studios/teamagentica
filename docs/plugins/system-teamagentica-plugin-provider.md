@@ -1,10 +1,10 @@
-# builtin-provider
+# system-teamagentica-plugin-provider
 
 > Default plugin catalog for the marketplace.
 
 ## Overview
 
-The builtin-provider plugin serves a hardcoded catalog of all official TeamAgentica plugins. It powers the marketplace UI, enabling plugin discovery and installation. This is a system plugin that cannot be disabled.
+The system-teamagentica-plugin-provider plugin serves a hardcoded catalog of all official TeamAgentica plugins. It powers the marketplace UI, enabling plugin discovery and installation. This is a system plugin that cannot be disabled.
 
 ## Capabilities
 

@@ -22,7 +22,8 @@ const GROUP_META: { id: string; name: string; order: number }[] = [
   { id: "storage", name: "Storage", order: 4 },
   { id: "network", name: "Network", order: 5 },
   { id: "infrastructure", name: "Infrastructure", order: 6 },
-  { id: "user", name: "User", order: 7 },
+  { id: "system", name: "System", order: 7 },
+  { id: "user", name: "User", order: 8 },
 ];
 
 // Map plugin ID prefix → group ID.
@@ -34,7 +35,7 @@ const PREFIX_TO_GROUP: Record<string, string> = {
   "network-": "network",
   "infra-": "infrastructure",
   "user-": "user",
-  "builtin-": "infrastructure",
+  "system-": "system",
 };
 
 function pluginGroup(p: Plugin): string {

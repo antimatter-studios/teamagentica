@@ -122,7 +122,7 @@ func TestDisablePlugin_Forbidden(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]string{"error": "system plugins cannot be disabled"})
 	})
-	err := c.DisablePlugin("builtin-provider")
+	err := c.DisablePlugin("system-teamagentica-plugin-provider")
 	if err == nil {
 		t.Fatal("expected error for 403")
 	}
@@ -194,7 +194,7 @@ func TestListProviders(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"providers": []map[string]interface{}{
-				{"id": 1, "name": "builtin-provider", "url": "http://bp:8083", "enabled": true, "system": true},
+				{"id": 1, "name": "system-teamagentica-plugin-provider", "url": "http://bp:8083", "enabled": true, "system": true},
 				{"id": 2, "name": "custom", "url": "http://custom:9000", "enabled": true, "system": false},
 			},
 		})
@@ -267,7 +267,7 @@ func TestDeleteProvider_SystemForbidden(t *testing.T) {
 
 func TestProviderPlugins(t *testing.T) {
 	_, c := testServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/marketplace/providers/builtin-provider/plugins" {
+		if r.URL.Path != "/api/marketplace/providers/system-teamagentica-plugin-provider/plugins" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -277,7 +277,7 @@ func TestProviderPlugins(t *testing.T) {
 		})
 	})
 
-	plugins, err := c.ProviderPlugins("builtin-provider")
+	plugins, err := c.ProviderPlugins("system-teamagentica-plugin-provider")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestBrowsePlugins_WithErrors(t *testing.T) {
 	_, c := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"plugins": []map[string]interface{}{},
-			"errors":  []string{"builtin-provider: connection refused"},
+			"errors":  []string{"system-teamagentica-plugin-provider: connection refused"},
 		})
 	})
 
@@ -340,7 +340,7 @@ func TestBrowsePlugins_WithErrors(t *testing.T) {
 	if len(result.Errors) != 1 {
 		t.Fatalf("got %d errors, want 1", len(result.Errors))
 	}
-	if result.Errors[0] != "builtin-provider: connection refused" {
+	if result.Errors[0] != "system-teamagentica-plugin-provider: connection refused" {
 		t.Errorf("error = %q", result.Errors[0])
 	}
 }

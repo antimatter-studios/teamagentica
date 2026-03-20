@@ -4,7 +4,7 @@ import { rawFetch, authedClient } from "../common/client.js";
 describe("ENUMERATION: unauthenticated plugin/container discovery", () => {
   describe("webhook endpoint plugin enumeration", () => {
     const commonPluginIds = [
-      "builtin-provider",
+      "system-teamagentica-plugin-provider",
       "agent-openai",
       "agent-claude",
       "agent-gemini",

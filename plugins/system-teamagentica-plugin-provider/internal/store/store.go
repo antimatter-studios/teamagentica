@@ -62,7 +62,8 @@ type Store struct {
 
 // Open creates or opens the catalog SQLite database.
 func Open(path string) (*Store, error) {
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{
+	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {

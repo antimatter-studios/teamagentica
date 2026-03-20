@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/builtin-provider/internal/store"
+	"github.com/antimatter-studios/teamagentica/plugins/system-teamagentica-plugin-provider/internal/store"
 )
 
 func main() {
@@ -112,7 +112,7 @@ func main() {
 		Handler: r,
 	}
 
-	log.Printf("builtin-provider starting on %s", server.Addr)
+	log.Printf("system-teamagentica-plugin-provider starting on %s", server.Addr)
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
-	log.Println("builtin-provider shut down")
+	log.Println("system-teamagentica-plugin-provider shut down")
 }
