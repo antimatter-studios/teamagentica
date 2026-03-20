@@ -2,7 +2,7 @@ id: infra-agent-memory
 name: "Agent Memory"
 description: "Persistent conversation memory for agents — stores session history and provides a swappable memory backend"
 group: infrastructure
-version: "0.1.2"
+version: "0.1.4"
 image: "teamagentica-infra-agent-memory:latest"
 author: teamagentica
 tags: [memory, agents, history, sessions]
