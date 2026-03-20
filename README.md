@@ -49,13 +49,13 @@ First visit: register at the web UI — first user becomes admin.
 ### AI Agents
 | Plugin | Provider | Capabilities |
 |--------|----------|-------------|
-| agent-claude | Anthropic | ai:chat |
-| agent-openai | OpenAI | ai:chat |
-| agent-gemini | Google | ai:chat |
-| agent-kimi | Moonshot | ai:chat |
-| agent-inception | Meta-router | ai:chat |
-| agent-openrouter | OpenRouter | ai:chat |
-| agent-requesty | Requesty | ai:chat |
+| agent-claude | Anthropic | agent:chat |
+| agent-openai | OpenAI | agent:chat |
+| agent-gemini | Google | agent:chat |
+| agent-kimi | Moonshot | agent:chat |
+| agent-inception | Meta-router | agent:chat |
+| agent-openrouter | OpenRouter | agent:chat |
+| agent-requesty | Requesty | agent:chat |
 
 ### Messaging
 | Plugin | Platform | Capabilities |

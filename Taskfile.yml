@@ -34,6 +34,12 @@ includes:
   builtin-provider:
     taskfile: ./plugins/builtin-provider/Taskfile.yml
     dir: ./plugins/builtin-provider
+  infra-agent-memory:
+    taskfile: ./plugins/infra-agent-memory/Taskfile.yml
+    dir: ./plugins/infra-agent-memory
+  infra-alias-registry:
+    taskfile: ./plugins/infra-alias-registry/Taskfile.yml
+    dir: ./plugins/infra-alias-registry
   infra-agent-relay:
     taskfile: ./plugins/infra-agent-relay/Taskfile.yml
     dir: ./plugins/infra-agent-relay
