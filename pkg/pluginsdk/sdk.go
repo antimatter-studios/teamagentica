@@ -414,7 +414,7 @@ type UsageReport struct {
 }
 
 // ReportUsage sends a usage report to the kernel as a usage:report event
-// with addressed delivery to cost-explorer for guaranteed at-least-once processing.
+// with addressed delivery to infra-cost-tracking for guaranteed at-least-once processing.
 func (c *Client) ReportUsage(report UsageReport) {
 	data, err := json.Marshal(report)
 	if err != nil {
@@ -426,7 +426,7 @@ func (c *Client) ReportUsage(report UsageReport) {
 		"id":          c.registration.ID,
 		"type":        "usage:report",
 		"detail":      string(data),
-		"destination": "cost-explorer",
+		"destination": "infra-cost-tracking",
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

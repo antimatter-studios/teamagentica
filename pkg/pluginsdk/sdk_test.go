@@ -236,9 +236,9 @@ func TestReportUsage(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// Must have addressed delivery to cost-explorer.
-	if payload["destination"] != "cost-explorer" {
-		t.Errorf("destination = %q, want cost-explorer", payload["destination"])
+	// Must have addressed delivery to infra-cost-tracking.
+	if payload["destination"] != "infra-cost-tracking" {
+		t.Errorf("destination = %q, want infra-cost-tracking", payload["destination"])
 	}
 	if payload["type"] != "usage:report" {
 		t.Errorf("type = %q, want usage:report", payload["type"])
