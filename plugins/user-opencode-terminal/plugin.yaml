@@ -2,7 +2,7 @@ id: user-opencode-terminal
 name: "OpenCode Terminal"
 description: "Web terminal with OpenCode CLI — AI-powered coding assistant in the browser"
 group: user
-version: "1.0.2"
+version: "1.0.3"
 author: teamagentica
 image: teamagentica-user-opencode-terminal:latest
 tags: [terminal, opencode, ai]
