@@ -5023,7 +5023,7 @@ body::after {
 }
 
 .file-col-actions {
-  flex: 0 0 70px;
+  flex: 0 0 100px;
   display: flex;
   gap: 4px;
   justify-content: flex-end;
@@ -5180,6 +5180,247 @@ body::after {
 .file-preview-placeholder-label {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* Text preview */
+.file-preview-text-wrap {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.file-preview-text {
+  margin: 0;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  tab-size: 2;
+}
+
+.file-preview-text-truncated {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+}
+
+/* Markdown preview */
+.file-preview-markdown-wrap {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.file-preview-markdown {
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.file-preview-markdown h1,
+.file-preview-markdown h2,
+.file-preview-markdown h3,
+.file-preview-markdown h4,
+.file-preview-markdown h5,
+.file-preview-markdown h6 {
+  margin: 16px 0 8px;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.file-preview-markdown h1 { font-size: 20px; }
+.file-preview-markdown h2 { font-size: 17px; }
+.file-preview-markdown h3 { font-size: 15px; }
+
+.file-preview-markdown p {
+  margin: 0 0 10px;
+}
+
+.file-preview-markdown code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--bg-secondary);
+}
+
+.file-preview-markdown pre {
+  margin: 8px 0;
+  padding: 10px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  overflow-x: auto;
+}
+
+.file-preview-markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.file-preview-markdown ul,
+.file-preview-markdown ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.file-preview-markdown blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+}
+
+.file-preview-markdown a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.file-preview-markdown a:hover {
+  text-decoration: underline;
+}
+
+.file-preview-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.file-preview-markdown th,
+.file-preview-markdown td {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.file-preview-markdown th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+
+.file-preview-markdown hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 12px 0;
+}
+
+.file-preview-markdown img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* PDF preview */
+.file-preview-pdf-wrap {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.file-preview-pdf {
+  width: 100%;
+  height: 500px;
+  border: none;
+  display: block;
+}
+
+/* File viewer (full document view) */
+.file-viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.file-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 16px;
+}
+
+.file-viewer-back {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-viewer-back:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.file-viewer-filename {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.file-viewer-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.file-viewer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* In viewer mode, let text/markdown/pdf previews expand to fill available space */
+.file-viewer-body .file-preview-text-wrap,
+.file-viewer-body .file-preview-markdown-wrap {
+  max-height: none;
+}
+
+.file-viewer-body .file-preview-text {
+  max-height: none;
+}
+
+.file-viewer-body .file-preview-markdown {
+  max-height: none;
+}
+
+.file-viewer-body .file-preview-pdf {
+  height: calc(100vh - 200px);
+}
+
+.file-viewer-body .file-preview-image-wrap {
+  max-height: none;
+}
+
+.file-viewer-body .file-preview-image {
+  max-height: none;
 }
 
 /* Properties list */

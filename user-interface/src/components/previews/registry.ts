@@ -40,3 +40,30 @@ registerPreview(
   (ct, filename) => ct.startsWith("image/") || IMAGE_EXTENSIONS.test(filename),
   () => import("./ImagePreview"),
 );
+
+// Markdown
+const MARKDOWN_EXTENSIONS = /\.(md|mdx|markdown)$/i;
+
+registerPreview(
+  (ct, filename) => ct === "text/markdown" || MARKDOWN_EXTENSIONS.test(filename),
+  () => import("./MarkdownPreview"),
+);
+
+// PDF
+registerPreview(
+  (ct, filename) => ct === "application/pdf" || /\.pdf$/i.test(filename),
+  () => import("./PdfPreview"),
+);
+
+// Text / code / JSON — broad catch-all for readable files
+const TEXT_EXTENSIONS = /\.(txt|json|csv|xml|yaml|yml|toml|ini|cfg|conf|log|env|sh|bash|zsh|fish|bat|cmd|ps1|py|rb|js|jsx|ts|tsx|go|rs|c|cpp|h|hpp|java|kt|scala|swift|cs|php|lua|r|sql|graphql|gql|html|htm|css|scss|sass|less|vue|svelte|astro|makefile|dockerfile|gitignore|gitattributes|editorconfig|eslintrc|prettierrc|babelrc)$/i;
+
+registerPreview(
+  (ct, filename) =>
+    ct.startsWith("text/") ||
+    ct === "application/json" ||
+    ct === "application/xml" ||
+    ct === "application/x-yaml" ||
+    TEXT_EXTENSIONS.test(filename),
+  () => import("./TextPreview"),
+);

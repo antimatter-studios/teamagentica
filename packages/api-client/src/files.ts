@@ -58,6 +58,13 @@ export class FilesAPI {
     );
     return res.blob();
   }
+
+  async fetchText(pluginId: string, key: string): Promise<string> {
+    const res = await this.http.getRaw(
+      `/api/route/${pluginId}/objects/${encodeURIComponent(key)}`
+    );
+    return res.text();
+  }
 }
 
 export function formatBytes(bytes: number): string {
