@@ -26,6 +26,11 @@ export interface DynamicOptionState {
   fallback?: boolean;
 }
 
+export interface SchemaSection {
+  name: string;
+  fields: { key: string; value: string }[];
+}
+
 export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
   const [fields, setFields] = useState<ConfigField[]>([]);
   const [dirty, setDirty] = useState(false);
@@ -33,6 +38,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [extraSections, setExtraSections] = useState<SchemaSection[]>([]);
   const [dynamicOptions, setDynamicOptions] = useState<
     Record<string, DynamicOptionState>
   >({});
@@ -186,6 +192,32 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
 
         setFields(configFields);
 
+        // Fetch full schema to extract non-config readonly sections.
+        if (plugin.status === "running") {
+          try {
+            const fullSchema = await apiClient.plugins.getSchema(plugin.id);
+            const sections: SchemaSection[] = [];
+            for (const [sectionName, raw] of Object.entries(fullSchema)) {
+              if (sectionName === "config") continue;
+              if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
+              const kvMap = raw as Record<string, unknown>;
+              const sectionFields = Object.entries(kvMap)
+                .map(([k, v]) => ({
+                  key: k,
+                  value: typeof v === "string" ? v : v == null ? "" : JSON.stringify(v),
+                }))
+                .sort((a, b) => a.key.localeCompare(b.key));
+              sections.push({ name: sectionName, fields: sectionFields });
+            }
+            sections.sort((a, b) => a.name.localeCompare(b.name));
+            setExtraSections(sections);
+          } catch {
+            // Non-critical — just skip extra sections.
+          }
+        } else {
+          setExtraSections([]);
+        }
+
         const dynamicFields = Object.entries(schema).filter(
           ([, f]) => f.dynamic && f.type === "select"
         );
@@ -272,6 +304,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     saving,
     error,
     saveSuccess,
+    extraSections,
     dynamicOptions,
     oauthStates,
     updateField,

@@ -2,6 +2,7 @@ import type { Plugin } from "@teamagentica/api-client";
 import {
   usePluginConfig,
   type ConfigField,
+  type SchemaSection,
 } from "../hooks/usePluginConfig";
 
 interface Props {
@@ -17,6 +18,7 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
     saving,
     error,
     saveSuccess,
+    extraSections,
     dynamicOptions,
     oauthStates,
     updateField,
@@ -102,6 +104,82 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
     // Aliases have their own dedicated tab — skip rendering here.
     if (fieldType === "aliases") {
       return null;
+    }
+
+    if (fieldType === "bot_token") {
+      let entries: { alias: string; token: string }[] = [];
+      try {
+        entries = JSON.parse(field.value || "[]");
+      } catch {
+        entries = [];
+      }
+
+      const updateEntries = (updated: typeof entries) => {
+        updateField(index, JSON.stringify(updated));
+      };
+
+      return (
+        <div className="form-field" key={field.key}>
+          <label>
+            {label}
+            {schema?.required && <span className="config-required"> *</span>}
+          </label>
+          {helpText && <span className="config-help-text">{helpText}</span>}
+
+          <div className="bot-token-table">
+            {entries.length > 0 && (
+              <div className="bot-token-header">
+                <span className="bot-token-col-alias">ALIAS</span>
+                <span className="bot-token-col-token">TOKEN</span>
+                <span className="bot-token-col-action" />
+              </div>
+            )}
+            {entries.map((entry, i) => (
+              <div className="bot-token-row" key={i}>
+                <input
+                  className="bot-token-alias"
+                  type="text"
+                  value={entry.alias}
+                  placeholder="alias"
+                  onChange={(e) => {
+                    const updated = [...entries];
+                    updated[i] = { ...updated[i], alias: e.target.value };
+                    updateEntries(updated);
+                  }}
+                />
+                <input
+                  className="bot-token-token"
+                  type="password"
+                  value={entry.token}
+                  placeholder="bot token"
+                  onChange={(e) => {
+                    const updated = [...entries];
+                    updated[i] = { ...updated[i], token: e.target.value };
+                    updateEntries(updated);
+                  }}
+                />
+                <button
+                  className="bot-token-remove"
+                  onClick={() => {
+                    updateEntries(entries.filter((_, j) => j !== i));
+                  }}
+                  title="Remove bot"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <button
+              className="bot-token-add"
+              onClick={() => {
+                updateEntries([...entries, { alias: "", token: "" }]);
+              }}
+            >
+              + Add bot
+            </button>
+          </div>
+        </div>
+      );
     }
 
     const isReadOnly = schema?.readonly ?? false;
@@ -260,6 +338,25 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
         }
         return renderField(field, index);
       })}
+
+      {extraSections.length > 0 && extraSections.map((section) => (
+        <div className="schema-readonly-section" key={section.name}>
+          <div className="schema-readonly-header">
+            {section.name.replace(/_/g, " ").toUpperCase()}
+          </div>
+          <div className="schema-readonly-fields">
+            {section.fields.map((f) => (
+              <div className="schema-readonly-row" key={f.key}>
+                <span className="schema-readonly-key">{f.key}</span>
+                <span className="schema-readonly-value">{f.value}</span>
+              </div>
+            ))}
+            {section.fields.length === 0 && (
+              <div className="schema-readonly-empty">No entries</div>
+            )}
+          </div>
+        </div>
+      ))}
 
       {plugin.status === "running" && dirty && (
         <div className="config-notice">
