@@ -1,0 +1,54 @@
+version: 2
+
+project_name: tacli
+
+before:
+  hooks:
+    - cd tacli && go mod tidy
+
+builds:
+  - main: .
+    dir: tacli
+    binary: tacli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/antimatter-studios/teamagentica/tacli/internal/cli.Version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+homebrew_casks:
+  - name: tacli
+    binaries:
+      - tacli
+    repository:
+      owner: antimatter-studios
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/antimatter-studios/teamagentica
+    description: "Team Agentica CLI — inspect and manage the platform"
+    hooks:
+      post:
+        install: 'system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/tacli"]'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
