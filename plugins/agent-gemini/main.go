@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -22,17 +21,12 @@ func main() {
 
 	manifest := pluginsdk.LoadManifest()
 
-	port := 8081
-	if v := os.Getenv("AGENT_GEMINI_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
+	const defaultPort = 8081
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         getHostname(),
-		Port:         port,
+		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		Dependencies: pluginsdk.PluginDependencies{Capabilities: manifest.Dependencies},
@@ -88,7 +82,7 @@ func main() {
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
+		Addr:    fmt.Sprintf(":%d", defaultPort),
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)

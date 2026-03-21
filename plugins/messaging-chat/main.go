@@ -29,11 +29,7 @@ func main() {
 
 	const httpPort = 8092
 
-	// Data path still comes from env — it's infrastructure config, not plugin config.
-	dataPath := os.Getenv("PLUGIN_DATA_PATH")
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	dataPath := "/data" // default, overridden by FetchConfig below
 
 	db, err := storage.Open(dataPath)
 	if err != nil {

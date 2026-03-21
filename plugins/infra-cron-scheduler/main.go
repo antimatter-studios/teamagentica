@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,18 +14,18 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-cron-scheduler/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-cron-scheduler/internal/scheduler"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-cron-scheduler/internal/storage"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Load SDK config from env (TEAMAGENTICA_KERNEL_HOST, TEAMAGENTICA_PLUGIN_TOKEN, etc.)
-	sdkCfg := pluginsdk.LoadConfig()
+	const defaultPort = 8081
 
-	hostname, _ := os.Hostname()
+	sdkCfg := pluginsdk.LoadConfig()
 	manifest := pluginsdk.LoadManifest()
 
-	const defaultPort = 8081
+	hostname, _ := os.Hostname()
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
@@ -39,13 +40,12 @@ func main() {
 		},
 	})
 
-	ctx := context.Background()
-	sdkClient.Start(ctx)
+	sdkClient.Start(context.Background())
 
-	// Fetch plugin config from kernel API.
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
-		log.Fatalf("Failed to fetch plugin config: %v", err)
+		log.Printf("Warning: failed to fetch plugin config: %v (using defaults)", err)
+		pluginConfig = map[string]string{}
 	}
 
 	port := defaultPort
@@ -60,21 +60,64 @@ func main() {
 		log.Println("Debug mode enabled")
 	}
 
-	sched := scheduler.New()
+	dataPath := pluginConfig["PLUGIN_DATA_PATH"]
+	if dataPath == "" {
+		dataPath = "/data"
+	}
+
+	db, err := storage.Open(dataPath)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+
+	// Parse dispatch config
+	dispatchCfg := scheduler.DispatchConfig{
+		Enabled: pluginConfig["DISPATCH_ENABLED"] != "false", // default true
+	}
+	if v := pluginConfig["DISPATCH_GLOBAL_LIMIT"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			dispatchCfg.GlobalLimit = n
+		}
+	}
+	if v := pluginConfig["DISPATCH_AGENT_LIMITS"]; v != "" {
+		var limits map[string]int
+		if err := json.Unmarshal([]byte(v), &limits); err == nil {
+			dispatchCfg.AgentLimits = limits
+		}
+	}
+	if v := pluginConfig["DISPATCH_PROMPT_TEMPLATE"]; v != "" {
+		dispatchCfg.PromptTemplate = v
+	}
+
+	sched := scheduler.New(db, sdkClient, dispatchCfg)
 	defer sched.Stop()
 
-	router := gin.Default()
-	h := handlers.NewHandler(sched)
+	h := handlers.NewHandler(sched, db)
 
+	router := gin.Default()
 	router.GET("/health", h.Health)
-	router.POST("/events", h.CreateEvent)
-	router.GET("/events", h.ListEvents)
-	router.GET("/events/:id", h.GetEvent)
-	router.PUT("/events/:id", h.UpdateEvent)
-	router.DELETE("/events/:id", h.DeleteEvent)
+	router.POST("/events", h.CreateJob)
+	router.GET("/events", h.ListJobs)
+	router.GET("/events/:id", h.GetJob)
+	router.PUT("/events/:id", h.UpdateJob)
+	router.DELETE("/events/:id", h.DeleteJob)
 	router.GET("/log", h.GetLog)
 
-	h.SetSDK(sdkClient)
+	// MCP tool endpoints.
+	router.GET("/tools", h.GetTools)
+	router.POST("/mcp/list_jobs", h.MCPListJobs)
+	router.POST("/mcp/create_job", h.MCPCreateJob)
+	router.POST("/mcp/update_job", h.MCPUpdateJob)
+	router.POST("/mcp/delete_job", h.MCPDeleteJob)
+	router.POST("/mcp/trigger_job", h.MCPTriggerJob)
+	router.POST("/mcp/get_log", h.MCPGetLog)
+
+	// Dispatch queue endpoints.
+	router.GET("/dispatch/queue", h.ListDispatchQueue)
+	router.GET("/dispatch/queue/:id", h.GetDispatchEntry)
+	router.POST("/dispatch/queue/:id/retry", h.RetryDispatch)
+	router.POST("/mcp/list_dispatch_queue", h.MCPListDispatchQueue)
+	router.POST("/mcp/retry_dispatch", h.MCPRetryDispatch)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

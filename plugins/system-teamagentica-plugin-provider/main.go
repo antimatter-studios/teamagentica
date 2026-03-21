@@ -16,23 +16,7 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Open the catalog database.
-	dbPath := os.Getenv("CATALOG_DB")
-	if dbPath == "" {
-		dbPath = "/data/catalog.db"
-	}
-	catalog, err := store.Open(dbPath)
-	if err != nil {
-		log.Fatalf("failed to open catalog db: %v", err)
-	}
-	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
-
-	port := os.Getenv("PROVIDER_PORT")
-	if port == "" {
-		port = "8083"
-	}
-	portInt := 8083
-	fmt.Sscanf(port, "%d", &portInt)
+	const defaultPort = 8083
 
 	hostname, _ := os.Hostname()
 
@@ -41,12 +25,20 @@ func main() {
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
-		Port:         portInt,
+		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 	})
 
 	sdkClient.Start(context.Background())
+
+	// Open the catalog database.
+	dbPath := "/data/catalog.db"
+	catalog, err := store.Open(dbPath)
+	if err != nil {
+		log.Fatalf("failed to open catalog db: %v", err)
+	}
+	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
 
 	r := gin.Default()
 
@@ -108,7 +100,7 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    "0.0.0.0:" + port,
+		Addr:    fmt.Sprintf("0.0.0.0:%d", defaultPort),
 		Handler: r,
 	}
 

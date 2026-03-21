@@ -16,6 +16,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/bridge"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/debugtrace"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/router"
 	"github.com/gin-gonic/gin"
 )
@@ -32,6 +33,8 @@ type relay struct {
 	allowFirstAsDefault   bool // true when DEFAULT_COORDINATOR is unset at startup
 	maxOrchestrationTasks int
 	taskTimeoutSeconds    int
+	debug                 bool
+	tracer                *debugtrace.Recorder
 	personas              *personaCache
 	memoryPluginID        string // cached plugin ID for infra-agent-memory (empty = not available)
 	memoryMu              sync.RWMutex
@@ -301,6 +304,14 @@ func (r *relay) handleChat(c *gin.Context) {
 	// Store the incoming user message.
 	go r.memoryStore(sessionID, "user", req.Message, "")
 
+	var reqTraceID string
+	if r.debug {
+		reqTraceID = debugtrace.NewRequestID()
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeRequest, "", req.SourcePlugin, "",
+			fmt.Sprintf("source=%s channel=%s message=%s", req.SourcePlugin, req.ChannelID, req.Message),
+			nil, "", 0, "")
+	}
+
 	// 1. Check if this channel is mapped to a workspace bridge.
 	if ws := r.routes.GetWorkspace(req.SourcePlugin, req.ChannelID); ws != nil {
 		r.routeToWorkspace(c, ws, req)
@@ -319,11 +330,17 @@ func (r *relay) handleChat(c *gin.Context) {
 				})
 				return
 			}
+			callStart := time.Now()
 			agentResp, responder, err := r.routeToAgent(c.Request.Context(), result.Target.PluginID, result.Target.Model,
 				result.Remainder, req.ImageURLs, history, false, result.Alias)
 			if err != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("agent: %v", err)})
 				return
+			}
+			if r.debug {
+				r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, responder, result.Target.PluginID, "",
+					agentResp.Response, toTraceAttachments(agentResp.Attachments), agentResp.Model,
+					time.Since(callStart).Milliseconds(), "")
 			}
 			go r.memoryStore(sessionID, "assistant", agentResp.Response, responder)
 			c.JSON(http.StatusOK, relayResponse{
@@ -357,10 +374,19 @@ func (r *relay) handleChat(c *gin.Context) {
 		coordAlias = coordinator.PluginID
 	}
 
-	response, responder, orchResp, err := r.orchestrate(c.Request.Context(), coordinator, coordAlias, req.Message, req.ImageURLs, aliases)
+	response, responder, orchResp, err := r.orchestrate(c.Request.Context(), coordinator, coordAlias, req.Message, req.ImageURLs, aliases, reqTraceID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
+	}
+
+	if r.debug {
+		var finalAttach []debugtrace.Attachment
+		if orchResp != nil {
+			finalAttach = toTraceAttachments(orchResp.Attachments)
+		}
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, responder, "", "",
+			response, finalAttach, "", 0, "")
 	}
 
 	rr := relayResponse{
@@ -476,19 +502,37 @@ func (r *relay) orchestrate(
 	message string,
 	imageURLs []string,
 	aliases *alias.AliasMap,
+	reqTraceID string,
 ) (string, string, *agentChatResponse, error) {
 
 	// Call coordinator in orchestration mode.
+	coordStart := time.Now()
+	if r.debug {
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorCall, coordAlias, coordinator.PluginID, "",
+			message, nil, coordinator.Model, 0, "")
+	}
 	coordResp, err := r.callAgent(ctx, coordinator.PluginID, coordinator.Model,
 		message, imageURLs, nil, true, coordAlias)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("coordinator: %w", err)
 	}
 
+	if r.debug {
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorResponse, coordAlias, coordinator.PluginID, "",
+			coordResp.Response, toTraceAttachments(coordResp.Attachments), coordResp.Model,
+			time.Since(coordStart).Milliseconds(), "")
+	}
+
 	// Parse plan — if no JSON DAG, coordinator answered directly.
 	plan, isDag := parseCoordinatorPlan(coordResp.Response)
 	if !isDag {
 		return coordResp.Response, coordAlias, coordResp, nil
+	}
+
+	if r.debug {
+		planJSON, _ := json.Marshal(plan)
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeDAGPlan, coordAlias, "", "",
+			string(planJSON), nil, "", 0, "")
 	}
 
 	// Validate plan.
@@ -545,12 +589,22 @@ func (r *relay) orchestrate(
 
 				prompt := interpolate(t.Prompt, snapshot)
 
+				var callTraceID string
+				taskStart := time.Now()
+				targetPluginID := ""
+
+				if r.debug {
+					callTraceID = r.tracer.Record(reqTraceID, "", debugtrace.TypeTaskCall, t.Alias, "", t.ID,
+						prompt, nil, "", 0, "")
+				}
+
 				taskCtx, cancel := context.WithTimeout(ctx, time.Duration(r.taskTimeoutSeconds)*time.Second)
 				defer cancel()
 
 				var result string
 				var resp *agentChatResponse
 				if t.Alias == "self" {
+					targetPluginID = coordinator.PluginID
 					// Call coordinator back in worker mode for synthesis.
 					resp, err = r.callAgent(taskCtx, coordinator.PluginID, coordinator.Model,
 						prompt, nil, nil, false, coordAlias)
@@ -564,6 +618,7 @@ func (r *relay) orchestrate(
 					if target == nil || target.Type != alias.TargetAgent {
 						result = fmt.Sprintf("[error: alias @%s not found or not an agent]", t.Alias)
 					} else {
+						targetPluginID = target.PluginID
 						resp, err = r.callAgent(taskCtx, target.PluginID, target.Model,
 							prompt, nil, nil, false, t.Alias)
 						if err != nil {
@@ -572,6 +627,21 @@ func (r *relay) orchestrate(
 							result = resp.Response
 						}
 					}
+				}
+
+				if r.debug {
+					var traceErr string
+					if err != nil {
+						traceErr = err.Error()
+					}
+					var respAttach []debugtrace.Attachment
+					respModel := ""
+					if resp != nil {
+						respAttach = toTraceAttachments(resp.Attachments)
+						respModel = resp.Model
+					}
+					r.tracer.Record(reqTraceID, callTraceID, debugtrace.TypeTaskResponse, t.Alias, targetPluginID, t.ID,
+						result, respAttach, respModel, time.Since(taskStart).Milliseconds(), traceErr)
 				}
 
 				mu.Lock()
@@ -601,6 +671,14 @@ func (r *relay) orchestrate(
 		}
 	}
 
+	// Collect all attachments from every task in the DAG.
+	var allAttachments []agentAttachment
+	for _, t := range plan.Tasks {
+		if resp := agentResps[t.ID]; resp != nil && len(resp.Attachments) > 0 {
+			allAttachments = append(allAttachments, resp.Attachments...)
+		}
+	}
+
 	if len(terminals) == 1 {
 		t := terminals[0]
 		resp := results[t.ID]
@@ -608,7 +686,13 @@ func (r *relay) orchestrate(
 		if a == "self" {
 			a = coordAlias
 		}
-		return resp, a, agentResps[t.ID], nil
+		termResp := agentResps[t.ID]
+		// If the terminal task itself has no attachments but other tasks do,
+		// carry forward all collected attachments.
+		if termResp != nil && len(termResp.Attachments) == 0 && len(allAttachments) > 0 {
+			termResp.Attachments = allAttachments
+		}
+		return resp, a, termResp, nil
 	}
 
 	// Multiple terminal tasks — coordinator should have included a self synthesis task.
@@ -621,7 +705,24 @@ func (r *relay) orchestrate(
 		}
 		fmt.Fprintf(&sb, "[@%s]: %s\n\n", a, results[t.ID])
 	}
-	return strings.TrimSpace(sb.String()), "relay", nil, nil
+	// Build a synthetic response that carries forward all attachments.
+	var synthResp *agentChatResponse
+	if len(allAttachments) > 0 {
+		synthResp = &agentChatResponse{Attachments: allAttachments}
+	}
+	return strings.TrimSpace(sb.String()), "relay", synthResp, nil
+}
+
+// toTraceAttachments converts agent attachments to trace attachment format.
+func toTraceAttachments(attachments []agentAttachment) []debugtrace.Attachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]debugtrace.Attachment, len(attachments))
+	for i, a := range attachments {
+		out[i] = debugtrace.Attachment{MimeType: a.MimeType, ImageData: a.ImageData}
+	}
+	return out
 }
 
 // --- Agent routing ---
@@ -909,19 +1010,14 @@ func main() {
 	sdkCfg := pluginsdk.LoadConfig()
 	manifest := pluginsdk.LoadManifest()
 
-	port := 8081
-	if p := os.Getenv("PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
-		}
-	}
+	const defaultPort = 8081
 
 	var relayRef *relay
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         getHostname(),
-		Port:         port,
+		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		SchemaFunc: func() map[string]interface{} {
@@ -1065,6 +1161,16 @@ func main() {
 			r.taskTimeoutSeconds = n
 		}
 	}
+	if v := pluginConfig["PLUGIN_DEBUG"]; v == "true" {
+		r.debug = true
+		t, err := debugtrace.Open("/data/relay_traces.db")
+		if err != nil {
+			log.Printf("failed to open trace db: %v", err)
+		} else {
+			r.tracer = t
+		}
+		log.Printf("Debug mode enabled")
+	}
 
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
@@ -1111,6 +1217,25 @@ func main() {
 				log.Printf("TASK_TIMEOUT_SECONDS updated: %d", n)
 			}
 		}
+
+		if v, ok := detail.Config["PLUGIN_DEBUG"]; ok {
+			enabled := v == "true"
+			r.mu.Lock()
+			r.debug = enabled
+			if enabled && r.tracer == nil {
+				t, err := debugtrace.Open("/data/relay_traces.db")
+				if err != nil {
+					log.Printf("failed to open trace db: %v", err)
+				} else {
+					r.tracer = t
+				}
+			} else if !enabled && r.tracer != nil {
+				r.tracer.Close()
+				r.tracer = nil
+			}
+			r.mu.Unlock()
+			log.Printf("PLUGIN_DEBUG updated: %v", enabled)
+		}
 	}))
 
 	ginRouter := gin.Default()
@@ -1127,8 +1252,40 @@ func main() {
 
 	ginRouter.GET("/status", r.handleStatus)
 
+	ginRouter.GET("/debug/traces", func(c *gin.Context) {
+		if r.tracer == nil {
+			c.JSON(http.StatusOK, gin.H{"error": "debug mode is off, enable PLUGIN_DEBUG to start tracing"})
+			return
+		}
+		limit := 50
+		if v := c.Query("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		rows, err := r.tracer.ListRequests(limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, rows)
+	})
+
+	ginRouter.GET("/debug/traces/:request_id", func(c *gin.Context) {
+		if r.tracer == nil {
+			c.JSON(http.StatusOK, gin.H{"error": "debug mode is off"})
+			return
+		}
+		rows, err := r.tracer.GetTrace(c.Param("request_id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, rows)
+	})
+
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
+		Addr:    fmt.Sprintf(":%d", defaultPort),
 		Handler: ginRouter,
 	}
 

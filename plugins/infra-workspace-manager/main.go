@@ -90,7 +90,7 @@ func main() {
 	}
 
 	// Base domain for constructing workspace URLs.
-	baseDomain := os.Getenv("TEAMAGENTICA_BASE_DOMAIN")
+	baseDomain := pluginConfig["TEAMAGENTICA_BASE_DOMAIN"]
 
 	// Data dir is /data (storage-volume's data, cross-mounted by the kernel).
 	// Volumes live at /data/volumes/.

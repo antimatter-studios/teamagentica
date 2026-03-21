@@ -53,7 +53,12 @@ func main() {
 	ctx := context.Background()
 	sdkClient.Start(ctx)
 
-	if os.Getenv("PLUGIN_DEBUG") != "true" {
+	pluginConfig, err := sdkClient.FetchConfig()
+	if err != nil {
+		log.Printf("WARNING: failed to fetch plugin config: %v", err)
+	}
+
+	if pluginConfig["PLUGIN_DEBUG"] != "true" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
