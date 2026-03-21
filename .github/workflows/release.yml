@@ -1,9 +1,13 @@
-name: Release
+name: Release tacli
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - "tacli/**"
+      - ".goreleaser.yml"
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
@@ -20,13 +24,37 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-          cache: true
+          cache-dependency-path: tacli/go.sum
+
+      - name: Determine next version
+        id: version
+        run: |
+          # Get the latest tacli release tag (v*.*.*)
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.1.0"
+          else
+            # Bump patch version
+            MAJOR=$(echo "$LATEST" | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Next version: $NEXT"
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "tacli ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
