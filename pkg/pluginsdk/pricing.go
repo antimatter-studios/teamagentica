@@ -96,7 +96,6 @@ func (p *PricingHandler) pushToKernel(prices []PricingEntry) error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.client.config.PluginToken)
 
 	resp, err := p.client.httpClient.Do(req)
 	if err != nil {

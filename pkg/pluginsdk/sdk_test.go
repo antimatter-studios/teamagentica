@@ -20,9 +20,8 @@ func testEnv(t *testing.T, handler http.Handler) (*Client, *httptest.Server) {
 
 	u, _ := url.Parse(srv.URL)
 	cfg := Config{
-		KernelHost:  u.Hostname(),
-		KernelPort:  u.Port(),
-		PluginToken: "tok-abc",
+		KernelHost: u.Hostname(),
+		KernelPort: u.Port(),
 	}
 	reg := Registration{
 		ID:           "test-plugin",
@@ -60,12 +59,11 @@ func TestKernelURL_HTTPS(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	envs := map[string]string{
-		"TEAMAGENTICA_KERNEL_HOST":  "myhost",
-		"TEAMAGENTICA_KERNEL_PORT":  "9999",
-		"TEAMAGENTICA_PLUGIN_TOKEN": "secret",
-		"TEAMAGENTICA_TLS_CERT":     "/cert.pem",
-		"TEAMAGENTICA_TLS_KEY":      "/key.pem",
-		"TEAMAGENTICA_TLS_CA":       "/ca.pem",
+		"TEAMAGENTICA_KERNEL_HOST": "myhost",
+		"TEAMAGENTICA_KERNEL_PORT": "9999",
+		"TEAMAGENTICA_TLS_CERT":    "/cert.pem",
+		"TEAMAGENTICA_TLS_KEY":     "/key.pem",
+		"TEAMAGENTICA_TLS_CA":      "/ca.pem",
 	}
 	for k, v := range envs {
 		os.Setenv(k, v)
@@ -79,9 +77,6 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.KernelPort != "9999" {
 		t.Errorf("KernelPort = %q, want %q", cfg.KernelPort, "9999")
-	}
-	if cfg.PluginToken != "secret" {
-		t.Errorf("PluginToken = %q, want %q", cfg.PluginToken, "secret")
 	}
 	if cfg.TLSCert != "/cert.pem" {
 		t.Errorf("TLSCert = %q, want %q", cfg.TLSCert, "/cert.pem")
@@ -163,11 +158,9 @@ func TestUsageReport_OmitEmpty(t *testing.T) {
 func TestReportEvent(t *testing.T) {
 	var captured []byte
 	var capturedPath string
-	var capturedAuth string
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedPath = r.URL.Path
-		capturedAuth = r.Header.Get("Authorization")
 		captured, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	})
@@ -177,9 +170,6 @@ func TestReportEvent(t *testing.T) {
 
 	if capturedPath != "/api/plugins/event" {
 		t.Errorf("path = %q, want /api/plugins/event", capturedPath)
-	}
-	if capturedAuth != "Bearer tok-abc" {
-		t.Errorf("auth = %q, want Bearer tok-abc", capturedAuth)
 	}
 
 	var payload map[string]string
@@ -433,19 +423,3 @@ func TestGetServerTLSConfig_MissingFields(t *testing.T) {
 	}
 }
 
-// --- Authorization header ---
-
-func TestAuthorizationHeader(t *testing.T) {
-	var capturedAuth string
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAuth = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-	})
-
-	client, _ := testEnv(t, handler)
-	_ = client.Subscribe("x", "/cb")
-
-	if capturedAuth != "Bearer tok-abc" {
-		t.Errorf("Authorization = %q, want 'Bearer tok-abc'", capturedAuth)
-	}
-}

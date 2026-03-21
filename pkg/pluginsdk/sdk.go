@@ -189,25 +189,23 @@ type EventHandler func(event EventCallback)
 
 // Config holds the kernel connection info populated from environment variables.
 type Config struct {
-	KernelHost  string // TEAMAGENTICA_KERNEL_HOST
-	KernelPort  string // TEAMAGENTICA_KERNEL_PORT
-	PluginToken string // TEAMAGENTICA_PLUGIN_TOKEN (service token for auth)
-	TLSCert   string // TEAMAGENTICA_TLS_CERT
-	TLSKey    string // TEAMAGENTICA_TLS_KEY
-	TLSCA     string // TEAMAGENTICA_TLS_CA
-	Candidate bool   // TEAMAGENTICA_CANDIDATE — true if running as a candidate container
+	KernelHost string // TEAMAGENTICA_KERNEL_HOST
+	KernelPort string // TEAMAGENTICA_KERNEL_PORT
+	TLSCert    string // TEAMAGENTICA_TLS_CERT
+	TLSKey     string // TEAMAGENTICA_TLS_KEY
+	TLSCA      string // TEAMAGENTICA_TLS_CA
+	Candidate  bool   // TEAMAGENTICA_CANDIDATE — true if running as a candidate container
 }
 
 // LoadConfig reads plugin SDK config from environment variables.
 func LoadConfig() Config {
 	return Config{
-		KernelHost:  os.Getenv("TEAMAGENTICA_KERNEL_HOST"),
-		KernelPort:  os.Getenv("TEAMAGENTICA_KERNEL_PORT"),
-		PluginToken: os.Getenv("TEAMAGENTICA_PLUGIN_TOKEN"),
-		TLSCert:     os.Getenv("TEAMAGENTICA_TLS_CERT"),
-		TLSKey:      os.Getenv("TEAMAGENTICA_TLS_KEY"),
-		TLSCA:       os.Getenv("TEAMAGENTICA_TLS_CA"),
-		Candidate: os.Getenv("TEAMAGENTICA_CANDIDATE") == "true",
+		KernelHost: os.Getenv("TEAMAGENTICA_KERNEL_HOST"),
+		KernelPort: os.Getenv("TEAMAGENTICA_KERNEL_PORT"),
+		TLSCert:    os.Getenv("TEAMAGENTICA_TLS_CERT"),
+		TLSKey:     os.Getenv("TEAMAGENTICA_TLS_KEY"),
+		TLSCA:      os.Getenv("TEAMAGENTICA_TLS_CA"),
+		Candidate:  os.Getenv("TEAMAGENTICA_CANDIDATE") == "true",
 	}
 }
 
@@ -224,6 +222,7 @@ type Client struct {
 	eventPort       int
 	eventDebouncers map[string]Debouncer
 	eventMu         sync.RWMutex
+	registeredCh    chan struct{} // closed after successful kernel registration
 
 	// Cached storage plugin discovery.
 	storagePluginID string
@@ -268,6 +267,7 @@ func NewClient(cfg Config, reg Registration) *Client {
 		httpClient:   httpClient,
 		routeClient:  routeClient,
 		stopCh:       make(chan struct{}),
+		registeredCh: make(chan struct{}),
 	}
 }
 
@@ -334,15 +334,19 @@ func (c *Client) Start(ctx context.Context) {
 			break
 		}
 
-		// Subscribe to kernel events for each registered handler.
+		// Signal that registration is complete — OnEvent calls after this
+		// point will subscribe immediately.
+		close(c.registeredCh)
+
+		// Subscribe any event handlers that were registered before Start completed.
 		c.eventMu.RLock()
-		debouncers := make(map[string]Debouncer, len(c.eventDebouncers))
-		for k, v := range c.eventDebouncers {
-			debouncers[k] = v
+		pending := make([]string, 0, len(c.eventDebouncers))
+		for k := range c.eventDebouncers {
+			pending = append(pending, k)
 		}
 		c.eventMu.RUnlock()
 
-		for eventType := range debouncers {
+		for _, eventType := range pending {
 			if err := c.Subscribe(eventType, "/events"); err != nil {
 				log.Printf("pluginsdk: failed to subscribe to %s: %v", eventType, err)
 			} else {
@@ -386,7 +390,6 @@ func (c *Client) ReportEvent(eventType, detail string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -438,7 +441,6 @@ func (c *Client) ReportUsage(report UsageReport) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -472,7 +474,6 @@ func (c *Client) ReportAddressedEvent(eventType, detail, destination string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -503,7 +504,6 @@ func (c *Client) Subscribe(eventType, callbackPath string) error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -533,7 +533,6 @@ func (c *Client) Unsubscribe(eventType string) error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -548,18 +547,59 @@ func (c *Client) Unsubscribe(eventType string) error {
 }
 
 // OnEvent registers a handler for the given event type with a debouncer strategy.
-// Must be called before Start(). The SDK will automatically start an internal
-// event server and subscribe to the kernel for each registered event type.
+// Can be called before or after Start(). If called after registration has
+// completed, subscribes to the kernel immediately. If called before, the
+// subscription is deferred until Start() finishes registering.
 //
 // Use NewNullDebouncer(handler) for immediate delivery of every event.
 // Use NewTimedDebouncer(duration, handler) to coalesce rapid events.
-func (c *Client) OnEvent(eventType string, debouncer Debouncer) {
+func (c *Client) OnEvent(eventType string, debouncer Debouncer) error {
 	c.eventMu.Lock()
-	defer c.eventMu.Unlock()
 	if c.eventDebouncers == nil {
 		c.eventDebouncers = make(map[string]Debouncer)
 	}
 	c.eventDebouncers[eventType] = debouncer
+	c.eventMu.Unlock()
+
+	// If already registered with kernel, subscribe immediately.
+	select {
+	case <-c.registeredCh:
+		if err := c.Subscribe(eventType, "/events"); err != nil {
+			return err
+		}
+		log.Printf("pluginsdk: subscribed to %s", eventType)
+	default:
+		// Not yet registered — Start() will subscribe pending handlers.
+	}
+	return nil
+}
+
+// WhenPluginAvailable calls fn when a plugin with the given capability is available.
+// It performs an immediate lookup and, if not found, listens for plugin:registered
+// events to catch late-starting plugins. fn is also called on re-registration
+// (e.g. after a plugin restart). Safe to call before or after Start().
+func (c *Client) WhenPluginAvailable(capability string, fn func(PluginInfo)) {
+	// Immediate check — plugin may already be running.
+	go func() {
+		// Wait for our own registration first so SearchPlugins works.
+		<-c.registeredCh
+
+		plugins, err := c.SearchPlugins(capability)
+		if err == nil && len(plugins) > 0 {
+			log.Printf("pluginsdk: plugin available for %s: %s", capability, plugins[0].ID)
+			fn(plugins[0])
+		}
+	}()
+
+	// Also listen for future registrations.
+	c.OnEvent("plugin:registered", NewNullDebouncer(func(event EventCallback) {
+		plugins, err := c.SearchPlugins(capability)
+		if err != nil || len(plugins) == 0 {
+			return
+		}
+		log.Printf("pluginsdk: plugin (re)available for %s: %s", capability, plugins[0].ID)
+		fn(plugins[0])
+	}))
 }
 
 // buildSchemaJSON returns the schema map to serve on GET /schema.
@@ -620,13 +660,23 @@ func (c *Client) startInternalServer() error {
 	mux.HandleFunc("POST /events", c.handleEventCallback)
 
 	c.eventServer = &http.Server{Handler: mux}
+
+	// Use TLS on the internal server when mTLS is enabled so the kernel
+	// (which always uses pluginScheme → "https") can reach /schema and /events.
+	if tlsCfg, err := GetServerTLSConfig(c.config); err != nil {
+		log.Printf("pluginsdk: WARNING: failed to configure TLS for internal server: %v — serving plain HTTP", err)
+	} else if tlsCfg != nil {
+		ln = tls.NewListener(ln, tlsCfg)
+		log.Printf("pluginsdk: internal server listening on :%d (schema + events, mTLS)", c.eventPort)
+	} else {
+		log.Printf("pluginsdk: internal server listening on :%d (schema + events)", c.eventPort)
+	}
+
 	go func() {
 		if err := c.eventServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("pluginsdk: internal server error: %v", err)
 		}
 	}()
-
-	log.Printf("pluginsdk: internal server listening on :%d (schema + events)", c.eventPort)
 	return nil
 }
 
@@ -664,7 +714,6 @@ func (c *Client) FetchAliases() ([]alias.AliasInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -694,7 +743,6 @@ func (c *Client) FetchConfig() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -757,7 +805,6 @@ func (c *Client) CreateManagedContainer(req CreateManagedContainerRequest) (*Man
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -784,7 +831,6 @@ func (c *Client) ListManagedContainers() ([]ManagedContainerInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -809,7 +855,6 @@ func (c *Client) StartManagedContainer(containerID string) (*ManagedContainerInf
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -835,7 +880,6 @@ func (c *Client) DeleteManagedContainer(containerID string) error {
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -864,7 +908,6 @@ func (c *Client) UpdateManagedContainer(containerID string, req UpdateManagedCon
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -932,7 +975,6 @@ func (c *Client) resolveStoragePlugin() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -984,7 +1026,6 @@ func (c *Client) StorageWrite(ctx context.Context, key string, data io.Reader, c
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1011,7 +1052,6 @@ func (c *Client) StorageRead(ctx context.Context, key string) (io.ReadCloser, st
 	if err != nil {
 		return nil, "", fmt.Errorf("storage read: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1037,7 +1077,6 @@ func (c *Client) StorageDelete(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("storage delete: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1063,7 +1102,6 @@ func (c *Client) StorageList(ctx context.Context, prefix string) (*StorageListRe
 	if err != nil {
 		return nil, fmt.Errorf("storage list: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1101,7 +1139,6 @@ func (c *Client) SearchPlugins(capabilityPrefix string) ([]PluginInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1130,7 +1167,6 @@ func (c *Client) GetPluginSchema(pluginID string) (map[string]interface{}, error
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1158,7 +1194,6 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -1192,7 +1227,6 @@ func (c *Client) DeployCandidate(ctx context.Context, pluginID string, image str
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1225,7 +1259,6 @@ func (c *Client) pluginAction(ctx context.Context, pluginID, action string) erro
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1278,7 +1311,6 @@ func (c *Client) register() error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1304,7 +1336,6 @@ func (c *Client) heartbeat() error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1330,7 +1361,6 @@ func (c *Client) deregister() error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.config.PluginToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
