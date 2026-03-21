@@ -120,19 +120,11 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		return
 	}
 
-	// Build env from plugin config.
-	env := o.buildEnv(plugin.ID)
-
-	// Inject kernel connection info.
-	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.TLSPort
-
-	// Inject the service token stored on the plugin record.
-	if plugin.ServiceToken != "" {
-		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
-	} else {
-		log.Printf("orchestrator: WARNING: plugin %s has no service token — plugin cannot authenticate with kernel", plugin.ID)
-		o.emit("warning", plugin.ID, "no service token on plugin record")
+	// Build minimal env — only kernel connection info.
+	// Plugin config is fetched via REST API (FetchConfig), not env vars.
+	env := map[string]string{
+		"TEAMAGENTICA_KERNEL_HOST": o.config.AdvertiseHost,
+		"TEAMAGENTICA_KERNEL_PORT": o.config.TLSPort,
 	}
 
 	// Stop existing container and clear stale registration data before starting
@@ -198,13 +190,9 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
 	}
 
-	// Build env.
-	env := o.buildEnv(pluginID)
-	env["TEAMAGENTICA_KERNEL_HOST"] = o.config.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = o.config.TLSPort
-
-	if plugin.ServiceToken != "" {
-		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
+	env := map[string]string{
+		"TEAMAGENTICA_KERNEL_HOST": o.config.AdvertiseHost,
+		"TEAMAGENTICA_KERNEL_PORT": o.config.TLSPort,
 	}
 
 	o.emit("start", pluginID, fmt.Sprintf("starting container image=%s", plugin.Image))
@@ -359,30 +347,3 @@ func (o *Orchestrator) resolveDependencies(plugins []models.Plugin) []models.Plu
 	return result
 }
 
-// buildEnv reads PluginConfig rows for a plugin and returns them as a map.
-// It also injects default values from the plugin's config_schema for any keys
-// that don't have an explicit PluginConfig entry.
-func (o *Orchestrator) buildEnv(pluginID string) map[string]string {
-	var plugin models.Plugin
-	o.db.First(&plugin, "id = ?", pluginID)
-
-	var configs []models.Config
-	o.db.Where("owner_id = ?", pluginID).Find(&configs)
-
-	env := make(map[string]string, len(configs))
-	for _, cfg := range configs {
-		env[cfg.Key] = cfg.Value
-	}
-
-	// Fill in defaults from config_schema for keys not explicitly set.
-	schema, err := plugin.GetConfigSchema()
-	if err == nil && schema != nil {
-		for key, field := range schema {
-			if _, exists := env[key]; !exists && field.Default != "" {
-				env[key] = field.Default
-			}
-		}
-	}
-
-	return env
-}

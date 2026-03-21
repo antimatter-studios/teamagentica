@@ -287,10 +287,10 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 		return nil
 	}
 
-	// Build env from config table.
-	env := h.buildEnv(plugin.ID)
-	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.TLSPort
+	env := map[string]string{
+		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
+		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+	}
 
 	// Pull image (non-fatal — image may be local-only).
 	if err := h.runtime.PullImage(ctx, plugin.Image); err != nil {
@@ -417,10 +417,10 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID)
 	}
 
-	// Re-start with current config.
-	env := h.buildEnv(id)
-	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.TLSPort
+	env := map[string]string{
+		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
+		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+	}
 
 	h.Events.Emit(events.DebugEvent{
 		Type:     "start",
@@ -559,8 +559,7 @@ func (h *PluginHandler) GetUILogs(c *gin.Context) {
 }
 
 // GetSelfConfig handles GET /api/plugins/:id/self-config — called by plugins
-// via the SDK to fetch their own configuration. Returns unmasked values
-// (including secrets) since this is authenticated with the plugin's service token.
+// via the SDK to fetch their own configuration. Secret values are masked.
 func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 	id := c.Param("id")
 
@@ -575,7 +574,11 @@ func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 
 	result := make(map[string]string, len(configs))
 	for _, cfg := range configs {
-		result[cfg.Key] = cfg.Value
+		if cfg.IsSecret {
+			result[cfg.Key] = "********"
+		} else {
+			result[cfg.Key] = cfg.Value
+		}
 	}
 
 	// Config defaults are handled by the plugin itself — it knows its own schema.
@@ -659,9 +662,11 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 			isSecret := field.Secret
 			if cfg, ok := stored[key]; ok {
 				val = cfg.Value
-				if cfg.IsSecret {
+				if cfg.IsSecret || isSecret {
 					val = "********"
 				}
+			} else if isSecret {
+				val = "********"
 			}
 			items = append(items, configItem{
 				Key:      key,
@@ -733,10 +738,17 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		}
 	}
 
+	const maxConfigValueSize = 128 * 1024 // 128 KB
+
 	for key, entry := range req.Config {
 		// Skip readonly fields — they are set by the plugin, not the user.
 		if readonlyKeys[key] {
 			continue
+		}
+
+		if len(entry.Value) > maxConfigValueSize {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("config value for %q exceeds maximum size (%d bytes)", key, maxConfigValueSize)})
+			return
 		}
 
 		pc := models.Config{
@@ -803,6 +815,34 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "config updated"})
+}
+
+// DeletePluginConfigKey handles DELETE /api/plugins/:id/config/:key.
+// Removes a single config key from the plugin's stored configuration.
+func (h *PluginHandler) DeletePluginConfigKey(c *gin.Context) {
+	id := c.Param("id")
+	key := c.Param("key")
+
+	var plugin models.Plugin
+	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		return
+	}
+
+	result := h.db.Where("owner_id = ? AND key = ?", id, key).Delete(&models.Config{})
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "config key not found"})
+		return
+	}
+
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.config_delete", "plugin:"+id,
+			fmt.Sprintf(`{"key":%q}`, key), c.ClientIP(), true)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "config key deleted"})
 }
 
 // SearchPlugins handles GET /api/plugins/search?capability=<prefix>.
@@ -933,29 +973,4 @@ func (h *PluginHandler) fetchPluginSchema(plugin models.Plugin) ([]byte, error) 
 	return body, nil
 }
 
-// buildEnv reads PluginConfig rows for a plugin and returns them as a map.
-// Config defaults are handled by the plugin itself (it knows its own schema).
-
-func (h *PluginHandler) buildEnv(pluginID string) map[string]string {
-	var plugin models.Plugin
-	h.db.First(&plugin, "id = ?", pluginID)
-
-	var configs []models.Config
-	h.db.Where("owner_id = ?", pluginID).Find(&configs)
-
-	env := make(map[string]string, len(configs))
-	for _, cfg := range configs {
-		env[cfg.Key] = cfg.Value
-	}
-
-	// PLUGIN_ALIASES is kernel-managed (synced to aliases table), not an env var.
-	delete(env, "PLUGIN_ALIASES")
-
-	// Inject internal plugin service token (not user config).
-	if plugin.ServiceToken != "" {
-		env["TEAMAGENTICA_PLUGIN_TOKEN"] = plugin.ServiceToken
-	}
-
-	return env
-}
 

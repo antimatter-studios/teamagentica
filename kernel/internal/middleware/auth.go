@@ -49,10 +49,24 @@ func AuthOptional() gin.HandlerFunc {
 	}
 }
 
-// AuthRequired validates the Bearer token and injects claims into context.
-// Accepts the token via Authorization header or session cookie (for iframe embedding).
+// AuthRequired validates the caller's identity and injects claims into context.
+// Accepts: mTLS client certificate (plugin-to-plugin calls), JWT Bearer token, or session cookie.
 func AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Accept mTLS client certificate (plugin-to-plugin routing).
+		if c.Request.TLS != nil && len(c.Request.TLS.PeerCertificates) > 0 {
+			cert := c.Request.TLS.PeerCertificates[0]
+			pluginID := cert.Subject.CommonName
+			if pluginID != "" {
+				c.Set("plugin_id", pluginID)
+				c.Set("auth_method", "mtls")
+				c.Set("email", "plugin:"+pluginID)
+				c.Set("role", "service")
+				c.Next()
+				return
+			}
+		}
+
 		var token string
 
 		header := c.GetHeader("Authorization")
@@ -116,12 +130,10 @@ func RequireCapability(cap string) gin.HandlerFunc {
 	}
 }
 
-// PluginTokenAuth validates a plugin's identity.
-// When mTLS is enabled, identity comes from the client certificate CN.
-// When mTLS is disabled (dev mode), falls back to JWT bearer token validation.
+// PluginTokenAuth validates a plugin's identity via mTLS client certificate.
+// The plugin ID is extracted from the certificate's Common Name (CN).
 func PluginTokenAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Try mTLS first — extract plugin ID from client certificate.
 		if c.Request.TLS != nil && len(c.Request.TLS.PeerCertificates) > 0 {
 			cert := c.Request.TLS.PeerCertificates[0]
 			pluginID := cert.Subject.CommonName
@@ -135,30 +147,7 @@ func PluginTokenAuth() gin.HandlerFunc {
 			}
 		}
 
-		// Fallback to JWT bearer token (non-mTLS / dev mode).
-		header := c.GetHeader("Authorization")
-		if header == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing authorization (no client cert or bearer token)"})
-			return
-		}
-
-		parts := strings.SplitN(header, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization format"})
-			return
-		}
-
-		claims, err := auth.ValidateToken(parts[1])
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
-			return
-		}
-
-		c.Set("claims", claims)
-		c.Set("email", claims.Email)
-		c.Set("role", claims.Role)
-		c.Set("auth_method", "jwt")
-		c.Next()
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "valid client certificate required for plugin auth"})
 	}
 }
 

@@ -106,11 +106,15 @@ func main() {
 	pluginHandler := handlers.NewPluginHandler(database.DB, dockerRT, cfg, clientTLS)
 
 	// --- Auth/User routes — proxied to system-user-manager plugin ---
+	// Rate limiters for auth endpoints to prevent brute-force attacks.
+	loginLimiter := middleware.NewRateLimiter(10, 1*time.Minute)  // 10 per minute per IP
+	registerLimiter := middleware.NewRateLimiter(5, 1*time.Hour)  // 5 per hour per IP
+
 	authProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/auth")
 	authGroup := r.Group("/api/auth")
 	{
-		authGroup.POST("/register", middleware.AuthOptional(), authProxy)
-		authGroup.POST("/login", authProxy)
+		authGroup.POST("/register", registerLimiter.Middleware(), middleware.AuthOptional(), authProxy)
+		authGroup.POST("/login", loginLimiter.Middleware(), authProxy)
 		authGroup.POST("/session", middleware.AuthRequired(), authProxy)
 	}
 	serviceTokenGroup := r.Group("/api/auth")
@@ -172,6 +176,7 @@ func main() {
 		pluginsGroup.GET("/:id/logs", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginLogs)
 		pluginsGroup.GET("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginConfig)
 		pluginsGroup.PUT("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.UpdatePluginConfig)
+		pluginsGroup.DELETE("/:id/config/:key", middleware.RequireCapability("plugins:manage"), pluginHandler.DeletePluginConfigKey)
 		pluginsGroup.POST("/:id/deploy", middleware.RequireCapability("plugins:manage"), pluginHandler.DeployCandidate)
 		pluginsGroup.POST("/:id/promote", middleware.RequireCapability("plugins:manage"), pluginHandler.PromoteCandidate)
 		pluginsGroup.POST("/:id/rollback", middleware.RequireCapability("plugins:manage"), pluginHandler.RollbackCandidate)

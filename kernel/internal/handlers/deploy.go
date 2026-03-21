@@ -62,11 +62,11 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 		})
 	}
 
-	// Build env same as stable, plus candidate flag so the SDK registers as candidate.
-	env := h.buildEnv(id)
-	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.TLSPort
-	env["TEAMAGENTICA_CANDIDATE"] = "true"
+	env := map[string]string{
+		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
+		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+		"TEAMAGENTICA_CANDIDATE":   "true",
+	}
 
 	candidatePlugin := plugin
 	candidatePlugin.Image = candidateImage
@@ -224,9 +224,10 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 		_ = h.runtime.StopPlugin(ctx, plugin.CandidateContainerID)
 	}
 
-	env := h.buildEnv(id)
-	env["TEAMAGENTICA_KERNEL_HOST"] = h.cfg.AdvertiseHost
-	env["TEAMAGENTICA_KERNEL_PORT"] = h.cfg.TLSPort
+	env := map[string]string{
+		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
+		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+	}
 
 	plugin.Image = plugin.PreviousImage
 	containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
