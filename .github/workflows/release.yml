@@ -13,8 +13,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Release
+  tacli-release:
+    name: tacli release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
