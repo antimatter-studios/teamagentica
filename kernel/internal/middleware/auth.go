@@ -104,31 +104,6 @@ func AuthRequired() gin.HandlerFunc {
 	}
 }
 
-// RequireCapability returns middleware that checks for a specific capability in the JWT.
-func RequireCapability(cap string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		capsVal, exists := c.Get("capabilities")
-		if !exists {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "no capabilities in token"})
-			return
-		}
-
-		caps, ok := capsVal.([]string)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid capabilities"})
-			return
-		}
-
-		for _, v := range caps {
-			if v == cap {
-				c.Next()
-				return
-			}
-		}
-
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "insufficient permissions"})
-	}
-}
 
 // PluginTokenAuth validates a plugin's identity via mTLS client certificate.
 // The plugin ID is extracted from the certificate's Common Name (CN).

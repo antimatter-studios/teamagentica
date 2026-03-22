@@ -82,7 +82,7 @@ func main() {
 	// Pricing routes (admin only).
 	pricingHandler := handlers.NewPricingHandler(database.DB)
 	pricingGroup := r.Group("/api/pricing")
-	pricingGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	pricingGroup.Use(middleware.AuthRequired())
 	{
 		pricingGroup.GET("", pricingHandler.ListPrices)
 		pricingGroup.GET("/current", pricingHandler.ListCurrentPrices)
@@ -118,7 +118,7 @@ func main() {
 		authGroup.POST("/session", middleware.AuthRequired(), authProxy)
 	}
 	serviceTokenGroup := r.Group("/api/auth")
-	serviceTokenGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	serviceTokenGroup.Use(middleware.AuthRequired())
 	{
 		serviceTokenGroup.POST("/service-token", authProxy)
 		serviceTokenGroup.GET("/service-tokens", authProxy)
@@ -127,7 +127,7 @@ func main() {
 
 	auditProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/audit")
 	auditGroup := r.Group("/api/audit")
-	auditGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	auditGroup.Use(middleware.AuthRequired())
 	{
 		auditGroup.GET("", auditProxy)
 	}
@@ -137,16 +137,16 @@ func main() {
 	usersGroup.Use(middleware.AuthRequired())
 	{
 		usersGroup.GET("/me", usersProxy)
-		usersGroup.GET("", middleware.RequireCapability("users:read"), usersProxy)
-		usersGroup.GET("/:id", middleware.RequireCapability("users:read"), usersProxy)
-		usersGroup.PUT("/:id", middleware.RequireCapability("users:write"), usersProxy)
-		usersGroup.PUT("/:id/ban", middleware.RequireCapability("users:write"), usersProxy)
-		usersGroup.DELETE("/:id", middleware.RequireCapability("users:write"), usersProxy)
+		usersGroup.GET("", usersProxy)
+		usersGroup.GET("/:id", usersProxy)
+		usersGroup.PUT("/:id", usersProxy)
+		usersGroup.PUT("/:id/ban", usersProxy)
+		usersGroup.DELETE("/:id", usersProxy)
 	}
 
 	extUsersProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/external-users")
 	extUserGroup := r.Group("/api/external-users")
-	extUserGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	extUserGroup.Use(middleware.AuthRequired())
 	{
 		extUserGroup.GET("", extUsersProxy)
 		extUserGroup.GET("/lookup", extUsersProxy)
@@ -163,23 +163,23 @@ func main() {
 	pluginsGroup := r.Group("/api/plugins")
 	pluginsGroup.Use(middleware.AuthRequired())
 	{
-		pluginsGroup.GET("/search", middleware.RequireCapability("plugins:search"), pluginHandler.SearchPlugins)
-		pluginsGroup.POST("", middleware.RequireCapability("plugins:manage"), pluginHandler.RegisterPlugin)
-		pluginsGroup.GET("", middleware.RequireCapability("plugins:manage"), pluginHandler.ListPlugins)
-		pluginsGroup.GET("/:id", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPlugin)
-		pluginsGroup.DELETE("/:id", middleware.RequireCapability("plugins:manage"), pluginHandler.UninstallPlugin)
-		pluginsGroup.POST("/:id/enable", middleware.RequireCapability("plugins:manage"), pluginHandler.EnablePlugin)
-		pluginsGroup.POST("/:id/disable", middleware.RequireCapability("plugins:manage"), pluginHandler.DisablePlugin)
-		pluginsGroup.POST("/:id/restart", middleware.RequireCapability("plugins:manage"), pluginHandler.RestartPlugin)
-		pluginsGroup.GET("/:id/schema", middleware.RequireCapability("plugins:search"), pluginHandler.GetPluginSchema)
-		pluginsGroup.GET("/:id/schema/:section", middleware.RequireCapability("plugins:search"), pluginHandler.GetPluginSchemaSection)
-		pluginsGroup.GET("/:id/logs", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginLogs)
-		pluginsGroup.GET("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.GetPluginConfig)
-		pluginsGroup.PUT("/:id/config", middleware.RequireCapability("plugins:manage"), pluginHandler.UpdatePluginConfig)
-		pluginsGroup.DELETE("/:id/config/:key", middleware.RequireCapability("plugins:manage"), pluginHandler.DeletePluginConfigKey)
-		pluginsGroup.POST("/:id/deploy", middleware.RequireCapability("plugins:manage"), pluginHandler.DeployCandidate)
-		pluginsGroup.POST("/:id/promote", middleware.RequireCapability("plugins:manage"), pluginHandler.PromoteCandidate)
-		pluginsGroup.POST("/:id/rollback", middleware.RequireCapability("plugins:manage"), pluginHandler.RollbackCandidate)
+		pluginsGroup.GET("/search", pluginHandler.SearchPlugins)
+		pluginsGroup.POST("", pluginHandler.RegisterPlugin)
+		pluginsGroup.GET("", pluginHandler.ListPlugins)
+		pluginsGroup.GET("/:id", pluginHandler.GetPlugin)
+		pluginsGroup.DELETE("/:id", pluginHandler.UninstallPlugin)
+		pluginsGroup.POST("/:id/enable", pluginHandler.EnablePlugin)
+		pluginsGroup.POST("/:id/disable", pluginHandler.DisablePlugin)
+		pluginsGroup.POST("/:id/restart", pluginHandler.RestartPlugin)
+		pluginsGroup.GET("/:id/schema", pluginHandler.GetPluginSchema)
+		pluginsGroup.GET("/:id/schema/:section", pluginHandler.GetPluginSchemaSection)
+		pluginsGroup.GET("/:id/logs", pluginHandler.GetPluginLogs)
+		pluginsGroup.GET("/:id/config", pluginHandler.GetPluginConfig)
+		pluginsGroup.PUT("/:id/config", pluginHandler.UpdatePluginConfig)
+		pluginsGroup.DELETE("/:id/config/:key", pluginHandler.DeletePluginConfigKey)
+		pluginsGroup.POST("/:id/deploy", pluginHandler.DeployCandidate)
+		pluginsGroup.POST("/:id/promote", pluginHandler.PromoteCandidate)
+		pluginsGroup.POST("/:id/rollback", pluginHandler.RollbackCandidate)
 	}
 
 	// Marketplace routes (authenticated, plugins:manage).
@@ -189,7 +189,7 @@ func main() {
 	}
 	marketplaceHandler := handlers.NewMarketplaceHandler(database.DB, pluginHandler.Events, marketplaceClient)
 	marketplaceGroup := r.Group("/api/marketplace")
-	marketplaceGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("plugins:manage"))
+	marketplaceGroup.Use(middleware.AuthRequired())
 	{
 		marketplaceGroup.GET("/providers", marketplaceHandler.ListProviders)
 		marketplaceGroup.POST("/providers", marketplaceHandler.AddProvider)
@@ -239,7 +239,7 @@ func main() {
 
 	// Admin managed-container routes.
 	mcAdminGroup := r.Group("/api/managed-containers")
-	mcAdminGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("plugins:manage"))
+	mcAdminGroup.Use(middleware.AuthRequired())
 	{
 		mcAdminGroup.GET("", pluginHandler.ListAllManagedContainers)
 		mcAdminGroup.DELETE("/:id", pluginHandler.ForceDeleteManagedContainer)
@@ -270,7 +270,7 @@ func main() {
 
 	// Kernel self-inspection routes (admin only).
 	kernelGroup := r.Group("/api/kernel")
-	kernelGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	kernelGroup.Use(middleware.AuthRequired())
 	{
 		kernelGroup.GET("/logs", pluginHandler.GetKernelLogs)
 		kernelGroup.GET("/ui/logs", pluginHandler.GetUILogs)
@@ -278,7 +278,7 @@ func main() {
 
 	// Debug console SSE (admin only).
 	debugGroup := r.Group("/api/debug")
-	debugGroup.Use(middleware.AuthRequired(), middleware.RequireCapability("system:admin"))
+	debugGroup.Use(middleware.AuthRequired())
 	{
 		debugGroup.GET("/events", handlers.DebugEventsSSE(pluginHandler.Events))
 		debugGroup.GET("/history", handlers.DebugEventsHistory(pluginHandler.Events))

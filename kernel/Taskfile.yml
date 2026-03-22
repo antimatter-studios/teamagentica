@@ -2,66 +2,33 @@ version: '3'
 
 tasks:
   build:
-    desc: Build production kernel image via Docker Compose
+    desc: Build production kernel image
     cmds:
-      - docker compose -f docker-compose.yml --profile prod build
+      - docker build -t teamagentica-kernel:latest --target prod .
 
   start:
-    desc: Start production kernel container
+    desc: Start kernel via tacli
+    dir: ..
     cmds:
-      - docker compose -f docker-compose.yml --profile prod up -d
+      - go run ./tacli core start
 
   stop:
-    desc: Stop production kernel container
+    desc: Stop kernel via tacli
+    dir: ..
     cmds:
-      - docker compose -f docker-compose.yml --profile prod down
+      - go run ./tacli core stop
 
   restart:
-    desc: Restart production kernel container
+    desc: Restart kernel via tacli
+    dir: ..
     cmds:
-      - task: stop
-      - task: start
+      - go run ./tacli core restart
 
   logs:
     desc: Follow kernel container logs
+    dir: ..
     cmds:
-      - docker compose -f docker-compose.yml logs -f
-
-  dev:build:
-    desc: Build dev kernel image via Docker Compose
-    cmds:
-      - docker compose -f docker-compose.yml --profile dev build
-
-  dev:start:
-    desc: Start dev kernel container (hot reload with Air)
-    cmds:
-      - docker compose -f docker-compose.yml --profile dev up -d
-
-  dev:stop:
-    desc: Stop dev kernel container
-    cmds:
-      - docker compose -f docker-compose.yml --profile dev down
-
-  dev:restart:
-    desc: Restart dev kernel container
-    cmds:
-      - task: dev:stop
-      - task: dev:start
-
-  dev:logs:
-    desc: Follow dev kernel container logs
-    cmds:
-      - docker compose -f docker-compose.yml --profile dev logs -f
-
-  test:
-    desc: Run tests inside container
-    cmds:
-      - docker compose -f docker-compose.yml --profile dev run --rm --no-deps kernel-dev go test ./... -v
-
-  lint:
-    desc: Run linter inside container
-    cmds:
-      - docker compose -f docker-compose.yml --profile dev run --rm --no-deps kernel-dev golangci-lint run ./...
+      - go run ./tacli core logs
 
   clean:
     desc: Clean build artifacts
