@@ -38,9 +38,17 @@ type createManagedContainerRequest struct {
 
 // --- helpers ---
 
-// extractPluginID returns the plugin ID from the service token in context.
-// Service tokens have Email = "service:{pluginID}".
+// extractPluginID returns the plugin ID from the authenticated context.
+// Supports both mTLS (plugin_id set directly) and JWT service tokens (email = "service:{pluginID}").
 func extractPluginID(c *gin.Context) (string, bool) {
+	// mTLS path: PluginTokenAuth sets "plugin_id" directly.
+	if pluginID, exists := c.Get("plugin_id"); exists {
+		if id, ok := pluginID.(string); ok && id != "" {
+			return id, true
+		}
+	}
+
+	// JWT fallback: service tokens have Email = "service:{pluginID}".
 	claimsVal, exists := c.Get("claims")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "no claims in context"})
