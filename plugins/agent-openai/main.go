@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +16,9 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/codexcli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/handlers"
 )
+
+//go:embed system-prompt.md
+var defaultSystemPrompt string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -84,13 +88,14 @@ func main() {
 
 	// Create handler with config.
 	h := handlers.NewHandler(handlers.HandlerConfig{
-		Backend:       backend,
-		APIKey:        apiKey,
-		Model:         model,
-		Endpoint:      endpoint,
-		ToolLoopLimit: toolLoopLimit,
-		Debug:         debug,
-		DataPath:      dataPath,
+		Backend:             backend,
+		APIKey:              apiKey,
+		Model:               model,
+		Endpoint:            endpoint,
+		ToolLoopLimit:       toolLoopLimit,
+		Debug:               debug,
+		DataPath:            dataPath,
+		DefaultSystemPrompt: defaultSystemPrompt,
 	})
 
 	// Initialise the appropriate backend.

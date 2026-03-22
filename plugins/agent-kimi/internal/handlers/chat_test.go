@@ -15,7 +15,7 @@ func init() {
 }
 
 func newTestHandler(apiKey, model, dataPath string) *Handler {
-	return NewHandler(apiKey, model, dataPath, false)
+	return NewHandler(apiKey, model, dataPath, false, "")
 }
 
 func TestHealth(t *testing.T) {

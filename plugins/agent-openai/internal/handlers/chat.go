@@ -25,6 +25,7 @@ type Handler struct {
 	endpoint      string
 	toolLoopLimit int
 	debug         bool
+	defaultPrompt string
 	sdk           *pluginsdk.Client
 	codexCLI      *codexcli.Client
 	usage         *usage.Tracker
@@ -32,13 +33,14 @@ type Handler struct {
 
 // HandlerConfig holds the parameters for constructing a Handler.
 type HandlerConfig struct {
-	Backend       string
-	APIKey        string
-	Model         string
-	Endpoint      string
-	ToolLoopLimit int
-	Debug         bool
-	DataPath      string
+	Backend             string
+	APIKey              string
+	Model               string
+	Endpoint            string
+	ToolLoopLimit       int
+	Debug               bool
+	DataPath            string
+	DefaultSystemPrompt string
 }
 
 // NewHandler creates a new Handler from the given config.
@@ -50,6 +52,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		endpoint:      cfg.Endpoint,
 		toolLoopLimit: cfg.ToolLoopLimit,
 		debug:         cfg.Debug,
+		defaultPrompt: cfg.DefaultSystemPrompt,
 		usage:         usage.NewTracker(cfg.DataPath),
 	}
 }
@@ -91,14 +94,13 @@ func (h *Handler) Health(c *gin.Context) {
 
 // chatRequest is the body for POST /chat.
 type chatRequest struct {
-	Message       string           `json:"message"`
-	Model         string           `json:"model,omitempty"`
-	ImageURLs     []string         `json:"image_urls,omitempty"`
-	Conversation  []openai.Message `json:"conversation"`
-	WorkspaceID   string           `json:"workspace_id,omitempty"`
-	IsCoordinator bool             `json:"is_coordinator,omitempty"`
-	AgentAlias    string           `json:"agent_alias,omitempty"`
-	SystemPrompt  string           `json:"system_prompt,omitempty"`
+	Message      string           `json:"message"`
+	Model        string           `json:"model,omitempty"`
+	ImageURLs    []string         `json:"image_urls,omitempty"`
+	Conversation []openai.Message `json:"conversation"`
+	WorkspaceID  string           `json:"workspace_id,omitempty"`
+	AgentAlias   string           `json:"agent_alias,omitempty"`
+	SystemPrompt string           `json:"system_prompt,omitempty"`
 }
 
 // Chat handles a chat completion request.
@@ -166,10 +168,11 @@ func (h *Handler) Chat(c *gin.Context) {
 		}
 
 		// Use injected system prompt if provided, otherwise build from context.
-		systemPrompt := req.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, nil, discoverAliases(h.sdk))
+		identityPrompt := req.SystemPrompt
+		if identityPrompt == "" {
+			identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
 		}
+		systemPrompt := buildSystemPrompt(identityPrompt, nil, discoverAliases(h.sdk))
 		if systemPrompt != "" {
 			filtered := make([]openai.Message, 0, len(messages))
 			for _, m := range messages {
@@ -245,10 +248,11 @@ func (h *Handler) Chat(c *gin.Context) {
 		}
 
 		// Use injected system prompt if provided, otherwise build from context.
-		systemPrompt := req.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools, discoverAliases(h.sdk))
+		identityPrompt := req.SystemPrompt
+		if identityPrompt == "" {
+			identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
 		}
+		systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 		if systemPrompt != "" {
 			filtered := make([]openai.Message, 0, len(messages))
 			for _, m := range messages {
@@ -422,12 +426,11 @@ func isValidWorkspaceID(id string) bool {
 	return true
 }
 
-// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+// SystemPrompt returns the system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
 	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools, discoverAliases(h.sdk)),
-		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools, discoverAliases(h.sdk)),
+		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
 	})
 }
 
@@ -455,12 +458,10 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 	}
 
 	aliases := discoverAliases(h.sdk)
-	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools, aliases)
 
 	c.JSON(http.StatusOK, gin.H{
-		"tools":                    entries,
-		"system_prompt_coordinator": systemPrompt,
-		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools, aliases),
+		"tools":          entries,
+		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases),
 	})
 }
 

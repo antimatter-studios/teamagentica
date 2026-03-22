@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
@@ -229,23 +230,25 @@ func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, block anthro
 	return string(resp), nil
 }
 
-// buildSystemPrompt generates the agent's system prompt based on its role and capabilities.
-func buildSystemPrompt(sdk *pluginsdk.Client, isCoordinator bool, agentAlias string, tools []discoveredTool, aliases []aliasEntry) string {
+// renderDefaultPrompt executes the embedded system-prompt.md template with the given alias.
+func renderDefaultPrompt(templateText, agentAlias string) string {
+	tmpl, err := template.New("prompt").Parse(templateText)
+	if err != nil {
+		return templateText
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, struct{ Alias string }{Alias: agentAlias}); err != nil {
+		return templateText
+	}
+	return buf.String()
+}
+
+// buildSystemPrompt assembles the full system prompt from an identity section plus dynamic aliases/tools.
+func buildSystemPrompt(identityPrompt string, tools []discoveredTool, aliases []aliasEntry) string {
 	var sb strings.Builder
 
-	if isCoordinator {
-		sb.WriteString("You are the coordinator agent. You can answer questions directly or delegate to specialized agents and tools.\n\n")
-
-		sb.WriteString("ROUTING INSTRUCTIONS:\n")
-		sb.WriteString("- When the request requires delegation, respond with a JSON task plan:\n```json\n{\"tasks\": [{\"id\": \"t1\", \"alias\": \"agentName\", \"prompt\": \"task\", \"depends_on\": []}]}\n```\n")
-		sb.WriteString("- Tasks with empty depends_on run in parallel. Reference prior results with {tN} in prompts.\n")
-		sb.WriteString("- Use alias \"self\" to synthesize results in worker mode (combine multiple outputs into a final answer).\n")
-		sb.WriteString("- If you can answer directly without delegation, just respond normally — no JSON needed.\n\n")
-	} else if agentAlias != "" {
-		sb.WriteString(fmt.Sprintf("You are @%s, an AI assistant in a multi-agent platform.\n\n", agentAlias))
-	} else {
-		sb.WriteString("You are an AI assistant in a multi-agent platform.\n\n")
-	}
+	sb.WriteString(strings.TrimRight(identityPrompt, "\n"))
+	sb.WriteString("\n\n")
 
 	if len(aliases) > 0 {
 		sb.WriteString("AVAILABLE ALIASES:\n")

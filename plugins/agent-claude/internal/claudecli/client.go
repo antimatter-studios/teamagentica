@@ -15,11 +15,12 @@ import (
 
 // Client wraps the Claude Code CLI binary for chat completions.
 type Client struct {
-	binary    string
-	workdir   string
-	claudeDir string // CLAUDE_CONFIG_DIR equivalent
-	timeout   time.Duration
-	debug     bool
+	binary          string
+	workdir         string
+	claudeDir       string // CLAUDE_CONFIG_DIR equivalent
+	timeout         time.Duration
+	debug           bool
+	skipPermissions bool
 }
 
 // NewClient creates a new Claude CLI client.
@@ -31,6 +32,11 @@ func NewClient(binary, workdir, claudeDir string, timeoutSec int, debug bool) *C
 		timeout:   time.Duration(timeoutSec) * time.Second,
 		debug:     debug,
 	}
+}
+
+// SetSkipPermissions enables --dangerously-skip-permissions on CLI invocations.
+func (c *Client) SetSkipPermissions(skip bool) {
+	c.skipPermissions = skip
 }
 
 func (c *Client) env() []string {
@@ -138,6 +144,9 @@ func (c *Client) ChatCompletion(model string, prompt string, systemPrompt string
 	}
 	if mcpConfig != "" {
 		args = append(args, "--mcp-config", mcpConfig)
+	}
+	if c.skipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
 	}
 
 	cmd := exec.CommandContext(ctx, c.binary, args...)

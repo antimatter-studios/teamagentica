@@ -19,6 +19,7 @@ type Handler struct {
 	model         string
 	toolLoopLimit int
 	debug         bool
+	defaultPrompt string
 	sdk           *pluginsdk.Client
 	client        *gemini.Client
 	usage         *usage.Tracker
@@ -26,10 +27,11 @@ type Handler struct {
 
 // HandlerConfig holds the parameters for constructing a Handler.
 type HandlerConfig struct {
-	APIKey   string
-	Model    string
-	Debug    bool
-	DataPath string
+	APIKey              string
+	Model               string
+	Debug               bool
+	DataPath            string
+	DefaultSystemPrompt string
 }
 
 // NewHandler creates a new Handler from the given config.
@@ -39,6 +41,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		model:         cfg.Model,
 		toolLoopLimit: 20,
 		debug:         cfg.Debug,
+		defaultPrompt: cfg.DefaultSystemPrompt,
 		client:        gemini.NewClient(cfg.APIKey, cfg.Debug),
 		usage:         usage.NewTracker(cfg.DataPath),
 	}
@@ -69,7 +72,6 @@ type chatRequest struct {
 	Model         string           `json:"model,omitempty"`
 	ImageURLs     []string         `json:"image_urls,omitempty"`
 	Conversation  []gemini.Message `json:"conversation"`
-	IsCoordinator bool             `json:"is_coordinator,omitempty"`
 	AgentAlias    string           `json:"agent_alias,omitempty"`
 	SystemPrompt  string           `json:"system_prompt,omitempty"`
 }
@@ -126,10 +128,11 @@ func (h *Handler) Chat(c *gin.Context) {
 	}
 
 	// Build agent's own system prompt.
-	systemPrompt := req.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools, discoverAliases(h.sdk))
+	identityPrompt := req.SystemPrompt
+	if identityPrompt == "" {
+		identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
 	}
+	systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 	if systemPrompt != "" {
 		filtered := make([]gemini.Message, 0, len(messages))
 		for _, m := range messages {
@@ -281,12 +284,11 @@ func (h *Handler) Chat(c *gin.Context) {
 	})
 }
 
-// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+// SystemPrompt returns the system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
 	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools, discoverAliases(h.sdk)),
-		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools, discoverAliases(h.sdk)),
+		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
 	})
 }
 
@@ -314,12 +316,11 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 	}
 
 	aliases := discoverAliases(h.sdk)
-	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools, aliases)
+	systemPrompt := buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases)
 
 	c.JSON(http.StatusOK, gin.H{
-		"tools":                    entries,
-		"system_prompt_coordinator": systemPrompt,
-		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools, aliases),
+		"tools":          entries,
+		"default_prompt": systemPrompt,
 	})
 }
 

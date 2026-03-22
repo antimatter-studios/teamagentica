@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/handlers"
 )
+
+//go:embed system-prompt.md
+var defaultSystemPrompt string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -56,10 +60,11 @@ func main() {
 	router := gin.Default()
 
 	h := handlers.NewHandler(handlers.HandlerConfig{
-		APIKey:   apiKey,
-		Model:    model,
-		Debug:    debug,
-		DataPath: dataPath,
+		APIKey:              apiKey,
+		Model:               model,
+		Debug:               debug,
+		DataPath:            dataPath,
+		DefaultSystemPrompt: defaultSystemPrompt,
 	})
 	h.SetSDK(sdkClient)
 

@@ -25,10 +25,11 @@ type Handler struct {
 	debug         bool
 	sdk           *pluginsdk.Client
 	usage         *usage.Tracker
+	defaultPrompt string
 }
 
 // NewHandler creates a new Handler with the given configuration values.
-func NewHandler(apiKey, model, endpoint, dataPath string, debug, diffusing, instant bool, toolLoopLimit int) *Handler {
+func NewHandler(apiKey, model, endpoint, dataPath string, debug, diffusing, instant bool, toolLoopLimit int, defaultPrompt string) *Handler {
 	return &Handler{
 		apiKey:        apiKey,
 		model:         model,
@@ -38,6 +39,7 @@ func NewHandler(apiKey, model, endpoint, dataPath string, debug, diffusing, inst
 		toolLoopLimit: toolLoopLimit,
 		debug:         debug,
 		usage:         usage.NewTracker(dataPath),
+		defaultPrompt: defaultPrompt,
 	}
 }
 
@@ -69,7 +71,6 @@ type chatRequest struct {
 	Conversation    []inception.Message `json:"conversation"`
 	ReasoningEffort string             `json:"reasoning_effort,omitempty"` // "instant", "low", "medium", "high"
 	Diffusing       *bool              `json:"diffusing,omitempty"`
-	IsCoordinator   bool               `json:"is_coordinator,omitempty"`
 	AgentAlias      string             `json:"agent_alias,omitempty"`
 	SystemPrompt    string             `json:"system_prompt,omitempty"`
 }
@@ -139,10 +140,11 @@ func (h *Handler) Chat(c *gin.Context) {
 	}
 
 	// Build agent's own system prompt.
-	systemPrompt := req.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools, discoverAliases(h.sdk))
+	identityPrompt := req.SystemPrompt
+	if identityPrompt == "" {
+		identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
 	}
+	systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 	if systemPrompt != "" {
 		filtered := make([]inception.Message, 0, len(messages))
 		for _, m := range messages {
@@ -408,8 +410,7 @@ func truncateStr(s string, maxLen int) string {
 func (h *Handler) SystemPrompt(c *gin.Context) {
 	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools, discoverAliases(h.sdk)),
-		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools, discoverAliases(h.sdk)),
+		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
 	})
 }
 
@@ -437,12 +438,10 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 	}
 
 	aliases := discoverAliases(h.sdk)
-	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools, aliases)
 
 	c.JSON(http.StatusOK, gin.H{
-		"tools":                    entries,
-		"system_prompt_coordinator": systemPrompt,
-		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools, aliases),
+		"tools":          entries,
+		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases),
 	})
 }
 

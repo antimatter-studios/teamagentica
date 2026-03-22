@@ -25,6 +25,7 @@ type Handler struct {
 	model         string
 	toolLoopLimit int
 	debug         bool
+	defaultPrompt string
 	sdk           *pluginsdk.Client
 	claudeCLI     *claudecli.Client
 	usage         *usage.Tracker
@@ -34,12 +35,13 @@ type Handler struct {
 
 // HandlerConfig holds the parameters for constructing a Handler.
 type HandlerConfig struct {
-	Backend      string
-	APIKey       string
-	Model        string
-	Debug        bool
-	DataPath     string
-	WorkspaceDir string
+	Backend             string
+	APIKey              string
+	Model               string
+	Debug               bool
+	DataPath            string
+	WorkspaceDir        string
+	DefaultSystemPrompt string
 }
 
 // NewHandler creates a new Handler from the given config.
@@ -50,6 +52,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		model:         cfg.Model,
 		toolLoopLimit: 20,
 		debug:         cfg.Debug,
+		defaultPrompt: cfg.DefaultSystemPrompt,
 		usage:         usage.NewTracker(cfg.DataPath),
 		workspaceDir:  cfg.WorkspaceDir,
 	}
@@ -86,6 +89,13 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 	if v, ok := config["PLUGIN_DEBUG"]; ok {
 		h.debug = v == "true"
 	}
+	if v, ok := config["CLAUDE_SKIP_PERMISSIONS"]; ok {
+		skip := v == "true"
+		if h.claudeCLI != nil {
+			h.claudeCLI.SetSkipPermissions(skip)
+			log.Printf("[config] skip-permissions: %v", skip)
+		}
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -118,15 +128,14 @@ func (h *Handler) Health(c *gin.Context) {
 
 // chatRequest is the body for POST /chat.
 type chatRequest struct {
-	Message       string             `json:"message"`
-	Model         string             `json:"model,omitempty"`
-	Conversation  []anthropic.Message `json:"conversation"`
-	MaxTurns      int                `json:"max_turns,omitempty"`
-	SystemPrompt  string             `json:"system_prompt,omitempty"`
-	WorkspaceID   string             `json:"workspace_id,omitempty"`  // Routes to a specific work disk.
-	SessionID     string             `json:"session_id,omitempty"`    // Resumes an existing Claude session.
-	IsCoordinator bool               `json:"is_coordinator,omitempty"`
-	AgentAlias    string             `json:"agent_alias,omitempty"`
+	Message      string              `json:"message"`
+	Model        string              `json:"model,omitempty"`
+	Conversation []anthropic.Message `json:"conversation"`
+	MaxTurns     int                 `json:"max_turns,omitempty"`
+	SystemPrompt string              `json:"system_prompt,omitempty"`
+	WorkspaceID  string              `json:"workspace_id,omitempty"` // Routes to a specific work disk.
+	SessionID    string              `json:"session_id,omitempty"`   // Resumes an existing Claude session.
+	AgentAlias   string              `json:"agent_alias,omitempty"`
 }
 
 // Chat handles a chat completion request.
@@ -185,11 +194,12 @@ func (h *Handler) Chat(c *gin.Context) {
 			return
 		}
 
-		// Use injected system prompt if provided, otherwise build from context.
-		systemPrompt := req.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, nil, discoverAliases(h.sdk))
+		// Use injected system prompt if provided, otherwise render embedded default.
+		identityPrompt := req.SystemPrompt
+		if identityPrompt == "" {
+			identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
 		}
+		systemPrompt := buildSystemPrompt(identityPrompt, nil, discoverAliases(h.sdk))
 		if systemPrompt != "" {
 			filtered := make([]anthropic.Message, 0, len(messages))
 			for _, m := range messages {
@@ -280,11 +290,12 @@ func (h *Handler) Chat(c *gin.Context) {
 			h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
 		}
 
-		// Use injected system prompt if provided, otherwise build from context.
-		systemPrompt := req.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools, discoverAliases(h.sdk))
+		// Use injected system prompt if provided, otherwise render embedded default.
+		identityPrompt := req.SystemPrompt
+		if identityPrompt == "" {
+			identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
 		}
+		systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 		if systemPrompt != "" {
 			filtered := make([]anthropic.Message, 0, len(messages))
 			for _, m := range messages {
@@ -464,12 +475,11 @@ func buildPrompt(messages []anthropic.Message) string {
 	return sb.String()
 }
 
-// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+// SystemPrompt returns the default system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
 	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools, discoverAliases(h.sdk)),
-		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools, discoverAliases(h.sdk)),
+		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
 	})
 }
 
@@ -497,12 +507,11 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 	}
 
 	aliases := discoverAliases(h.sdk)
-	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools, aliases)
+	systemPrompt := buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases)
 
 	c.JSON(http.StatusOK, gin.H{
-		"tools":                    entries,
-		"system_prompt_coordinator": systemPrompt,
-		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools, aliases),
+		"tools":          entries,
+		"system_prompt":  systemPrompt,
 	})
 }
 

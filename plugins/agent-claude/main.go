@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +16,9 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/claudecli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/handlers"
 )
+
+//go:embed system-prompt.md
+var defaultSystemPrompt string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -69,12 +73,13 @@ func main() {
 	router := gin.Default()
 
 	h := handlers.NewHandler(handlers.HandlerConfig{
-		Backend:      backend,
-		APIKey:       apiKey,
-		Model:        model,
-		Debug:        debug,
-		DataPath:     dataPath,
-		WorkspaceDir: workspaceDir,
+		Backend:             backend,
+		APIKey:              apiKey,
+		Model:               model,
+		Debug:               debug,
+		DataPath:            dataPath,
+		WorkspaceDir:        workspaceDir,
+		DefaultSystemPrompt: defaultSystemPrompt,
 	})
 
 	// Initialise the CLI backend if configured.
@@ -94,6 +99,10 @@ func main() {
 			log.Printf("WARNING: skipping CLI backend init due to directory creation failure")
 		} else {
 			cliClient := claudecli.NewClient(cliBinary, workdir, claudeDir, cliTimeout, debug)
+			if pluginConfig["CLAUDE_SKIP_PERMISSIONS"] == "true" {
+				cliClient.SetSkipPermissions(true)
+				log.Println("[cli] skip-permissions enabled — all tools auto-approved")
+			}
 			h.SetClaudeCLI(cliClient)
 
 			// Set MCP config path if it exists.

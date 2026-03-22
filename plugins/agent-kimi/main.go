@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/handlers"
 )
+
+//go:embed system-prompt.md
+var defaultSystemPrompt string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -67,7 +71,7 @@ func main() {
 
 	router := gin.Default()
 
-	h := handlers.NewHandler(apiKey, model, dataPath, debug)
+	h := handlers.NewHandler(apiKey, model, dataPath, debug, defaultSystemPrompt)
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
