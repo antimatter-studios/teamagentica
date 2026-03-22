@@ -201,14 +201,6 @@ func main() {
 		marketplaceGroup.POST("/upgrade", marketplaceHandler.UpgradePlugin)
 	}
 
-	// Alias routes — read-only endpoint kept for migration (FetchAliases).
-	// Alias management has moved to infra-alias-registry.
-	aliasReadGroup := r.Group("/api/aliases")
-	aliasReadGroup.Use(middleware.PluginTokenAuth())
-	{
-		aliasReadGroup.GET("", pluginHandler.ListAliases)
-	}
-
 	// Plugin self-registration routes (plugin token auth, not user auth).
 	pluginRegGroup := r.Group("/api/plugins")
 	pluginRegGroup.Use(middleware.PluginTokenAuth())
