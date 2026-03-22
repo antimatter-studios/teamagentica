@@ -128,7 +128,7 @@ func (h *Handler) Chat(c *gin.Context) {
 	// Build agent's own system prompt.
 	systemPrompt := req.SystemPrompt
 	if systemPrompt == "" {
-		systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools)
+		systemPrompt = buildSystemPrompt(h.sdk, req.IsCoordinator, req.AgentAlias, tools, discoverAliases(h.sdk))
 	}
 	if systemPrompt != "" {
 		filtered := make([]gemini.Message, 0, len(messages))
@@ -285,8 +285,8 @@ func (h *Handler) Chat(c *gin.Context) {
 func (h *Handler) SystemPrompt(c *gin.Context) {
 	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools),
-		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools),
+		"system_prompt_coordinator": buildSystemPrompt(h.sdk, true, "", tools, discoverAliases(h.sdk)),
+		"system_prompt_direct":      buildSystemPrompt(h.sdk, false, "this-agent", tools, discoverAliases(h.sdk)),
 	})
 }
 
@@ -313,12 +313,13 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 		}
 	}
 
-	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools)
+	aliases := discoverAliases(h.sdk)
+	systemPrompt := buildSystemPrompt(h.sdk, true, "", tools, aliases)
 
 	c.JSON(http.StatusOK, gin.H{
 		"tools":                    entries,
 		"system_prompt_coordinator": systemPrompt,
-		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools),
+		"system_prompt_direct":     buildSystemPrompt(h.sdk, false, "example", tools, aliases),
 	})
 }
 

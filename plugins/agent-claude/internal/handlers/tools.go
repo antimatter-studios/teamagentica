@@ -34,6 +34,73 @@ type toolCache struct {
 
 var globalToolCache = &toolCache{ttl: 60 * time.Second}
 
+// aliasEntry holds a cached alias from the kernel.
+type aliasEntry struct {
+	Name         string
+	Target       string
+	Capabilities []string
+}
+
+// aliasCache holds discovered aliases with a TTL.
+type aliasCache struct {
+	mu        sync.RWMutex
+	aliases   []aliasEntry
+	fetchedAt time.Time
+	ttl       time.Duration
+}
+
+var globalAliasCache = &aliasCache{ttl: 60 * time.Second}
+
+// discoverAliases fetches the current alias list from the kernel via the SDK.
+func discoverAliases(sdk *pluginsdk.Client) []aliasEntry {
+	if sdk == nil {
+		return nil
+	}
+
+	globalAliasCache.mu.RLock()
+	if time.Since(globalAliasCache.fetchedAt) < globalAliasCache.ttl && globalAliasCache.aliases != nil {
+		aliases := globalAliasCache.aliases
+		globalAliasCache.mu.RUnlock()
+		return aliases
+	}
+	globalAliasCache.mu.RUnlock()
+
+	globalAliasCache.mu.Lock()
+	defer globalAliasCache.mu.Unlock()
+
+	if time.Since(globalAliasCache.fetchedAt) < globalAliasCache.ttl && globalAliasCache.aliases != nil {
+		return globalAliasCache.aliases
+	}
+
+	fetched, err := sdk.FetchAliases()
+	if err != nil {
+		log.Printf("agent-claude: alias discovery failed: %v", err)
+		return nil
+	}
+
+	var entries []aliasEntry
+	for _, a := range fetched {
+		entries = append(entries, aliasEntry{
+			Name:         a.Name,
+			Target:       a.Target,
+			Capabilities: a.Capabilities,
+		})
+	}
+
+	globalAliasCache.aliases = entries
+	globalAliasCache.fetchedAt = time.Now()
+
+	if len(entries) > 0 {
+		names := make([]string, len(entries))
+		for i, a := range entries {
+			names[i] = "@" + a.Name
+		}
+		log.Printf("agent-claude: discovered %d aliases: %s", len(entries), strings.Join(names, ", "))
+	}
+
+	return entries
+}
+
 // discoverTools queries the kernel for tool:* plugins and fetches their tool schemas.
 func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 	if sdk == nil {
@@ -163,7 +230,7 @@ func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, block anthro
 }
 
 // buildSystemPrompt generates the agent's system prompt based on its role and capabilities.
-func buildSystemPrompt(sdk *pluginsdk.Client, isCoordinator bool, agentAlias string, tools []discoveredTool) string {
+func buildSystemPrompt(sdk *pluginsdk.Client, isCoordinator bool, agentAlias string, tools []discoveredTool, aliases []aliasEntry) string {
 	var sb strings.Builder
 
 	if isCoordinator {
@@ -178,6 +245,19 @@ func buildSystemPrompt(sdk *pluginsdk.Client, isCoordinator bool, agentAlias str
 		sb.WriteString(fmt.Sprintf("You are @%s, an AI assistant in a multi-agent platform.\n\n", agentAlias))
 	} else {
 		sb.WriteString("You are an AI assistant in a multi-agent platform.\n\n")
+	}
+
+	if len(aliases) > 0 {
+		sb.WriteString("AVAILABLE ALIASES:\n")
+		sb.WriteString("The following @aliases are available in this platform. Use @name to reference them:\n")
+		for _, a := range aliases {
+			caps := ""
+			if len(a.Capabilities) > 0 {
+				caps = " [" + strings.Join(a.Capabilities, ", ") + "]"
+			}
+			sb.WriteString(fmt.Sprintf("- @%s → %s%s\n", a.Name, a.Target, caps))
+		}
+		sb.WriteString("\n")
 	}
 
 	if len(tools) > 0 {
