@@ -1,0 +1,19 @@
+version: '3'
+
+vars:
+  BINARY_NAME: infra-agent-persona
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  build:
+    desc: Build prod Docker image
+    cmds:
+      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod ../..
+
+  build:dev:
+    desc: Build dev Docker image
+    cmds:
+      - docker build -t teamagentica-{{.BINARY_NAME}}:dev -f Dockerfile --target dev ../..

@@ -37,6 +37,9 @@ includes:
   infra-agent-memory:
     taskfile: ./plugins/infra-agent-memory/Taskfile.yml
     dir: ./plugins/infra-agent-memory
+  infra-agent-persona:
+    taskfile: ./plugins/infra-agent-persona/Taskfile.yml
+    dir: ./plugins/infra-agent-persona
   infra-alias-registry:
     taskfile: ./plugins/infra-alias-registry/Taskfile.yml
     dir: ./plugins/infra-alias-registry
@@ -52,6 +55,9 @@ includes:
   infra-cron-scheduler:
     taskfile: ./plugins/infra-cron-scheduler/Taskfile.yml
     dir: ./plugins/infra-cron-scheduler
+  infra-redis:
+    taskfile: ./plugins/infra-redis/Taskfile.yml
+    dir: ./plugins/infra-redis
   infra-mcp-server:
     taskfile: ./plugins/infra-mcp-server/Taskfile.yml
     dir: ./plugins/infra-mcp-server
