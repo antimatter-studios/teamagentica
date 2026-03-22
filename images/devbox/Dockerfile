@@ -1,7 +1,16 @@
 # DevBox base image — tools and runtimes, no user interface.
 # Use devbox-terminal or devbox-agent as the actual workspace image.
 #
-# Build: docker build -t teamagentica-devbox:latest images/devbox/
+# Build: docker build -t teamagentica-devbox:latest -f images/devbox/Dockerfile .
+
+# --- Kaniko executor (OCI image builder, no Docker daemon needed) ---
+FROM gcr.io/kaniko-project/executor:latest AS kaniko
+
+# --- tacli builder (TeamAgentica CLI) ---
+FROM golang:1.24-bookworm AS tacli-builder
+WORKDIR /build
+COPY tacli/ tacli/
+RUN cd tacli && CGO_ENABLED=0 go build -ldflags="-s -w" -o /tacli .
 
 FROM node:22-bookworm-slim
 
@@ -50,8 +59,14 @@ RUN mkdir -p /workspace && chown coder:coder /workspace
 # Claude config directory (shared volume mount point)
 RUN mkdir -p /home/coder/.claude && chown coder:coder /home/coder/.claude
 
+# Kaniko executor (builds OCI images without Docker daemon)
+COPY --from=kaniko /kaniko/executor /usr/local/bin/kaniko
+
+# tacli (TeamAgentica CLI for plugin management)
+COPY --from=tacli-builder /tacli /usr/local/bin/tacli
+
 # Common entrypoint setup (Claude config symlink, backup restore)
-COPY --chmod=755 entrypoint-common.sh /usr/local/bin/entrypoint-common.sh
+COPY --chmod=755 images/devbox/entrypoint-common.sh /usr/local/bin/entrypoint-common.sh
 
 USER coder
 WORKDIR /workspace

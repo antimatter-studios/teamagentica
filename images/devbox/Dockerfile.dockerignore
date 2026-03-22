@@ -1,0 +1,5 @@
+# Only tacli/ and images/devbox/ are needed from the repo root context.
+# Exclude everything else to keep the build context small.
+*
+!tacli/
+!images/devbox/entrypoint-common.sh

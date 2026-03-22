@@ -264,14 +264,14 @@ tasks:
   build:workspace:devbox:
     desc: Build all devbox workspace images (base + terminal + agent)
     cmds:
-      - docker build -t teamagentica-devbox:latest images/devbox/
+      - docker build -t teamagentica-devbox:latest -f images/devbox/Dockerfile .
       - docker build -t teamagentica-devbox-terminal:latest images/devbox-terminal/
       - docker build -t teamagentica-devbox-agent:latest images/devbox-agent/
 
   build:workspace:devbox-base:
     desc: Build devbox base image only (tools + runtimes, no interface)
     cmds:
-      - docker build -t teamagentica-devbox:latest images/devbox/
+      - docker build -t teamagentica-devbox:latest -f images/devbox/Dockerfile .
 
   build:workspace:devbox-terminal:
     desc: Build devbox terminal image (human-facing, ttyd)
