@@ -103,6 +103,7 @@ func getWorkspaceSchema(approvalMode string) map[string]interface{} {
 			"DEFAULT_WORKSPACE":   "/workspace",
 			"HOME":                "/home/coder",
 			"CODEX_APPROVAL_MODE": approvalMode,
+			"TACLI_KERNEL":        "http://teamagentica-kernel:8080",
 		},
 	}
 }

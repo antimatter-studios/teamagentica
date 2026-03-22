@@ -45,6 +45,7 @@ func main() {
 					"DEVBOX_APP":        "opencode",
 					"DEFAULT_WORKSPACE": "/workspace",
 					"HOME":             "/home/coder",
+					"TACLI_KERNEL":      "http://teamagentica-kernel:8080",
 				},
 			},
 		},

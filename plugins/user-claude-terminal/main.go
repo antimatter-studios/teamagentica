@@ -102,6 +102,7 @@ func getWorkspaceSchema(skipPermissions string) map[string]interface{} {
 			"DEFAULT_WORKSPACE":       "/workspace",
 			"HOME":                    "/home/coder",
 			"CLAUDE_SKIP_PERMISSIONS": skipPermissions,
+			"TACLI_KERNEL":            "http://teamagentica-kernel:8080",
 		},
 	}
 }
