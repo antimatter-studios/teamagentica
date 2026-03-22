@@ -50,6 +50,20 @@ export function useRouter() {
     });
   }, []);
 
+  const pushSubpath = useCallback((newSubpath: string) => {
+    setSubpathState((prev) => {
+      if (prev === newSubpath) return prev;
+      setPageState((currentPage) => {
+        const path = buildPath(currentPage, newSubpath);
+        if (window.location.pathname !== path) {
+          window.history.pushState(null, "", path);
+        }
+        return currentPage;
+      });
+      return newSubpath;
+    });
+  }, []);
+
   // Update page title.
   useEffect(() => {
     const appName = import.meta.env.VITE_APP_NAME || "TeamAgentica";
@@ -68,5 +82,5 @@ export function useRouter() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  return { page, subpath, navigate, setSubpath } as const;
+  return { page, subpath, navigate, setSubpath, pushSubpath } as const;
 }

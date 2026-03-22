@@ -31,7 +31,7 @@ export default function App() {
   );
   const logout = useAuthStore((s) => s.logout);
   const fetchUser = useAuthStore((s) => s.fetchUser);
-  const { page, subpath, navigate: setPage, setSubpath } = useRouter();
+  const { page, subpath, navigate: setPage, setSubpath, pushSubpath } = useRouter();
   const [hasChat, setHasChat] = useState(false);
   const [hasEditor, setHasEditor] = useState(false);
   const [hasTasks, setHasTasks] = useState(false);
@@ -44,7 +44,7 @@ export default function App() {
 
   const checkCapabilities = useCallback(() => {
     Promise.all([
-      apiClient.plugins.search("system:chat").then((p) => setHasChat(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("messaging:chat").then((p) => setHasChat(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("workspace:manager").then((p) => setHasEditor(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("system:tasks").then((p) => setHasTasks(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("tool:aliases").then((p) => setHasAgents(p.length > 0)).catch(() => {}),
@@ -236,7 +236,7 @@ export default function App() {
       {page === "dashboard" && <Dashboard />}
       {page === "files" && <FileBrowser initialPath={subpath} onPathChange={setSubpath} />}
       {page === "tasks" && <KanbanBoard initialSlug={subpath} onBoardChange={setSubpath} />}
-      {page === "agents" && <Agents />}
+      {page === "agents" && <Agents subpath={subpath} onNavigate={pushSubpath} />}
       {page === "marketplace" && <Marketplace />}
       {page === "plugins" && <PluginSettings initialPluginId={subpath} onPluginChange={setSubpath} />}
       {page === "costs" && <CostDashboard />}

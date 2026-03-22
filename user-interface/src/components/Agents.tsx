@@ -1,52 +1,54 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { apiClient } from "../api/client";
-import type { RegistryAlias, AgentType, CreateAliasRequest, Plugin } from "@teamagentica/api-client";
+import type { RegistryAlias, AgentType, Plugin, Persona } from "@teamagentica/api-client";
+import PersonaForm from "./agents/PersonaForm";
+import AgentForm from "./agents/AgentForm";
+import ToolAgentForm from "./agents/ToolAgentForm";
+import ToolForm from "./agents/ToolForm";
 
-type Section = {
-  type: AgentType;
-  label: string;
-  description: string;
-  capabilities: string[]; // capability prefixes to search for plugin dropdown
-  hasModel: boolean;
+const CAPABILITY_MAP: Record<string, string[]> = {
+  agent: ["agent:chat"],
+  tool_agent: ["agent:tool"],
+  tool: ["tool:", "storage:", "infra:"],
 };
 
-const SECTIONS: Section[] = [
-  { type: "agent", label: "Agents", description: "AI personas with provider, model, and system prompt", capabilities: ["agent:chat"], hasModel: true },
-  { type: "tool_agent", label: "Tool Agents", description: "AI-powered tool plugins (image gen, video gen, etc.)", capabilities: ["agent:tool"], hasModel: true },
-  { type: "tool", label: "Tools", description: "Service plugins exposed as addressable tools", capabilities: ["tool:", "storage:", "infra:"], hasModel: false },
-];
+const DEFAULT_COORDINATOR = "default-coordinator";
 
-interface EditingState {
-  name: string;
-  type: AgentType;
-  plugin: string;
-  provider: string;
-  model: string;
-  system_prompt: string;
+interface SidebarSection {
+  key: string;
+  label: string;
+  type?: AgentType; // undefined = personas
 }
 
-const emptyForm = (type: AgentType): EditingState => ({
-  name: "", type, plugin: "", provider: "", model: "", system_prompt: "",
-});
+const SIDEBAR_SECTIONS: SidebarSection[] = [
+  { key: "personas", label: "Personas" },
+  { key: "agents", label: "Agents", type: "agent" },
+  { key: "tool-agents", label: "Tool Agents", type: "tool_agent" },
+  { key: "tools", label: "Tools", type: "tool" },
+];
 
-export default function Agents() {
+interface Props {
+  subpath: string;
+  onNavigate: (subpath: string) => void;
+}
+
+export default function Agents({ subpath, onNavigate }: Props) {
   const [aliases, setAliases] = useState<RegistryAlias[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<EditingState | null>(null);
-  const [editingOriginalName, setEditingOriginalName] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
-
-  // Plugin lists per section type, fetched once.
   const [pluginsByType, setPluginsByType] = useState<Record<AgentType, Plugin[]>>({
     agent: [], tool_agent: [], tool: [],
   });
 
   const load = useCallback(async () => {
     try {
-      const data = await apiClient.agents.list();
-      setAliases(data);
+      const [aliasData, personaData] = await Promise.all([
+        apiClient.agents.list(),
+        apiClient.personas.list().catch(() => [] as Persona[]),
+      ]);
+      setAliases(aliasData);
+      setPersonas(personaData);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load agents");
@@ -55,19 +57,15 @@ export default function Agents() {
     }
   }, []);
 
-  // Fetch available plugins for each section's capabilities.
   const loadPlugins = useCallback(async () => {
     const result: Record<AgentType, Plugin[]> = { agent: [], tool_agent: [], tool: [] };
-    for (const sec of SECTIONS) {
+    for (const [type, caps] of Object.entries(CAPABILITY_MAP)) {
       const seen = new Set<string>();
-      for (const cap of sec.capabilities) {
+      for (const cap of caps) {
         try {
           const plugins = await apiClient.plugins.search(cap);
           for (const p of plugins) {
-            if (!seen.has(p.id)) {
-              seen.add(p.id);
-              result[sec.type].push(p);
-            }
+            if (!seen.has(p.id)) { seen.add(p.id); result[type as AgentType].push(p); }
           }
         } catch { /* ignore */ }
       }
@@ -77,313 +75,178 @@ export default function Agents() {
 
   useEffect(() => { load(); loadPlugins(); }, [load, loadPlugins]);
 
-  const byType = (type: AgentType) => aliases.filter((a) => a.type === type);
+  // Parse subpath to determine what to show in main area.
+  const route = useMemo(() => {
+    if (!subpath) return null;
+    const parts = subpath.split("/");
+    // e.g. "personas/create", "agents/edit/my-agent"
+    const section = parts[0];
+    const action = parts[1]; // "create" or "edit"
+    const id = parts.slice(2).join("/"); // everything after action
+    if (action === "create") return { section, action: "create" as const, id: "" };
+    if (action === "edit" && id) return { section, action: "edit" as const, id };
+    return null;
+  }, [subpath]);
 
-  const startCreate = (type: AgentType) => {
-    setEditing(emptyForm(type));
-    setEditingOriginalName(null);
-  };
+  const handleSave = useCallback(() => {
+    load();
+  }, [load]);
 
-  const startEdit = (a: RegistryAlias) => {
-    setEditing({
-      name: a.name, type: a.type, plugin: a.plugin,
-      provider: a.provider || "", model: a.model || "",
-      system_prompt: a.system_prompt || "",
-    });
-    setEditingOriginalName(a.name);
-  };
+  const handleCancel = useCallback(() => {
+    onNavigate("");
+  }, [onNavigate]);
 
-  const cancelEdit = () => { setEditing(null); setEditingOriginalName(null); };
-
-  const save = async () => {
-    if (!editing || !editing.name.trim() || !editing.plugin.trim()) return;
-    setSaving(true);
-    try {
-      if (editingOriginalName) {
-        await apiClient.agents.update(editingOriginalName, {
-          type: editing.type,
-          plugin: editing.plugin,
-          provider: editing.provider || undefined,
-          model: editing.model || undefined,
-          system_prompt: editing.system_prompt || undefined,
-        });
-      } else {
-        const req: CreateAliasRequest = {
-          name: editing.name.trim(), type: editing.type, plugin: editing.plugin.trim(),
-          provider: editing.provider || undefined,
-          model: editing.model || undefined,
-          system_prompt: editing.system_prompt || undefined,
-        };
-        await apiClient.agents.create(req);
-      }
-      setEditing(null);
-      setEditingOriginalName(null);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const remove = async (name: string) => {
-    setDeleting(name);
-    try {
-      await apiClient.agents.delete(name);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed");
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  if (loading) {
-    return <div className="agents-page"><div className="agents-loading">Loading agents...</div></div>;
-  }
-
-  return (
-    <div className="agents-page">
-      <div className="agents-header">
-        <h2>Agents & Tools</h2>
-        {error && <div className="agents-error">{error}</div>}
-      </div>
-
-      {SECTIONS.map((sec) => (
-        <AgentSection
-          key={sec.type}
-          section={sec}
-          aliases={byType(sec.type)}
-          plugins={pluginsByType[sec.type]}
-          editing={editing}
-          editingOriginalName={editingOriginalName}
-          saving={saving}
-          deleting={deleting}
-          onStartCreate={() => startCreate(sec.type)}
-          onStartEdit={startEdit}
-          onCancel={cancelEdit}
-          onSave={save}
-          onDelete={remove}
-          onEditChange={setEditing}
-        />
-      ))}
-    </div>
+  // Chat-capable aliases for persona backend_alias dropdown.
+  const agentPluginIds = useMemo(() => new Set(pluginsByType.agent.map((p) => p.id)), [pluginsByType]);
+  const chatAliases = useMemo(
+    () => aliases.filter((a) => agentPluginIds.has(a.plugin) || a.type === "agent"),
+    [aliases, agentPluginIds],
   );
-}
 
-interface AgentSectionProps {
-  section: Section;
-  aliases: RegistryAlias[];
-  plugins: Plugin[];
-  editing: EditingState | null;
-  editingOriginalName: string | null;
-  saving: boolean;
-  deleting: string | null;
-  onStartCreate: () => void;
-  onStartEdit: (a: RegistryAlias) => void;
-  onCancel: () => void;
-  onSave: () => void;
-  onDelete: (name: string) => void;
-  onEditChange: (state: EditingState) => void;
-}
+  const byType = useCallback(
+    (type: AgentType) => aliases.filter((a) => a.type === type),
+    [aliases],
+  );
 
-function AgentSection({
-  section, aliases, plugins, editing, editingOriginalName, saving, deleting,
-  onStartCreate, onStartEdit, onCancel, onSave, onDelete, onEditChange,
-}: AgentSectionProps) {
-  const isEditingThisType = editing?.type === section.type;
-  const isCreating = isEditingThisType && editingOriginalName === null;
+  // Resolve the data item for edit routes.
+  const renderContent = () => {
+    if (loading) {
+      return <div className="agents-main-empty">Loading agents...</div>;
+    }
+
+    if (!route) {
+      const hasCoordinator = personas.some((p) => p.alias === DEFAULT_COORDINATOR);
+      return (
+        <div className="agents-main-empty">
+          {!hasCoordinator && (
+            <div className="agents-error" style={{ marginBottom: 16 }}>
+              No "{DEFAULT_COORDINATOR}" persona configured — task dispatch will not work.
+            </div>
+          )}
+          <p>Select an item from the sidebar or create a new one.</p>
+        </div>
+      );
+    }
+
+    if (route.section === "personas") {
+      const persona = route.action === "edit"
+        ? personas.find((p) => p.alias === route.id)
+        : undefined;
+      if (route.action === "edit" && !persona) {
+        return <div className="agents-main-empty">Persona "{route.id}" not found.</div>;
+      }
+      return (
+        <PersonaForm
+          key={route.action + (route.id || "new")}
+          persona={persona}
+          chatAliases={chatAliases}
+          onSave={handleSave}
+          onCancel={handleCancel}
+        />
+      );
+    }
+
+    if (route.section === "agents") {
+      const item = route.action === "edit"
+        ? byType("agent").find((a) => a.name === route.id)
+        : undefined;
+      if (route.action === "edit" && !item) {
+        return <div className="agents-main-empty">Agent "{route.id}" not found.</div>;
+      }
+      return (
+        <AgentForm
+          key={route.action + (route.id || "new")}
+          alias={item}
+          plugins={pluginsByType.agent}
+          onSave={handleSave}
+          onCancel={handleCancel}
+        />
+      );
+    }
+
+    if (route.section === "tool-agents") {
+      const item = route.action === "edit"
+        ? byType("tool_agent").find((a) => a.name === route.id)
+        : undefined;
+      if (route.action === "edit" && !item) {
+        return <div className="agents-main-empty">Tool Agent "{route.id}" not found.</div>;
+      }
+      return (
+        <ToolAgentForm
+          key={route.action + (route.id || "new")}
+          alias={item}
+          plugins={pluginsByType.tool_agent}
+          onSave={handleSave}
+          onCancel={handleCancel}
+        />
+      );
+    }
+
+    if (route.section === "tools") {
+      const item = route.action === "edit"
+        ? byType("tool").find((a) => a.name === route.id)
+        : undefined;
+      if (route.action === "edit" && !item) {
+        return <div className="agents-main-empty">Tool "{route.id}" not found.</div>;
+      }
+      return (
+        <ToolForm
+          key={route.action + (route.id || "new")}
+          alias={item}
+          plugins={pluginsByType.tool}
+          onSave={handleSave}
+          onCancel={handleCancel}
+        />
+      );
+    }
+
+    return <div className="agents-main-empty">Unknown section.</div>;
+  };
+
+  // Determine active sidebar item from route.
+  const isActive = (section: string, name?: string) => {
+    if (!route) return false;
+    if (route.section !== section) return false;
+    if (!name) return route.action === "create";
+    return route.action === "edit" && route.id === name;
+  };
 
   return (
-    <div className="agents-section">
-      <div className="agents-section-header">
-        <div>
-          <h3>{section.label}</h3>
-          <span className="agents-section-desc">{section.description}</span>
-        </div>
-        <button className="agents-add-btn" onClick={onStartCreate} disabled={isCreating}>
-          + Add
-        </button>
-      </div>
-
-      <div className="agents-table">
-        <div className="agents-table-header">
-          <span className="agents-col-name">Name</span>
-          <span className="agents-col-plugin">Plugin</span>
-          {section.hasModel && <span className="agents-col-model">Model</span>}
-          {section.type === "agent" && <span className="agents-col-provider">Provider</span>}
-          <span className="agents-col-actions">Actions</span>
-        </div>
-
-        {aliases.map((a) => {
-          const isEditingThis = isEditingThisType && editingOriginalName === a.name;
-          if (isEditingThis && editing) {
-            return (
-              <AgentFormRow
-                key={a.name}
-                form={editing}
-                section={section}
-                plugins={plugins}
-                saving={saving}
-                onChange={onEditChange}
-                onSave={onSave}
-                onCancel={onCancel}
-              />
-            );
-          }
+    <div className="agents-layout">
+      <div className="agents-sidebar">
+        {SIDEBAR_SECTIONS.map((sec) => {
+          const items = sec.type ? byType(sec.type) : personas;
+          const nameKey = sec.type ? "name" : "alias";
           return (
-            <div className="agents-row" key={a.name}>
-              <span className="agents-col-name agents-name-val">@{a.name}</span>
-              <span className="agents-col-plugin">{a.plugin}</span>
-              {section.hasModel && <span className="agents-col-model">{a.model || "—"}</span>}
-              {section.type === "agent" && <span className="agents-col-provider">{a.provider || "—"}</span>}
-              <span className="agents-col-actions">
-                <button className="agents-edit-btn" onClick={() => onStartEdit(a)}>Edit</button>
-                <button
-                  className="agents-delete-btn"
-                  onClick={() => onDelete(a.name)}
-                  disabled={deleting === a.name}
-                >
-                  {deleting === a.name ? "..." : "Delete"}
-                </button>
-              </span>
+            <div className="agents-sidebar-section" key={sec.key}>
+              <div className="agents-sidebar-section-header">{sec.label}</div>
+              {items.map((item) => {
+                const id = (item as any)[nameKey] as string;
+                return (
+                  <button
+                    key={id}
+                    className={`agents-sidebar-item${isActive(sec.key, id) ? " active" : ""}`}
+                    onClick={() => onNavigate(`${sec.key}/edit/${id}`)}
+                  >
+                    @{id}
+                  </button>
+                );
+              })}
+              <button
+                className={`agents-sidebar-add${isActive(sec.key) ? " active" : ""}`}
+                onClick={() => onNavigate(`${sec.key}/create`)}
+              >
+                + Add {sec.label.replace(/s$/, "")}
+              </button>
             </div>
           );
         })}
-
-        {isCreating && editing && (
-          <AgentFormRow
-            form={editing}
-            section={section}
-            plugins={plugins}
-            saving={saving}
-            onChange={onEditChange}
-            onSave={onSave}
-            onCancel={onCancel}
-            isNew
-          />
-        )}
-
-        {aliases.length === 0 && !isCreating && (
-          <div className="agents-empty">No {section.label.toLowerCase()} configured</div>
-        )}
       </div>
-    </div>
-  );
-}
 
-interface AgentFormRowProps {
-  form: EditingState;
-  section: Section;
-  plugins: Plugin[];
-  saving: boolean;
-  isNew?: boolean;
-  onChange: (state: EditingState) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}
-
-function AgentFormRow({ form, section, plugins, saving, isNew, onChange, onSave, onCancel }: AgentFormRowProps) {
-  const [models, setModels] = useState<string[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-
-  // Fetch models when plugin changes (only for sections with models).
-  useEffect(() => {
-    if (!section.hasModel || !form.plugin) {
-      setModels([]);
-      return;
-    }
-    let cancelled = false;
-    setModelsLoading(true);
-    apiClient.agents.pluginModels(form.plugin)
-      .then((res) => { if (!cancelled) setModels(res.models || []); })
-      .catch(() => { if (!cancelled) setModels([]); })
-      .finally(() => { if (!cancelled) setModelsLoading(false); });
-    return () => { cancelled = true; };
-  }, [form.plugin, section.hasModel]);
-
-  const upd = (field: keyof EditingState, value: string) =>
-    onChange({ ...form, [field]: value });
-
-  const handlePluginChange = (pluginId: string) => {
-    // Reset model when plugin changes.
-    onChange({ ...form, plugin: pluginId, model: "" });
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") onSave();
-    if (e.key === "Escape") onCancel();
-  };
-
-  return (
-    <div className="agents-row agents-row-editing" onKeyDown={handleKeyDown}>
-      <span className="agents-col-name">
-        {isNew ? (
-          <input
-            className="agents-input"
-            value={form.name}
-            onChange={(e) => upd("name", e.target.value)}
-            placeholder="alias name"
-            autoFocus
-          />
-        ) : (
-          <span className="agents-name-val">@{form.name}</span>
-        )}
-      </span>
-      <span className="agents-col-plugin">
-        <select
-          className="agents-select"
-          value={form.plugin}
-          onChange={(e) => handlePluginChange(e.target.value)}
-        >
-          <option value="">Select plugin...</option>
-          {plugins.map((p) => (
-            <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
-          ))}
-        </select>
-      </span>
-      {section.hasModel && (
-        <span className="agents-col-model">
-          {modelsLoading ? (
-            <span className="agents-models-loading">loading...</span>
-          ) : models.length > 0 ? (
-            <select
-              className="agents-select"
-              value={form.model}
-              onChange={(e) => upd("model", e.target.value)}
-            >
-              <option value="">Default</option>
-              {models.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              className="agents-input"
-              value={form.model}
-              onChange={(e) => upd("model", e.target.value)}
-              placeholder={form.plugin ? "no models found" : "select plugin first"}
-              disabled={!form.plugin}
-            />
-          )}
-        </span>
-      )}
-      {section.type === "agent" && (
-        <span className="agents-col-provider">
-          <input
-            className="agents-input"
-            value={form.provider}
-            onChange={(e) => upd("provider", e.target.value)}
-            placeholder="provider"
-          />
-        </span>
-      )}
-      <span className="agents-col-actions">
-        <button className="agents-save-btn" onClick={onSave} disabled={saving}>
-          {saving ? "..." : "Save"}
-        </button>
-        <button className="agents-cancel-btn" onClick={onCancel}>Cancel</button>
-      </span>
+      <div className="agents-main">
+        {error && <div className="agents-error" style={{ marginBottom: 16 }}>{error}</div>}
+        {renderContent()}
+      </div>
     </div>
   );
 }
