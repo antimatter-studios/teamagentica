@@ -707,32 +707,39 @@ func (c *Client) handleEventCallback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// FetchAliases retrieves the current alias list from the kernel.
-// Returns entries in "name=target" format suitable for alias.NewAliasMap or alias.Replace.
+// FetchAliases retrieves the current alias list from the alias-registry plugin
+// via the kernel's plugin-to-plugin routing. Returns entries suitable for
+// alias.NewAliasMap or alias.Replace.
 func (c *Client) FetchAliases() ([]alias.AliasInfo, error) {
-	req, err := http.NewRequest(http.MethodGet, c.kernelURL()+"/api/aliases", nil)
+	data, err := c.RouteToPlugin(context.Background(), "infra-alias-registry", "GET", "/aliases", nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("kernel returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("fetch aliases: %w", err)
 	}
 
 	var result struct {
-		Aliases []alias.AliasInfo `json:"aliases"`
+		Aliases []struct {
+			Name   string `json:"name"`
+			Plugin string `json:"plugin"`
+			Model  string `json:"model"`
+		} `json:"aliases"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode aliases: %w", err)
 	}
 
-	return result.Aliases, nil
+	infos := make([]alias.AliasInfo, 0, len(result.Aliases))
+	for _, a := range result.Aliases {
+		target := a.Plugin
+		if a.Model != "" {
+			target = a.Plugin + ":" + a.Model
+		}
+		infos = append(infos, alias.AliasInfo{
+			Name:   a.Name,
+			Target: target,
+		})
+	}
+
+	return infos, nil
 }
 
 /// FetchConfig retrieves the plugin's own configuration from the kernel API.
