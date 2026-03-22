@@ -2,11 +2,11 @@ id: storage-sss3
 name: "S3 Storage"
 description: "S3-compatible object storage powered by stupid-simple-s3"
 group: storage
-version: "1.0.10"
+version: "1.0.12"
 image: "teamagentica-storage-sss3:latest"
 author: teamagentica
 tags: [storage, s3, files, media, tool]
-capabilities: ["storage:api"]
+capabilities: ["storage:api", "storage:object", "tool:storage:api", "tool:storage:object"]
 config_schema:
   S3_ENDPOINT:
     type: string
