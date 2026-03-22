@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/bot"
@@ -158,6 +160,14 @@ func main() {
 	if len(bots) > 0 {
 		telegramBot = bots[0]
 	}
+
+	// Acquire cache for welcome message throttling.
+	sdkClient.CacheClient(func(c *redis.Client) {
+		log.Printf("Cache connected")
+		for _, b := range bots {
+			b.SetCache(c)
+		}
+	})
 
 	// Subscribe to alias updates from infra-alias-registry.
 	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {

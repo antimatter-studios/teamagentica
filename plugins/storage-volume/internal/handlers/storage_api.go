@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"archive/zip"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -44,9 +45,26 @@ func mimeByExt(name string) string {
 func (h *Handler) resolvePath(key string) (string, error) {
 	cleaned := filepath.Clean("/" + key)
 	full := filepath.Join(h.dataPath, cleaned)
-	if !strings.HasPrefix(full, filepath.Clean(h.dataPath)) {
+	cleanBase := filepath.Clean(h.dataPath)
+	if !strings.HasPrefix(full, cleanBase) {
 		return "", fmt.Errorf("path traversal denied")
 	}
+
+	// If path exists, resolve symlinks and re-check prefix to prevent symlink bypass.
+	if _, err := os.Lstat(full); err == nil {
+		resolved, err := filepath.EvalSymlinks(full)
+		if err != nil {
+			return "", fmt.Errorf("path traversal denied")
+		}
+		resolvedBase, err := filepath.EvalSymlinks(cleanBase)
+		if err != nil {
+			return "", fmt.Errorf("path traversal denied")
+		}
+		if !strings.HasPrefix(resolved, resolvedBase) {
+			return "", fmt.Errorf("path traversal denied")
+		}
+	}
+
 	return full, nil
 }
 
@@ -130,7 +148,43 @@ func (h *Handler) PutObject(c *gin.Context) {
 }
 
 // GetObject handles GET /objects/*key.
+// Uses http.ServeContent instead of c.File/http.ServeFile to avoid Go's
+// built-in redirect for index.html URLs (which breaks API object retrieval).
 func (h *Handler) GetObject(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	fullPath, err := h.resolvePath(key)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	f, err := os.Open(fullPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ct := mimeByExt(fullPath)
+	c.Header("Content-Type", ct)
+	c.Header("Cache-Control", "no-store")
+	c.Header("ETag", fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size()))
+	http.ServeContent(c.Writer, c.Request, filepath.Base(fullPath), info.ModTime(), f)
+}
+
+// DeleteObject handles DELETE /objects/*key.
+func (h *Handler) DeleteObject(c *gin.Context) {
 	key := strings.TrimPrefix(c.Param("key"), "/")
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
@@ -149,37 +203,129 @@ func (h *Handler) GetObject(c *gin.Context) {
 		return
 	}
 
-	ct := mimeByExt(fullPath)
-	c.Header("Content-Type", ct)
-	c.Header("ETag", fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size()))
-	c.Header("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
-	c.File(fullPath)
-}
-
-// DeleteObject handles DELETE /objects/*key.
-func (h *Handler) DeleteObject(c *gin.Context) {
-	key := strings.TrimPrefix(c.Param("key"), "/")
-	if key == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
-		return
+	if info.IsDir() {
+		err = os.RemoveAll(fullPath)
+	} else {
+		err = os.Remove(fullPath)
 	}
-
-	fullPath, err := h.resolvePath(key)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := os.Remove(fullPath); err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"key": key, "status": "deleted"})
+}
+
+// CopyObject handles POST /objects/copy — duplicate an object or folder.
+func (h *Handler) CopyObject(c *gin.Context) {
+	var req struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Source == "" || req.Destination == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source and destination are required"})
+		return
+	}
+
+	srcPath, err := h.resolvePath(req.Source)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	dstPath, err := h.resolvePath(req.Destination)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "source not found"})
+		return
+	}
+
+	if info.IsDir() {
+		if err := copyDirRecursive(srcPath, dstPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		if err := copySingleFile(srcPath, dstPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"source": req.Source, "destination": req.Destination, "status": "copied"})
+}
+
+func copySingleFile(srcPath, dstPath string) error {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return err
+	}
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+func copyDirRecursive(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(srcDir, path)
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		return copySingleFile(path, target)
+	})
+}
+
+// MoveObject handles POST /objects/move — rename/move an object.
+func (h *Handler) MoveObject(c *gin.Context) {
+	var req struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Source == "" || req.Destination == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source and destination are required"})
+		return
+	}
+
+	srcPath, err := h.resolvePath(req.Source)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	dstPath, err := h.resolvePath(req.Destination)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"source": req.Source, "destination": req.Destination, "status": "moved"})
 }
 
 // HeadObject handles HEAD /objects/*key.
@@ -208,6 +354,53 @@ func (h *Handler) HeadObject(c *gin.Context) {
 	c.Header("ETag", fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size()))
 	c.Header("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
 	c.Status(http.StatusOK)
+}
+
+// DownloadZip handles GET /objects/zip?prefix= — stream a directory as a zip archive.
+func (h *Handler) DownloadZip(c *gin.Context) {
+	prefix := c.Query("prefix")
+	if prefix == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prefix is required"})
+		return
+	}
+
+	dirPath, err := h.resolvePath(prefix)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	info, err := os.Stat(dirPath)
+	if err != nil || !info.IsDir() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "directory not found"})
+		return
+	}
+
+	// Use the folder name for the zip filename.
+	folderName := filepath.Base(dirPath)
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, folderName))
+
+	zw := zip.NewWriter(c.Writer)
+	defer zw.Close()
+
+	_ = filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(dirPath, path)
+		w, err := zw.Create(rel)
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(w, f)
+		return err
+	})
 }
 
 // --- storage:api tool endpoints for AI agents ---

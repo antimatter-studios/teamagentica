@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"archive/zip"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -101,11 +103,32 @@ func (h *Handler) GetObject(c *gin.Context) {
 	}
 }
 
-// DeleteObject handles DELETE /objects/*key — delete an object.
+// DeleteObject handles DELETE /objects/*key — delete an object or folder prefix.
 func (h *Handler) DeleteObject(c *gin.Context) {
 	key := strings.TrimPrefix(c.Param("key"), "/")
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	// Folder delete: remove all objects with this prefix.
+	if strings.HasSuffix(key, "/") {
+		objects, err := h.client.ListObjects(c.Request.Context(), key)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		for _, obj := range objects {
+			if err := h.client.DeleteObject(c.Request.Context(), obj.Key); err != nil {
+				log.Printf("[handlers] delete %s error: %v", obj.Key, err)
+			}
+			h.index.Delete(obj.Key)
+		}
+		// Also delete the folder marker itself.
+		_ = h.client.DeleteObject(c.Request.Context(), key)
+		h.index.Delete(key)
+		h.emitEvent("folder_deleted", key)
+		c.JSON(http.StatusOK, gin.H{"key": key, "status": "deleted"})
 		return
 	}
 
@@ -118,6 +141,116 @@ func (h *Handler) DeleteObject(c *gin.Context) {
 	h.index.Delete(key)
 	h.emitEvent("object_deleted", key)
 	c.JSON(http.StatusOK, gin.H{"key": key, "status": "deleted"})
+}
+
+// CopyObject handles POST /objects/copy — duplicate an object or folder (server-side copy).
+func (h *Handler) CopyObject(c *gin.Context) {
+	var req struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Source == "" || req.Destination == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source and destination are required"})
+		return
+	}
+
+	// Folder copy: list all objects with source prefix, copy each with rewritten key.
+	if strings.HasSuffix(req.Source, "/") {
+		objects, err := h.client.ListObjects(c.Request.Context(), req.Source)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		for _, obj := range objects {
+			destKey := req.Destination + strings.TrimPrefix(obj.Key, req.Source)
+			if err := h.client.CopyObject(c.Request.Context(), obj.Key, destKey); err != nil {
+				log.Printf("[handlers] copy %s error: %v", obj.Key, err)
+				continue
+			}
+			if meta, err := h.client.HeadObject(c.Request.Context(), destKey); err == nil {
+				h.index.Put(destKey, *meta)
+			}
+		}
+		h.emitEvent("folder_copied", fmt.Sprintf("%s -> %s", req.Source, req.Destination))
+		c.JSON(http.StatusOK, gin.H{"source": req.Source, "destination": req.Destination, "status": "copied"})
+		return
+	}
+
+	if err := h.client.CopyObject(c.Request.Context(), req.Source, req.Destination); err != nil {
+		log.Printf("[handlers] copy error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	meta, err := h.client.HeadObject(c.Request.Context(), req.Destination)
+	if err == nil {
+		h.index.Put(req.Destination, *meta)
+	}
+
+	h.emitEvent("object_copied", fmt.Sprintf("%s -> %s", req.Source, req.Destination))
+	c.JSON(http.StatusOK, gin.H{"source": req.Source, "destination": req.Destination, "status": "copied"})
+}
+
+// MoveObject handles POST /objects/move — rename/move an object (server-side copy + delete).
+func (h *Handler) MoveObject(c *gin.Context) {
+	var req struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Source == "" || req.Destination == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source and destination are required"})
+		return
+	}
+
+	// Folder move: copy all objects with prefix, then delete originals.
+	if strings.HasSuffix(req.Source, "/") {
+		objects, err := h.client.ListObjects(c.Request.Context(), req.Source)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		for _, obj := range objects {
+			destKey := req.Destination + strings.TrimPrefix(obj.Key, req.Source)
+			if err := h.client.CopyObject(c.Request.Context(), obj.Key, destKey); err != nil {
+				log.Printf("[handlers] move copy %s error: %v", obj.Key, err)
+				continue
+			}
+			if meta, err := h.client.HeadObject(c.Request.Context(), destKey); err == nil {
+				h.index.Put(destKey, *meta)
+			}
+		}
+		// Delete originals.
+		for _, obj := range objects {
+			_ = h.client.DeleteObject(c.Request.Context(), obj.Key)
+			h.index.Delete(obj.Key)
+		}
+		_ = h.client.DeleteObject(c.Request.Context(), req.Source)
+		h.index.Delete(req.Source)
+		h.emitEvent("folder_moved", fmt.Sprintf("%s -> %s", req.Source, req.Destination))
+		c.JSON(http.StatusOK, gin.H{"source": req.Source, "destination": req.Destination, "status": "moved"})
+		return
+	}
+
+	if err := h.client.CopyObject(c.Request.Context(), req.Source, req.Destination); err != nil {
+		log.Printf("[handlers] move copy error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.client.DeleteObject(c.Request.Context(), req.Source); err != nil {
+		log.Printf("[handlers] move delete error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	meta, err := h.client.HeadObject(c.Request.Context(), req.Destination)
+	if err == nil {
+		h.index.Put(req.Destination, *meta)
+	}
+	h.index.Delete(req.Source)
+
+	h.emitEvent("object_moved", fmt.Sprintf("%s -> %s", req.Source, req.Destination))
+	c.JSON(http.StatusOK, gin.H{"source": req.Source, "destination": req.Destination, "status": "moved"})
 }
 
 // HeadObject handles HEAD /objects/*key — object metadata.
@@ -139,6 +272,52 @@ func (h *Handler) HeadObject(c *gin.Context) {
 	c.Header("Content-Length", formatInt64(meta.Size))
 	c.Header("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
 	c.Status(http.StatusOK)
+}
+
+// DownloadZip handles GET /objects/zip?prefix= — stream objects as a zip archive.
+func (h *Handler) DownloadZip(c *gin.Context) {
+	prefix := c.Query("prefix")
+	if prefix == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prefix is required"})
+		return
+	}
+
+	objects, err := h.client.ListObjects(c.Request.Context(), prefix)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(objects) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no objects found"})
+		return
+	}
+
+	// Use the folder name for the zip filename.
+	folderName := path.Base(strings.TrimSuffix(prefix, "/"))
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, folderName))
+
+	zw := zip.NewWriter(c.Writer)
+	defer zw.Close()
+
+	for _, obj := range objects {
+		rel := strings.TrimPrefix(obj.Key, prefix)
+		if rel == "" || strings.HasSuffix(rel, "/") {
+			continue // skip folder markers
+		}
+		out, err := h.client.GetObject(c.Request.Context(), obj.Key)
+		if err != nil {
+			log.Printf("[handlers] zip get %s error: %v", obj.Key, err)
+			continue
+		}
+		w, err := zw.Create(rel)
+		if err != nil {
+			out.Body.Close()
+			continue
+		}
+		_, _ = io.Copy(w, out.Body)
+		out.Body.Close()
+	}
 }
 
 // Browse handles GET /browse?prefix= — cached directory-like listing.

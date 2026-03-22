@@ -172,7 +172,7 @@ func (h *Handler) CreateSession(c *gin.Context) {
 		}
 	}
 	secure := c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
-	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie("teamagentica_session", token, 86400, "/", cookieDomain, secure, true)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

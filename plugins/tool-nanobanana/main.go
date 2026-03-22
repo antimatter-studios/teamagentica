@@ -64,6 +64,7 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
+	router.GET("/models", h.Models)
 	router.POST("/generate", h.Generate)
 	router.POST("/chat", h.Chat)
 	router.GET("/tools", h.Tools)

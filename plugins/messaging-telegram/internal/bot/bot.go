@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/msgbuffer"
@@ -53,6 +54,8 @@ type Bot struct {
 	shutdownOnce  sync.Once
 
 	knownChats map[int64]bool // tracked chat IDs (groups + DMs)
+	cacheMu    sync.RWMutex
+	cache      *redis.Client // optional Redis cache for throttling
 }
 
 // New creates a new Bot instance and validates the token via GetMe().
@@ -115,6 +118,19 @@ func (b *Bot) SetRelayClient(rc *relay.Client) {
 // SetVersion sets the plugin version for startup announcements.
 func (b *Bot) SetVersion(v string) {
 	b.version = v
+}
+
+// SetCache sets the Redis cache client for welcome message throttling.
+func (b *Bot) SetCache(c *redis.Client) {
+	b.cacheMu.Lock()
+	b.cache = c
+	b.cacheMu.Unlock()
+}
+
+func (b *Bot) getCache() *redis.Client {
+	b.cacheMu.RLock()
+	defer b.cacheMu.RUnlock()
+	return b.cache
 }
 
 // emitEvent sends a debug event to the kernel console.
@@ -1050,7 +1066,19 @@ func (b *Bot) trackChat(chatID int64) {
 }
 
 // sendStartupAnnouncement sends a status message to all known chats.
+// Throttled to at most once per hour via Redis cache if available.
 func (b *Bot) sendStartupAnnouncement(status string) {
+	const throttleKey = "telegram:welcome:last"
+	const throttleTTL = 1 * time.Hour
+
+	// Throttle: skip if we sent a welcome message less than 1 hour ago.
+	if c := b.getCache(); c != nil {
+		if _, err := c.Get(context.Background(), throttleKey).Result(); err == nil {
+			log.Println("[announce] throttled (sent within last hour)")
+			return
+		}
+	}
+
 	b.mu.Lock()
 	chats := make([]int64, 0, len(b.knownChats))
 	for id := range b.knownChats {
@@ -1083,6 +1111,11 @@ func (b *Bot) sendStartupAnnouncement(status string) {
 		}
 	}
 	log.Printf("[announce] sent to %d/%d chat(s)", sent, len(chats))
+
+	// Mark as sent in cache so subsequent restarts within 1h are throttled.
+	if c := b.getCache(); c != nil && sent > 0 {
+		c.Set(context.Background(), throttleKey, time.Now().Unix(), throttleTTL)
+	}
 }
 
 // buildStartupMessage constructs the announcement text.

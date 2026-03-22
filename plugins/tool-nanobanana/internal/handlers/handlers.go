@@ -53,6 +53,20 @@ func (h *Handler) Health(c *gin.Context) {
 	})
 }
 
+func (h *Handler) Models(c *gin.Context) {
+	if h.apiKey == "" {
+		c.JSON(http.StatusOK, gin.H{"models": []string{}})
+		return
+	}
+	models, err := h.client.ListModels()
+	if err != nil {
+		log.Printf("ListModels error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
+}
+
 type generateRequest struct {
 	Prompt      string `json:"prompt" binding:"required"`
 	Model       string `json:"model,omitempty"`

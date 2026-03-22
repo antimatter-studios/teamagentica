@@ -1,20 +1,169 @@
 package handlers
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-task-tracker/internal/storage"
+	"github.com/antimatter-studios/teamagentica/plugins/tool-task-tracker/internal/usercache"
 )
 
-type Handler struct {
-	db *storage.DB
+// EventEmitter is the subset of pluginsdk.Client needed by handlers.
+type EventEmitter interface {
+	ReportEvent(eventType, detail string)
 }
 
-func New(db *storage.DB) *Handler {
-	return &Handler{db: db}
+// ensure pluginsdk.Client satisfies EventEmitter at compile time.
+var _ EventEmitter = (*pluginsdk.Client)(nil)
+
+type Handler struct {
+	db        *storage.DB
+	events    EventEmitter
+	userCache *usercache.Cache
+}
+
+func New(db *storage.DB, events EventEmitter, cache *usercache.Cache) *Handler {
+	return &Handler{db: db, events: events, userCache: cache}
+}
+
+// ── Response types with resolved user names ──────────────────────────────────
+
+type CardResponse struct {
+	storage.Card
+	AssigneeName string `json:"assignee_name"`
+}
+
+type CommentResponse struct {
+	storage.Comment
+	AuthorName string `json:"author_name"`
+}
+
+func (h *Handler) enrichCard(ctx context.Context, card *storage.Card) CardResponse {
+	resp := CardResponse{Card: *card}
+	if card.AssigneeID != 0 {
+		if u, err := h.userCache.Get(ctx, card.AssigneeID); err == nil && u != nil {
+			resp.AssigneeName = u.FormatName()
+		}
+	} else if card.AssigneeAgent != "" {
+		resp.AssigneeName = card.AssigneeAgent
+	}
+	return resp
+}
+
+func (h *Handler) enrichCards(ctx context.Context, cards []storage.Card) []CardResponse {
+	ids := make(map[uint]bool)
+	for _, c := range cards {
+		if c.AssigneeID != 0 {
+			ids[c.AssigneeID] = true
+		}
+	}
+	idSlice := make([]uint, 0, len(ids))
+	for id := range ids {
+		idSlice = append(idSlice, id)
+	}
+	users := h.userCache.GetMany(ctx, idSlice)
+
+	result := make([]CardResponse, len(cards))
+	for i, c := range cards {
+		result[i] = CardResponse{Card: c}
+		if c.AssigneeID != 0 {
+			if u, ok := users[c.AssigneeID]; ok {
+				result[i].AssigneeName = u.FormatName()
+			}
+		} else if c.AssigneeAgent != "" {
+			result[i].AssigneeName = c.AssigneeAgent
+		}
+	}
+	return result
+}
+
+func (h *Handler) enrichComment(ctx context.Context, comment *storage.Comment) CommentResponse {
+	resp := CommentResponse{Comment: *comment}
+	if comment.AuthorID != 0 {
+		if u, err := h.userCache.Get(ctx, comment.AuthorID); err == nil && u != nil {
+			resp.AuthorName = u.FormatName()
+		}
+	}
+	return resp
+}
+
+func (h *Handler) enrichComments(ctx context.Context, comments []storage.Comment) []CommentResponse {
+	ids := make(map[uint]bool)
+	for _, c := range comments {
+		if c.AuthorID != 0 {
+			ids[c.AuthorID] = true
+		}
+	}
+	idSlice := make([]uint, 0, len(ids))
+	for id := range ids {
+		idSlice = append(idSlice, id)
+	}
+	users := h.userCache.GetMany(ctx, idSlice)
+
+	result := make([]CommentResponse, len(comments))
+	for i, c := range comments {
+		result[i] = CommentResponse{Comment: c}
+		if c.AuthorID != 0 {
+			if u, ok := users[c.AuthorID]; ok {
+				result[i].AuthorName = u.FormatName()
+			}
+		}
+	}
+	return result
+}
+
+// getUserID extracts the authenticated user ID from the kernel-injected header.
+func getUserID(c *gin.Context) uint {
+	idStr := c.GetHeader("X-User-ID")
+	if idStr == "" {
+		return 0
+	}
+	id, _ := strconv.ParseUint(idStr, 10, 64)
+	return uint(id)
+}
+
+// emitAssign fires a task-tracking:assign event when a card gets a non-empty assignee.
+func (h *Handler) emitAssign(ctx context.Context, card *storage.Card) {
+	if (card.AssigneeID == 0 && card.AssigneeAgent == "") || h.events == nil {
+		return
+	}
+	assigneeName := card.AssigneeAgent
+	if card.AssigneeID != 0 {
+		if u, err := h.userCache.Get(ctx, card.AssigneeID); err == nil && u != nil {
+			assigneeName = u.FormatName()
+		}
+	}
+	detail, _ := json.Marshal(map[string]interface{}{
+		"card_id":        card.ID,
+		"board_id":       card.BoardID,
+		"title":          card.Title,
+		"assignee_id":    card.AssigneeID,
+		"assignee_agent": card.AssigneeAgent,
+		"assignee_name":  assigneeName,
+	})
+	h.events.ReportEvent("task-tracking:assign", string(detail))
+}
+
+// emitComment fires a task-tracking:comment event when a comment is added
+// to a card that has an agent assignee. Skips if author_id is 0 (system/agent comment).
+func (h *Handler) emitComment(card *storage.Card, comment *storage.Comment) {
+	if h.events == nil || card.AssigneeAgent == "" || comment.AuthorID == 0 {
+		return
+	}
+	detail, _ := json.Marshal(map[string]interface{}{
+		"card_id":        card.ID,
+		"board_id":       card.BoardID,
+		"author_id":      comment.AuthorID,
+		"body":           comment.Body,
+		"assignee_agent": card.AssigneeAgent,
+	})
+	h.events.ReportEvent("task-tracking:comment", string(detail))
 }
 
 func (h *Handler) Health(c *gin.Context) {
@@ -178,7 +327,7 @@ func (h *Handler) ListCards(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, cards)
+	c.JSON(http.StatusOK, h.enrichCards(c.Request.Context(), cards))
 }
 
 func (h *Handler) CreateCard(c *gin.Context) {
@@ -188,36 +337,39 @@ func (h *Handler) CreateCard(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ColumnID    string  `json:"column_id" binding:"required"`
-		Title       string  `json:"title" binding:"required"`
-		Description string  `json:"description"`
-		Priority    string  `json:"priority"`
-		Assignee    string  `json:"assignee"`
-		Labels      string  `json:"labels"`
-		DueDate     *int64  `json:"due_date"`
-		Position    float64 `json:"position"`
+		ColumnID      string  `json:"column_id" binding:"required"`
+		Title         string  `json:"title" binding:"required"`
+		Description   string  `json:"description"`
+		Priority      string  `json:"priority"`
+		AssigneeID    uint    `json:"assignee_id"`
+		AssigneeAgent string  `json:"assignee_agent"`
+		Labels        string  `json:"labels"`
+		DueDate       *int64  `json:"due_date"`
+		Position      float64 `json:"position"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	card := &storage.Card{
-		ID:          uuid.New().String(),
-		BoardID:     boardID,
-		ColumnID:    req.ColumnID,
-		Title:       req.Title,
-		Description: req.Description,
-		Priority:    req.Priority,
-		Assignee:    req.Assignee,
-		Labels:      req.Labels,
-		DueDate:     req.DueDate,
-		Position:    req.Position,
+		ID:            uuid.New().String(),
+		BoardID:       boardID,
+		ColumnID:      req.ColumnID,
+		Title:         req.Title,
+		Description:   req.Description,
+		Priority:      req.Priority,
+		AssigneeID:    req.AssigneeID,
+		AssigneeAgent: req.AssigneeAgent,
+		Labels:        req.Labels,
+		DueDate:       req.DueDate,
+		Position:      req.Position,
 	}
 	if err := h.db.CreateCard(card); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, card)
+	h.emitAssign(c.Request.Context(), card)
+	c.JSON(http.StatusCreated, h.enrichCard(c.Request.Context(), card))
 }
 
 func (h *Handler) UpdateCard(c *gin.Context) {
@@ -226,16 +378,21 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
 		return
 	}
+	oldAssigneeID := card.AssigneeID
+	oldAssigneeAgent := card.AssigneeAgent
+
 	var req struct {
-		ColumnID    *string  `json:"column_id"`
-		Title       *string  `json:"title"`
-		Description *string  `json:"description"`
-		Priority    *string  `json:"priority"`
-		Assignee    *string  `json:"assignee"`
-		Labels      *string  `json:"labels"`
-		DueDate     *int64   `json:"due_date"`
-		ClearDue    bool     `json:"clear_due"`
-		Position    *float64 `json:"position"`
+		ColumnID       *string  `json:"column_id"`
+		Title          *string  `json:"title"`
+		Description    *string  `json:"description"`
+		Priority       *string  `json:"priority"`
+		AssigneeID     *uint    `json:"assignee_id"`
+		AssigneeAgent  *string  `json:"assignee_agent"`
+		ClearAssignee  bool     `json:"clear_assignee"`
+		Labels         *string  `json:"labels"`
+		DueDate        *int64   `json:"due_date"`
+		ClearDue       bool     `json:"clear_due"`
+		Position       *float64 `json:"position"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -253,8 +410,18 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 	if req.Priority != nil {
 		card.Priority = *req.Priority
 	}
-	if req.Assignee != nil {
-		card.Assignee = *req.Assignee
+	if req.ClearAssignee {
+		card.AssigneeID = 0
+		card.AssigneeAgent = ""
+	} else {
+		if req.AssigneeID != nil {
+			card.AssigneeID = *req.AssigneeID
+			card.AssigneeAgent = "" // user assignee clears agent
+		}
+		if req.AssigneeAgent != nil {
+			card.AssigneeAgent = *req.AssigneeAgent
+			card.AssigneeID = 0 // agent assignee clears user
+		}
 	}
 	if req.Labels != nil {
 		card.Labels = *req.Labels
@@ -271,7 +438,19 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, card)
+	if card.AssigneeID != oldAssigneeID || card.AssigneeAgent != oldAssigneeAgent {
+		h.emitAssign(c.Request.Context(), card)
+	}
+	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
+}
+
+func (h *Handler) GetCard(c *gin.Context) {
+	card, err := h.db.GetCard(c.Param("cid"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		return
+	}
+	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
 }
 
 func (h *Handler) DeleteCard(c *gin.Context) {
@@ -290,34 +469,36 @@ func (h *Handler) ListComments(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, comments)
+	c.JSON(http.StatusOK, h.enrichComments(c.Request.Context(), comments))
 }
 
 func (h *Handler) CreateComment(c *gin.Context) {
 	cardID := c.Param("cid")
-	if _, err := h.db.GetCard(cardID); err != nil {
+	card, err := h.db.GetCard(cardID)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
 		return
 	}
 	var req struct {
-		Author string `json:"author"`
-		Body   string `json:"body" binding:"required"`
+		Body string `json:"body" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	authorID := getUserID(c)
 	comment := &storage.Comment{
-		ID:     uuid.New().String(),
-		CardID: cardID,
-		Author: req.Author,
-		Body:   req.Body,
+		ID:       uuid.New().String(),
+		CardID:   cardID,
+		AuthorID: authorID,
+		Body:     req.Body,
 	}
 	if err := h.db.CreateComment(comment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, comment)
+	h.emitComment(card, comment)
+	c.JSON(http.StatusCreated, h.enrichComment(c.Request.Context(), comment))
 }
 
 func (h *Handler) DeleteComment(c *gin.Context) {
@@ -373,13 +554,14 @@ func (h *Handler) GetTools(c *gin.Context) {
 				"parameters": gin.H{
 					"type": "object",
 					"properties": gin.H{
-						"board_id":    gin.H{"type": "string", "description": "ID of the board"},
-						"column_id":   gin.H{"type": "string", "description": "ID of the column (state) to place the task in"},
-						"title":       gin.H{"type": "string", "description": "Task title"},
-						"description": gin.H{"type": "string", "description": "Task description"},
-						"priority":    gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
-						"assignee":    gin.H{"type": "string", "description": "Assignee name or identifier"},
-						"labels":      gin.H{"type": "string", "description": "Comma-separated labels"},
+						"board_id":       gin.H{"type": "string", "description": "ID of the board"},
+						"column_id":      gin.H{"type": "string", "description": "ID of the column (state) to place the task in"},
+						"title":          gin.H{"type": "string", "description": "Task title"},
+						"description":    gin.H{"type": "string", "description": "Task description"},
+						"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
+						"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
+						"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
+						"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
 					},
 					"required": []string{"board_id", "column_id", "title"},
 				},
@@ -404,13 +586,14 @@ func (h *Handler) GetTools(c *gin.Context) {
 				"parameters": gin.H{
 					"type": "object",
 					"properties": gin.H{
-						"card_id":     gin.H{"type": "string", "description": "ID of the task/card"},
-						"title":       gin.H{"type": "string", "description": "New title"},
-						"description": gin.H{"type": "string", "description": "New description"},
-						"priority":    gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
-						"assignee":    gin.H{"type": "string", "description": "Assignee name or identifier"},
-						"labels":      gin.H{"type": "string", "description": "Comma-separated labels"},
-						"column_id":   gin.H{"type": "string", "description": "Move to this column"},
+						"card_id":        gin.H{"type": "string", "description": "ID of the task/card"},
+						"title":          gin.H{"type": "string", "description": "New title"},
+						"description":    gin.H{"type": "string", "description": "New description"},
+						"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
+						"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
+						"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
+						"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
+						"column_id":      gin.H{"type": "string", "description": "Move to this column"},
 					},
 					"required": []string{"card_id"},
 				},
@@ -422,9 +605,9 @@ func (h *Handler) GetTools(c *gin.Context) {
 				"parameters": gin.H{
 					"type": "object",
 					"properties": gin.H{
-						"card_id": gin.H{"type": "string", "description": "ID of the task/card"},
-						"body":    gin.H{"type": "string", "description": "Comment text"},
-						"author":  gin.H{"type": "string", "description": "Author name or identifier"},
+						"card_id":   gin.H{"type": "string", "description": "ID of the task/card"},
+						"body":      gin.H{"type": "string", "description": "Comment text"},
+						"author_id": gin.H{"type": "integer", "description": "User ID of author (defaults to caller)"},
 					},
 					"required": []string{"card_id", "body"},
 				},
@@ -472,21 +655,21 @@ func (h *Handler) MCPListTasks(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Index cards by column.
-	byColumn := make(map[string][]storage.Card)
-	for _, card := range cards {
-		byColumn[card.ColumnID] = append(byColumn[card.ColumnID], card)
+	enriched := h.enrichCards(c.Request.Context(), cards)
+	byColumn := make(map[string][]CardResponse)
+	for _, cr := range enriched {
+		byColumn[cr.ColumnID] = append(byColumn[cr.ColumnID], cr)
 	}
 	type statusGroup struct {
 		StatusID   string         `json:"status_id"`
 		StatusName string         `json:"status_name"`
-		Tasks      []storage.Card `json:"tasks"`
+		Tasks      []CardResponse `json:"tasks"`
 	}
 	groups := make([]statusGroup, 0, len(cols))
 	for _, col := range cols {
 		tasks := byColumn[col.ID]
 		if tasks == nil {
-			tasks = []storage.Card{}
+			tasks = []CardResponse{}
 		}
 		groups = append(groups, statusGroup{
 			StatusID:   col.ID,
@@ -510,8 +693,7 @@ func (h *Handler) MCPListTasksByStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "status not found"})
 		return
 	}
-	var cards []storage.Card
-	cards, err = h.db.ListCardsByColumn(req.ColumnID)
+	cards, err := h.db.ListCardsByColumn(req.ColumnID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -519,21 +701,22 @@ func (h *Handler) MCPListTasksByStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status_id":   col.ID,
 		"status_name": col.Name,
-		"tasks":       cards,
+		"tasks":       h.enrichCards(c.Request.Context(), cards),
 	})
 }
 
 func (h *Handler) MCPCreateTask(c *gin.Context) {
 	var req struct {
-		BoardID     string  `json:"board_id" binding:"required"`
-		ColumnID    string  `json:"column_id" binding:"required"`
-		Title       string  `json:"title" binding:"required"`
-		Description string  `json:"description"`
-		Priority    string  `json:"priority"`
-		Assignee    string  `json:"assignee"`
-		Labels      string  `json:"labels"`
-		DueDate     *int64  `json:"due_date"`
-		Position    float64 `json:"position"`
+		BoardID       string  `json:"board_id" binding:"required"`
+		ColumnID      string  `json:"column_id" binding:"required"`
+		Title         string  `json:"title" binding:"required"`
+		Description   string  `json:"description"`
+		Priority      string  `json:"priority"`
+		AssigneeID    uint    `json:"assignee_id"`
+		AssigneeAgent string  `json:"assignee_agent"`
+		Labels        string  `json:"labels"`
+		DueDate       *int64  `json:"due_date"`
+		Position      float64 `json:"position"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -544,22 +727,24 @@ func (h *Handler) MCPCreateTask(c *gin.Context) {
 		return
 	}
 	card := &storage.Card{
-		ID:          uuid.New().String(),
-		BoardID:     req.BoardID,
-		ColumnID:    req.ColumnID,
-		Title:       req.Title,
-		Description: req.Description,
-		Priority:    req.Priority,
-		Assignee:    req.Assignee,
-		Labels:      req.Labels,
-		DueDate:     req.DueDate,
-		Position:    req.Position,
+		ID:            uuid.New().String(),
+		BoardID:       req.BoardID,
+		ColumnID:      req.ColumnID,
+		Title:         req.Title,
+		Description:   req.Description,
+		Priority:      req.Priority,
+		AssigneeID:    req.AssigneeID,
+		AssigneeAgent: req.AssigneeAgent,
+		Labels:        req.Labels,
+		DueDate:       req.DueDate,
+		Position:      req.Position,
 	}
 	if err := h.db.CreateCard(card); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, card)
+	h.emitAssign(c.Request.Context(), card)
+	c.JSON(http.StatusCreated, h.enrichCard(c.Request.Context(), card))
 }
 
 func (h *Handler) MCPSetTaskState(c *gin.Context) {
@@ -581,21 +766,22 @@ func (h *Handler) MCPSetTaskState(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, card)
+	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
 }
 
 func (h *Handler) MCPUpdateTask(c *gin.Context) {
 	var req struct {
-		CardID      string   `json:"card_id" binding:"required"`
-		ColumnID    *string  `json:"column_id"`
-		Title       *string  `json:"title"`
-		Description *string  `json:"description"`
-		Priority    *string  `json:"priority"`
-		Assignee    *string  `json:"assignee"`
-		Labels      *string  `json:"labels"`
-		DueDate     *int64   `json:"due_date"`
-		ClearDue    bool     `json:"clear_due"`
-		Position    *float64 `json:"position"`
+		CardID        string   `json:"card_id" binding:"required"`
+		ColumnID      *string  `json:"column_id"`
+		Title         *string  `json:"title"`
+		Description   *string  `json:"description"`
+		Priority      *string  `json:"priority"`
+		AssigneeID    *uint    `json:"assignee_id"`
+		AssigneeAgent *string  `json:"assignee_agent"`
+		Labels        *string  `json:"labels"`
+		DueDate       *int64   `json:"due_date"`
+		ClearDue      bool     `json:"clear_due"`
+		Position      *float64 `json:"position"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -606,6 +792,9 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
 		return
 	}
+	oldAssigneeID := card.AssigneeID
+	oldAssigneeAgent := card.AssigneeAgent
+
 	if req.ColumnID != nil {
 		card.ColumnID = *req.ColumnID
 	}
@@ -618,8 +807,13 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 	if req.Priority != nil {
 		card.Priority = *req.Priority
 	}
-	if req.Assignee != nil {
-		card.Assignee = *req.Assignee
+	if req.AssigneeID != nil {
+		card.AssigneeID = *req.AssigneeID
+		card.AssigneeAgent = ""
+	}
+	if req.AssigneeAgent != nil {
+		card.AssigneeAgent = *req.AssigneeAgent
+		card.AssigneeID = 0
 	}
 	if req.Labels != nil {
 		card.Labels = *req.Labels
@@ -636,32 +830,41 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, card)
+	if card.AssigneeID != oldAssigneeID || card.AssigneeAgent != oldAssigneeAgent {
+		h.emitAssign(c.Request.Context(), card)
+	}
+	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
 }
 
 func (h *Handler) MCPAddComment(c *gin.Context) {
 	var req struct {
-		CardID string `json:"card_id" binding:"required"`
-		Body   string `json:"body" binding:"required"`
-		Author string `json:"author"`
+		CardID   string `json:"card_id" binding:"required"`
+		Body     string `json:"body" binding:"required"`
+		AuthorID uint   `json:"author_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.db.GetCard(req.CardID); err != nil {
+	card, err := h.db.GetCard(req.CardID)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
 		return
 	}
+	authorID := req.AuthorID
+	if authorID == 0 {
+		authorID = getUserID(c)
+	}
 	comment := &storage.Comment{
-		ID:     uuid.New().String(),
-		CardID: req.CardID,
-		Author: req.Author,
-		Body:   req.Body,
+		ID:       uuid.New().String(),
+		CardID:   req.CardID,
+		AuthorID: authorID,
+		Body:     req.Body,
 	}
 	if err := h.db.CreateComment(comment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, comment)
+	h.emitComment(card, comment)
+	c.JSON(http.StatusCreated, h.enrichComment(c.Request.Context(), comment))
 }

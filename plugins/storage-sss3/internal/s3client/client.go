@@ -194,6 +194,23 @@ func (c *Client) HeadObject(ctx context.Context, key string) (*ObjectMeta, error
 	}, nil
 }
 
+// CopyObject copies an object within the same bucket (server-side).
+func (c *Client) CopyObject(ctx context.Context, source, destination string) error {
+	copySource := fmt.Sprintf("%s/%s", c.bucket, source)
+	_, err := c.s3.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(c.bucket),
+		CopySource: aws.String(copySource),
+		Key:        aws.String(destination),
+	})
+	if err != nil {
+		return fmt.Errorf("copy object %s -> %s: %w", source, destination, err)
+	}
+	if c.debug {
+		log.Printf("[s3] copied %s -> %s", source, destination)
+	}
+	return nil
+}
+
 // ListObjects returns all objects with the given prefix.
 func (c *Client) ListObjects(ctx context.Context, prefix string) ([]ObjectMeta, error) {
 	var objects []ObjectMeta

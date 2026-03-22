@@ -108,6 +108,9 @@ func main() {
 	router.GET("/objects/*key", h.GetObject)
 	router.DELETE("/objects/*key", h.DeleteObject)
 	router.HEAD("/objects/*key", h.HeadObject)
+	router.POST("/objects/copy", h.CopyObject)
+	router.POST("/objects/move", h.MoveObject)
+	router.GET("/download/zip", h.DownloadZip)
 
 	// storage:block — volume management endpoints.
 	router.POST("/volumes", h.CreateVolume)

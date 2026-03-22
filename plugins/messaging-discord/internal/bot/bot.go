@@ -2,14 +2,17 @@ package bot
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
@@ -37,6 +40,9 @@ type Bot struct {
 	cmdOwners    map[string]commandOwner // slash command name → owning plugin
 
 	disconnectedAt atomic.Int64 // unix timestamp of last disconnect (0 = never)
+
+	cacheMu sync.RWMutex
+	cache   *redis.Client // optional Redis cache for throttling
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -80,6 +86,19 @@ func (b *Bot) SetMessageBufferMS(ms int) {
 // SetSDK attaches the plugin SDK client for event reporting.
 func (b *Bot) SetSDK(sdk *pluginsdk.Client) {
 	b.sdk = sdk
+}
+
+// SetCache sets the Redis cache client for welcome message throttling.
+func (b *Bot) SetCache(c *redis.Client) {
+	b.cacheMu.Lock()
+	b.cache = c
+	b.cacheMu.Unlock()
+}
+
+func (b *Bot) getCache() *redis.Client {
+	b.cacheMu.RLock()
+	defer b.cacheMu.RUnlock()
+	return b.cache
 }
 
 // RegisteredCommand is a serializable view of a registered slash command route.
@@ -238,9 +257,20 @@ func (b *Bot) discoverCommandsWithRetry(appID string) {
 }
 
 // sendStartupAnnouncement posts a status message to all text channels in the guild.
+// Throttled to at most once per hour via Redis cache if available.
 func (b *Bot) sendStartupAnnouncement(status string) {
 	if b.guildID == "" || b.session == nil {
 		return
+	}
+
+	// Throttle: skip if we sent a welcome message less than 1 hour ago.
+	const throttleKey = "discord:welcome:last"
+	const throttleTTL = 1 * time.Hour
+	if c := b.getCache(); c != nil {
+		if _, err := c.Get(context.Background(), throttleKey).Result(); err == nil {
+			log.Printf("Startup announcement throttled (sent within last hour)")
+			return
+		}
 	}
 
 	channels, err := b.session.GuildChannels(b.guildID)
@@ -262,6 +292,11 @@ func (b *Bot) sendStartupAnnouncement(status string) {
 		}
 	}
 	log.Printf("Startup announcement sent to %d channel(s)", sent)
+
+	// Mark as sent in cache so subsequent restarts within 1h are throttled.
+	if c := b.getCache(); c != nil && sent > 0 {
+		c.Set(context.Background(), throttleKey, time.Now().Unix(), throttleTTL)
+	}
 }
 
 // buildStartupMessage constructs the announcement text.
