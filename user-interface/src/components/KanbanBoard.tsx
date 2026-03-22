@@ -554,8 +554,16 @@ function SidePanel({
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [confirmDeleteComment, setConfirmDeleteComment] = useState<Comment | null>(null);
+  const [deletingComment, setDeletingComment] = useState(false);
   const [allUsers, setAllUsers] = useState<UserDetails[]>([]);
   const [allAgents, setAllAgents] = useState<RegistryAlias[]>([]);
+  const [savedCountdown, setSavedCountdown] = useState(0);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
+  }, []);
 
   useEffect(() => {
     if (panel.type === "edit-card") {
@@ -605,6 +613,20 @@ function SidePanel({
 
   function handleSubmit() {
     onSubmit({ title, description, priority, assigneeId: assignee.userId, assigneeAgent: assignee.agentName, labels, dueDate });
+    if (panel.type === "edit-card") {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      setSavedCountdown(5);
+      countdownRef.current = setInterval(() => {
+        setSavedCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(countdownRef.current!);
+            countdownRef.current = null;
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
   }
 
   async function handleAddComment() {
@@ -618,6 +640,20 @@ function SidePanel({
       console.error("Failed to post comment:", err);
     } finally {
       setSubmittingComment(false);
+    }
+  }
+
+  async function handleDeleteComment() {
+    if (!confirmDeleteComment || panel.type !== "edit-card") return;
+    setDeletingComment(true);
+    try {
+      await apiClient.tasks.deleteComment(panel.card.id, confirmDeleteComment.id);
+      setComments((prev) => prev.filter((c) => c.id !== confirmDeleteComment.id));
+      setConfirmDeleteComment(null);
+    } catch (err) {
+      console.error("Failed to delete comment:", err);
+    } finally {
+      setDeletingComment(false);
     }
   }
 
@@ -715,6 +751,11 @@ function SidePanel({
                     <div className="kn-comment-meta">
                       <span className="kn-comment-author">{c.author_name || "unknown"}</span>
                       <span className="kn-comment-time">{formatCommentTime(c.created_at)}</span>
+                      <button
+                        className="kn-comment-delete"
+                        title="Delete comment"
+                        onClick={() => setConfirmDeleteComment(c)}
+                      >🗑</button>
                     </div>
                     <div className="kn-comment-body">{c.body}</div>
                   </div>
@@ -750,6 +791,29 @@ function SidePanel({
           </div>
         )}
 
+        {confirmDeleteComment && (
+          <div className="kn-modal-overlay" onClick={() => setConfirmDeleteComment(null)}>
+            <div className="kn-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="kn-modal-title">Delete comment?</div>
+              <div className="kn-modal-body">
+                This comment may have been written by someone else. Are you sure you want to delete it?
+              </div>
+              <div className="kn-modal-actions">
+                <button
+                  className="kn-btn kn-btn--ghost"
+                  onClick={() => setConfirmDeleteComment(null)}
+                  disabled={deletingComment}
+                >Cancel</button>
+                <button
+                  className="kn-btn kn-btn--danger"
+                  onClick={handleDeleteComment}
+                  disabled={deletingComment}
+                >{deletingComment ? "Deleting..." : "Confirm"}</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="kn-panel-footer">
           {panel.type === "edit-card" && onDelete && (
             <button
@@ -761,8 +825,8 @@ function SidePanel({
           )}
           <div className="kn-panel-actions">
             <button className="kn-btn kn-btn--ghost" onClick={onClose}>Cancel</button>
-            <button className="kn-btn kn-btn--primary" onClick={handleSubmit}>
-              {panel.type === "edit-card" ? "Save" : "Create"}
+            <button className="kn-btn kn-btn--primary" onClick={handleSubmit} disabled={savedCountdown > 0}>
+              {savedCountdown > 0 ? `✅ Saved (${savedCountdown})` : panel.type === "edit-card" ? "Save" : "Create"}
             </button>
           </div>
         </div>
@@ -1000,9 +1064,12 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
       }
     } catch (e) {
       setError(String(e));
+      return;
     }
 
-    setPanel(null);
+    if (panel.type !== "edit-card") {
+      setPanel(null);
+    }
   }
 
   // ── CRUD ────────────────────────────────────────────────────────────────────
