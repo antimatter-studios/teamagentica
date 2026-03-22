@@ -2,6 +2,8 @@ package auth
 
 import (
 	"errors"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -10,6 +12,17 @@ import (
 )
 
 var jwtSecret []byte
+
+// jwtTTL is the token lifetime. Defaults to 30 days; override with
+// JWT_TTL_HOURS environment variable.
+var jwtTTL = func() time.Duration {
+	if v := os.Getenv("JWT_TTL_HOURS"); v != "" {
+		if h, err := strconv.Atoi(v); err == nil && h > 0 {
+			return time.Duration(h) * time.Hour
+		}
+	}
+	return 30 * 24 * time.Hour // 30 days
+}()
 
 // InitJWT sets the signing key used for all token operations.
 func InitJWT(secret string) {
@@ -35,7 +48,7 @@ func GenerateToken(user *models.User) (string, error) {
 		Role:         user.Role,
 		Capabilities: caps,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
