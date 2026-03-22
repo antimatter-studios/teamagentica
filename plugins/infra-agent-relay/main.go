@@ -92,7 +92,7 @@ func (r *relay) fetchPersonas() map[string]personaInfo {
 
 	empty := map[string]personaInfo{}
 
-	plugins, err := r.sdk.SearchPlugins("tool:aliases")
+	plugins, err := r.sdk.SearchPlugins("tool:personas")
 	if err != nil || len(plugins) == 0 {
 		cache.personas = empty
 		cache.fetchedAt = time.Now()
@@ -163,6 +163,61 @@ func (r *relay) mergedAliases(kernelAliases *alias.AliasMap) *alias.AliasMap {
 		})
 	}
 	return merged
+}
+
+// fetchDefaultCoordinator fetches the "default-coordinator" persona from
+// infra-agent-persona and sets the default coordinator on the routing table.
+func (r *relay) fetchDefaultCoordinator() {
+	plugins, err := r.sdk.SearchPlugins("tool:personas")
+	if err != nil || len(plugins) == 0 {
+		log.Printf("relay: persona plugin not found, cannot resolve default-coordinator")
+		return
+	}
+	pluginID := plugins[0].ID
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET", "/personas/default-coordinator", nil)
+	if err != nil {
+		log.Printf("relay: default-coordinator persona not configured — task dispatch may fail")
+		return
+	}
+
+	var persona struct {
+		Alias        string `json:"alias"`
+		BackendAlias string `json:"backend_alias"`
+		Model        string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &persona); err != nil {
+		log.Printf("relay: failed to parse default-coordinator persona: %v", err)
+		return
+	}
+
+	if persona.BackendAlias == "" {
+		log.Printf("relay: default-coordinator persona has no backend_alias")
+		return
+	}
+
+	aliases := r.routes.Aliases()
+	if aliases == nil {
+		log.Printf("relay: aliases not loaded yet, cannot resolve default-coordinator backend")
+		return
+	}
+	target := aliases.Resolve(persona.BackendAlias)
+	if target == nil || target.Type != alias.TargetAgent {
+		log.Printf("relay: default-coordinator backend @%s not found in aliases", persona.BackendAlias)
+		return
+	}
+
+	model := persona.Model
+	if model == "" {
+		model = target.Model
+	}
+	r.routes.SetDefaultCoordinator(target.PluginID, model)
+	r.mu.Lock()
+	r.allowFirstAsDefault = false
+	r.mu.Unlock()
+	log.Printf("relay: default coordinator set from persona: @default-coordinator → @%s (%s)", persona.BackendAlias, target.PluginID)
 }
 
 // lookupPersona returns the persona for agentAlias, or nil if not found.
@@ -332,7 +387,7 @@ func (r *relay) handleChat(c *gin.Context) {
 			}
 			callStart := time.Now()
 			agentResp, responder, err := r.routeToAgent(c.Request.Context(), result.Target.PluginID, result.Target.Model,
-				result.Remainder, req.ImageURLs, history, false, result.Alias)
+				result.Remainder, req.ImageURLs, history, result.Alias)
 			if err != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("agent: %v", err)})
 				return
@@ -512,7 +567,7 @@ func (r *relay) orchestrate(
 			message, nil, coordinator.Model, 0, "")
 	}
 	coordResp, err := r.callAgent(ctx, coordinator.PluginID, coordinator.Model,
-		message, imageURLs, nil, true, coordAlias)
+		message, imageURLs, nil, coordAlias)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("coordinator: %w", err)
 	}
@@ -607,7 +662,7 @@ func (r *relay) orchestrate(
 					targetPluginID = coordinator.PluginID
 					// Call coordinator back in worker mode for synthesis.
 					resp, err = r.callAgent(taskCtx, coordinator.PluginID, coordinator.Model,
-						prompt, nil, nil, false, coordAlias)
+						prompt, nil, nil, coordAlias)
 					if err != nil {
 						result = fmt.Sprintf("[error from self: %v]", err)
 					} else {
@@ -620,7 +675,7 @@ func (r *relay) orchestrate(
 					} else {
 						targetPluginID = target.PluginID
 						resp, err = r.callAgent(taskCtx, target.PluginID, target.Model,
-							prompt, nil, nil, false, t.Alias)
+							prompt, nil, nil, t.Alias)
 						if err != nil {
 							result = fmt.Sprintf("[error from @%s: %v]", t.Alias, err)
 						} else {
@@ -756,8 +811,8 @@ func (r *relay) routeToWorkspace(c *gin.Context, ws *router.WorkspaceRoute, req 
 }
 
 // routeToAgent calls an agent plugin and returns the full response with responder alias set.
-func (r *relay) routeToAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, isCoordinator bool, agentAlias string) (*agentChatResponse, string, error) {
-	resp, err := r.callAgent(ctx, pluginID, model, message, imageURLs, history, isCoordinator, agentAlias)
+func (r *relay) routeToAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias string) (*agentChatResponse, string, error) {
+	resp, err := r.callAgent(ctx, pluginID, model, message, imageURLs, history, agentAlias)
 	if err != nil {
 		return nil, "", err
 	}
@@ -770,7 +825,6 @@ type agentChatRequest struct {
 	Model         string            `json:"model,omitempty"`
 	ImageURLs     []string          `json:"image_urls,omitempty"`
 	Conversation  []conversationMsg `json:"conversation"`
-	IsCoordinator bool              `json:"is_coordinator,omitempty"`
 	AgentAlias    string            `json:"agent_alias,omitempty"`
 	SystemPrompt  string            `json:"system_prompt,omitempty"`
 }
@@ -801,10 +855,10 @@ type agentAttachment struct {
 }
 
 // callAgent sends a chat request to an agent plugin via the kernel route.
-func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, isCoordinator bool, agentAlias string) (*agentChatResponse, error) {
-	// Inject persona system prompt for worker calls.
+func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias string) (*agentChatResponse, error) {
+	// Inject persona system prompt.
 	systemPrompt := ""
-	if !isCoordinator && agentAlias != "" {
+	if agentAlias != "" {
 		if p := r.lookupPersona(agentAlias); p != nil {
 			systemPrompt = p.SystemPrompt
 			if p.Model != "" && model == "" {
@@ -820,7 +874,6 @@ func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, 
 		Model:         model,
 		ImageURLs:     imageURLs,
 		Conversation:  conversation,
-		IsCoordinator: isCoordinator,
 		AgentAlias:    agentAlias,
 		SystemPrompt:  systemPrompt,
 	}
@@ -1079,6 +1132,14 @@ func main() {
 
 		r.routes.SetAliases(alias.NewAliasMap(infos))
 		log.Printf("Aliases updated from registry: %d entries", len(infos))
+
+		// Invalidate persona cache so mergedAliases picks up fresh data.
+		r.personas.mu.Lock()
+		r.personas.fetchedAt = time.Time{}
+		r.personas.mu.Unlock()
+
+		// Re-resolve default coordinator in case aliases changed.
+		r.fetchDefaultCoordinator()
 	}))
 
 	sdkClient.OnEvent("relay:coordinator", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -1116,6 +1177,10 @@ func main() {
 		}
 	}))
 
+	// Assume first coordinator should become default; overridden below if
+	// DEFAULT_COORDINATOR is explicitly configured.
+	r.allowFirstAsDefault = true
+
 	sdkClient.Start(context.Background())
 
 	entries, err := sdkClient.FetchAliases()
@@ -1136,20 +1201,21 @@ func main() {
 		if aliases != nil {
 			if target := aliases.Resolve(v); target != nil && target.Type == alias.TargetAgent {
 				r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
+				r.mu.Lock()
+				r.allowFirstAsDefault = false // explicit config resolved, don't override
+				r.mu.Unlock()
 				log.Printf("Default coordinator set from config: @%s (%s)", v, target.PluginID)
 			} else {
 				log.Printf("DEFAULT_COORDINATOR alias @%s not found, will use first registered coordinator", v)
-				r.mu.Lock()
-				r.allowFirstAsDefault = true
-				r.mu.Unlock()
 			}
 		}
 	} else {
 		log.Printf("DEFAULT_COORDINATOR not set — first relay:coordinator event will become the default")
-		r.mu.Lock()
-		r.allowFirstAsDefault = true
-		r.mu.Unlock()
 	}
+
+	// Try to resolve default coordinator from the persona plugin.
+	// This takes precedence over config and first-registration fallbacks.
+	r.fetchDefaultCoordinator()
 
 	if v := pluginConfig["MAX_ORCHESTRATION_TASKS"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
