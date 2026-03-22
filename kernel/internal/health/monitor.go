@@ -27,6 +27,8 @@ type Monitor struct {
 
 	// unhealthyCounts tracks consecutive unhealthy checks per plugin ID.
 	unhealthyCounts map[string]int
+	// candidateUnhealthyCounts tracks consecutive unhealthy checks per candidate.
+	candidateUnhealthyCounts map[string]int
 }
 
 // restartThreshold is the number of consecutive unhealthy checks before
@@ -36,11 +38,12 @@ const restartThreshold = 4
 // NewMonitor creates a health monitor with the given check interval.
 func NewMonitor(db *gorm.DB, rt runtime.ContainerRuntime, evts *events.Hub, interval time.Duration) *Monitor {
 	return &Monitor{
-		db:              db,
-		runtime:         rt,
-		events:          evts,
-		interval:        interval,
-		unhealthyCounts: make(map[string]int),
+		db:                       db,
+		runtime:                  rt,
+		events:                   evts,
+		interval:                 interval,
+		unhealthyCounts:          make(map[string]int),
+		candidateUnhealthyCounts: make(map[string]int),
 	}
 }
 
@@ -233,25 +236,69 @@ func (m *Monitor) setStatus(p *models.Plugin, status string) {
 	}
 }
 
-// checkCandidates marks candidates as unhealthy when heartbeats go stale (>90s).
+// candidateRollbackThreshold is the number of consecutive unhealthy checks
+// before the monitor auto-rolls back a candidate (~2 minutes at 30s interval).
+const candidateRollbackThreshold = 4
+
+// checkCandidates marks candidates as unhealthy when heartbeats go stale (>90s)
+// and auto-rolls back after repeated failures to protect the running system.
 func (m *Monitor) checkCandidates(ctx context.Context) {
 	var plugins []models.Plugin
 	if err := m.db.Where("candidate_host != ''").Find(&plugins).Error; err != nil {
 		return
 	}
 
+	// Track which candidates are still active so we can clean up stale counters.
+	activeCandidates := make(map[string]bool, len(plugins))
+
 	staleTimeout := 90 * time.Second
 	for i := range plugins {
 		p := &plugins[i]
+		activeCandidates[p.ID] = true
+
 		if p.CandidateLastSeen.IsZero() {
 			continue
 		}
-		if time.Since(p.CandidateLastSeen) > staleTimeout && p.CandidateHealthy {
-			log.Printf("health monitor: candidate for %s heartbeat stale — marking unhealthy", p.ID)
-			m.db.Model(p).Update("candidate_healthy", false)
-			m.emitEvent(p.ID, "warning", "candidate heartbeat stale — traffic falling back to primary")
+		if time.Since(p.CandidateLastSeen) > staleTimeout {
+			if p.CandidateHealthy {
+				log.Printf("health monitor: candidate for %s heartbeat stale — marking unhealthy", p.ID)
+				m.db.Model(p).Update("candidate_healthy", false)
+				m.emitEvent(p.ID, "warning", "candidate heartbeat stale — traffic falling back to primary")
+			}
+
+			m.candidateUnhealthyCounts[p.ID]++
+			if m.candidateUnhealthyCounts[p.ID] >= candidateRollbackThreshold {
+				log.Printf("health monitor: candidate for %s unhealthy for %d checks — auto-rolling back",
+					p.ID, m.candidateUnhealthyCounts[p.ID])
+				m.autoRollbackCandidate(ctx, p)
+			}
+		} else {
+			// Candidate is healthy — reset counter.
+			m.candidateUnhealthyCounts[p.ID] = 0
 		}
 	}
+
+	// Clean up counters for candidates that no longer exist.
+	for id := range m.candidateUnhealthyCounts {
+		if !activeCandidates[id] {
+			delete(m.candidateUnhealthyCounts, id)
+		}
+	}
+}
+
+// autoRollbackCandidate stops the candidate container and clears all candidate
+// fields, leaving the primary plugin untouched.
+func (m *Monitor) autoRollbackCandidate(ctx context.Context, p *models.Plugin) {
+	if p.CandidateContainerID != "" && m.runtime != nil {
+		_ = m.runtime.StopPlugin(ctx, p.CandidateContainerID)
+	}
+
+	p.ClearCandidate()
+	m.db.Save(p)
+
+	delete(m.candidateUnhealthyCounts, p.ID)
+
+	m.emitEvent(p.ID, "rollback", "candidate auto-rolled back — primary untouched")
 }
 
 // checkManagedContainers verifies Docker state for running managed containers.
