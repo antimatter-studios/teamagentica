@@ -6,6 +6,12 @@ tasks:
     cmds:
       - docker build -t teamagentica-kernel:latest --target prod .
 
+  connect:
+    desc: Connect to kernel via tacli and generate a valid jwt token
+    dir: ..
+    cmds:
+      - go run ./tacli connect http://api.teamagentica.localhost --email chris@teamagentica.localhost --password 'FL3t9.Uk:xA44xK'
+
   start:
     desc: Start kernel via tacli
     dir: ..
