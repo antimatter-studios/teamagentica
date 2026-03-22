@@ -2,7 +2,7 @@ id: system-teamagentica-plugin-provider
 name: "TeamAgentica Plugin Provider"
 description: "Default marketplace provider serving the official plugin catalog"
 group: infrastructure
-version: "1.0.6"
+version: "1.0.9"
 image: "teamagentica-system-teamagentica-plugin-provider:latest"
 author: teamagentica
 tags: [system, marketplace, provider]

@@ -2,7 +2,7 @@ id: infra-alias-registry
 name: "Alias Registry"
 description: "Central alias registry — manages agents, tool aliases, and routes all addressable names"
 group: infrastructure
-version: "0.2.3"
+version: "0.2.5"
 image: "teamagentica-infra-alias-registry:latest"
 author: teamagentica
 tags: [aliases, agents, identity, registry]

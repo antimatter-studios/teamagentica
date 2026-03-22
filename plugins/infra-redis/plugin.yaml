@@ -1,0 +1,15 @@
+id: infra-redis
+name: "Redis Cache"
+description: "Shared Redis cache for plugin state, rate limiting, and ephemeral data"
+group: infrastructure
+version: "1.0.1"
+image: "teamagentica-infra-redis:latest"
+author: teamagentica
+tags: [infrastructure, cache, redis, memory]
+capabilities: ["memory:cache"]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    order: 99

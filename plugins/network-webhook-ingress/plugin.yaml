@@ -2,7 +2,7 @@ id: network-webhook-ingress
 name: "Webhook Ingress"
 description: "Public-facing HTTP server that routes external webhook traffic to plugins"
 group: network
-version: "1.0.4"
+version: "1.0.5"
 image: "teamagentica-network-webhook-ingress:latest"
 author: TeamAgentica
 tags: [webhook, ingress, networking, routing]
