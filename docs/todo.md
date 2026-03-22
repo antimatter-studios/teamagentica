@@ -50,7 +50,7 @@
 ## Phase 5: Marketplace — COMPLETE
 
 - [x] Marketplace plugin protocol (provider catalogs via REST)
-- [x] builtin-provider plugin (default catalog of all available plugins)
+- [x] system-teamagentica-plugin-provider plugin (default catalog of all available plugins)
 - [x] Kernel: marketplace provider management (add/remove providers)
 - [x] Kernel: plugin installation from marketplace catalog
 - [x] UI: marketplace browser (browse, search, install from providers)

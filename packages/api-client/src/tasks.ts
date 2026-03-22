@@ -26,8 +26,10 @@ export interface Card {
   title: string;
   description: string;
   priority: "low" | "medium" | "high" | "urgent" | "";
-  assignee: string;
-  labels: string;        // comma-separated
+  assignee_id: number;       // user ID (0 = unassigned)
+  assignee_agent: string;    // agent alias ("" = none)
+  assignee_name: string;     // resolved display name from server
+  labels: string;            // comma-separated
   due_date: number | null;
   position: number;
   created_at: number;
@@ -37,7 +39,8 @@ export interface Card {
 export interface Comment {
   id: string;
   card_id: string;
-  author: string;
+  author_id: number;       // user ID
+  author_name: string;     // resolved display name from server
   body: string;
   created_at: number;
 }
@@ -94,7 +97,8 @@ export class TasksAPI {
     title: string;
     description?: string;
     priority?: string;
-    assignee?: string;
+    assignee_id?: number;
+    assignee_agent?: string;
     labels?: string;
     due_date?: number | null;
     position?: number;
@@ -107,7 +111,9 @@ export class TasksAPI {
     title?: string;
     description?: string;
     priority?: string;
-    assignee?: string;
+    assignee_id?: number;
+    assignee_agent?: string;
+    clear_assignee?: boolean;
     labels?: string;
     due_date?: number | null;
     clear_due?: boolean;
@@ -123,5 +129,9 @@ export class TasksAPI {
   // Comments
   async listComments(cardId: string): Promise<Comment[]> {
     return this.http.get<Comment[]>(`${ROUTE}/cards/${cardId}/comments`);
+  }
+
+  async createComment(cardId: string, body: string): Promise<Comment> {
+    return this.http.post<Comment>(`${ROUTE}/cards/${cardId}/comments`, { body });
   }
 }

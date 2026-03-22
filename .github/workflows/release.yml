@@ -1,20 +1,34 @@
-name: Release tacli
+name: Release
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "tacli/**"
-      - ".goreleaser.yml"
-      - ".github/workflows/release.yml"
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
+  check-changes:
+    name: check changes
+    runs-on: ubuntu-latest
+    outputs:
+      tacli: ${{ steps.filter.outputs.tacli }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event.before }}
+          filters: |
+            tacli: ['tacli/**', '.goreleaser.yml']
+
   tacli-release:
     name: tacli release
+    needs: check-changes
+    if: needs.check-changes.outputs.tacli == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,30 +39,6 @@ jobs:
         with:
           go-version: "1.25"
           cache-dependency-path: tacli/go.sum
-
-      - name: Determine next version
-        id: version
-        run: |
-          # Get the latest tacli release tag (v*.*.*)
-          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
-          if [ -z "$LATEST" ]; then
-            NEXT="v0.1.0"
-          else
-            # Bump patch version
-            MAJOR=$(echo "$LATEST" | cut -d. -f1)
-            MINOR=$(echo "$LATEST" | cut -d. -f2)
-            PATCH=$(echo "$LATEST" | cut -d. -f3)
-            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          fi
-          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "Next version: $NEXT"
-
-      - name: Create tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "tacli ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

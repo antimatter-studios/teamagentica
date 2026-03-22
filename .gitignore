@@ -4,6 +4,7 @@
 .history/
 *.swp
 *.swo
+.task/checksum/kernel-build
 node_modules
 
 # OS
@@ -19,71 +20,14 @@ brand.env
 # Build artifacts (air dev + production binaries)
 **/build/
 
-# Go binaries at plugin root (created by go build ./...)
-plugins/network-webhook-ingress/network-webhook-ingress
-plugins/user-claude-terminal/user-claude-terminal
-plugins/user-codex-terminal/user-codex-terminal
-plugins/user-opencode-terminal/user-opencode-terminal
-plugins/infra-builder/infra-builder
-plugins/user-vscode-server/user-vscode-server
-
 # Do not commit the persistent data directory
 data/
-kernel/data/
 
 # Separate git repos checked out alongside
 agentbridge/
 portpilot/
-.task/checksum/kernel-build
-packages/api-client/dist/agents.d.ts
-packages/api-client/dist/agents.d.ts.map
-packages/api-client/dist/agents.js
-packages/api-client/dist/agents.js.map
-packages/api-client/dist/aliases.d.ts
-packages/api-client/dist/aliases.d.ts.map
-packages/api-client/dist/aliases.js
-packages/api-client/dist/aliases.js.map
-packages/api-client/dist/auth.d.ts
-packages/api-client/dist/auth.d.ts.map
-packages/api-client/dist/auth.js
-packages/api-client/dist/auth.js.map
-packages/api-client/dist/chat.d.ts
-packages/api-client/dist/chat.d.ts.map
-packages/api-client/dist/chat.js
-packages/api-client/dist/chat.js.map
-packages/api-client/dist/client.d.ts
-packages/api-client/dist/client.d.ts.map
-packages/api-client/dist/client.js
-packages/api-client/dist/client.js.map
-packages/api-client/dist/costs.d.ts
-packages/api-client/dist/costs.d.ts.map
-packages/api-client/dist/costs.js
-packages/api-client/dist/costs.js.map
-packages/api-client/dist/events.d.ts
-packages/api-client/dist/events.d.ts.map
-packages/api-client/dist/events.js
-packages/api-client/dist/events.js.map
-packages/api-client/dist/files.d.ts
-packages/api-client/dist/files.d.ts.map
-packages/api-client/dist/files.js
-packages/api-client/dist/files.js.map
-packages/api-client/dist/index.d.ts
-packages/api-client/dist/index.d.ts.map
-packages/api-client/dist/index.js
-packages/api-client/dist/index.js.map
-packages/api-client/dist/marketplace.d.ts
-packages/api-client/dist/marketplace.d.ts.map
-packages/api-client/dist/marketplace.js
-packages/api-client/dist/marketplace.js.map
-packages/api-client/dist/plugins.d.ts
-packages/api-client/dist/plugins.d.ts.map
-packages/api-client/dist/plugins.js
-packages/api-client/dist/plugins.js.map
-packages/api-client/dist/tasks.d.ts
-packages/api-client/dist/tasks.d.ts.map
-packages/api-client/dist/tasks.js
-packages/api-client/dist/tasks.js.map
-packages/api-client/dist/workspaces.d.ts
-packages/api-client/dist/workspaces.d.ts.map
-packages/api-client/dist/workspaces.js
-packages/api-client/dist/workspaces.js.map
+packages/api-client/dist
+dist/artifacts.json
+dist/config.yaml
+dist/metadata.json
+dist/tacli_darwin_arm64_v8.0/tacli

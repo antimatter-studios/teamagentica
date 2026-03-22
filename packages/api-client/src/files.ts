@@ -59,6 +59,27 @@ export class FilesAPI {
     return res.blob();
   }
 
+  async copy(pluginId: string, source: string, destination: string): Promise<void> {
+    await this.http.post(
+      `/api/route/${pluginId}/objects/copy`,
+      { source, destination }
+    );
+  }
+
+  async move(pluginId: string, source: string, destination: string): Promise<void> {
+    await this.http.post(
+      `/api/route/${pluginId}/objects/move`,
+      { source, destination }
+    );
+  }
+
+  async fetchZip(pluginId: string, prefix: string): Promise<Blob> {
+    const res = await this.http.getRaw(
+      `/api/route/${pluginId}/download/zip?prefix=${encodeURIComponent(prefix)}`
+    );
+    return res.blob();
+  }
+
   async fetchText(pluginId: string, key: string): Promise<string> {
     const res = await this.http.getRaw(
       `/api/route/${pluginId}/objects/${encodeURIComponent(key)}`

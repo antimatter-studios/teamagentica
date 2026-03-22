@@ -77,7 +77,7 @@ Plugins are separate Docker containers that communicate with the kernel over HTT
 
 A plugin type that provides catalogs of available plugins.
 
-- Default `builtin-provider` ships with the system
+- Default `system-teamagentica-plugin-provider` ships with the system
 - Additional providers can be added via the admin UI
 - All plugins are installed from a provider catalog
 - Providers declare Docker image references, config schemas, and metadata

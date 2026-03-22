@@ -115,7 +115,7 @@ Path-based routing at `/ws/:container_id/*path` proxies requests to managed cont
 - Preserves the original Host header so code-server's `ensureOrigin` check passes on WebSocket upgrades
 - Strips the `/ws/:container_id` prefix before forwarding
 - Auth via session cookie (same-origin, automatic) — no token in URL
-- Container hostname is deterministic: `teamagentica-mc-{id}`
+- Container hostname is deterministic: `teamagentica-mc-{id}` (mc = **managed container**, i.e. plugin containers managed by the kernel)
 - The kernel appends `--abs-proxy-base-path=/ws/{id}` to container cmd at launch
 
 Subdomain routing via docker-proxy labels still works in parallel for local development.
@@ -231,7 +231,7 @@ Plugins subscribe to event types and receive HTTP POST callbacks.
 
 | Plugin | Capabilities | Notes |
 |--------|-------------|-------|
-| `builtin-provider` | `marketplace:provider` | Cannot be disabled or uninstalled |
+| `system-teamagentica-plugin-provider` | `marketplace:provider` | Cannot be disabled or uninstalled |
 | `infra-cost-explorer` | `system:cost-explorer` | Cannot be disabled or uninstalled |
 
 ## mTLS

@@ -120,6 +120,7 @@ export class HttpTransport {
     const res = await fetch(`${this.config.baseUrl}${path}`, {
       method: "GET",
       headers: this.authHeaders(),
+      cache: "no-store",
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res;
