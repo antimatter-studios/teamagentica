@@ -20,12 +20,12 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
-RUN apk add --no-cache git gcc musl-dev
+RUN apk add --no-cache git
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/user-vscode-server/ plugins/user-vscode-server/
 WORKDIR /build/plugins/user-vscode-server
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /user-vscode-server .
+RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /user-vscode-server .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod

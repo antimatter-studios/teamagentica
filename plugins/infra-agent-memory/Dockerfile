@@ -2,12 +2,12 @@
 FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
-RUN apk add --no-cache git gcc musl-dev
+RUN apk add --no-cache git
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/infra-agent-memory/ plugins/infra-agent-memory/
 WORKDIR /build/plugins/infra-agent-memory
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /infra-agent-memory .
+RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /infra-agent-memory .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod
