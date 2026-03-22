@@ -238,7 +238,7 @@ export default function App() {
       {page === "tasks" && <KanbanBoard initialSlug={subpath} onBoardChange={setSubpath} />}
       {page === "agents" && <Agents />}
       {page === "marketplace" && <Marketplace />}
-      {page === "plugins" && <PluginSettings />}
+      {page === "plugins" && <PluginSettings initialPluginId={subpath} onPluginChange={setSubpath} />}
       {page === "costs" && <CostDashboard />}
       {page === "console" && <DebugConsole />}
       {page === "users" && <Users />}

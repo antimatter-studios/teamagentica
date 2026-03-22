@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -6,6 +6,7 @@ import {
   useSensor,
   useSensors,
   closestCorners,
+  MeasuringStrategy,
   type DragStartEvent,
   type DragOverEvent,
   type DragEndEvent,
@@ -17,7 +18,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { apiClient } from "../api/client";
-import type { Board, Column, Card, Comment } from "@teamagentica/api-client";
+import type { Board, Column, Card, Comment, UserDetails, RegistryAlias } from "@teamagentica/api-client";
+
 
 // ── Position helpers ──────────────────────────────────────────────────────────
 
@@ -36,16 +38,15 @@ function positionBefore(items: { position: number }[], idx: number): number {
 
 type PanelState =
   | { type: "new-board" }
-  | { type: "new-column" }
   | { type: "new-card"; columnId: string; columnName: string }
-  | { type: "edit-card"; card: Card; columnName: string }
-  | { type: "rename-column"; column: Column };
+  | { type: "edit-card"; card: Card; columnName: string };
 
 interface CardFormData {
   title: string;
   description: string;
   priority: string;
-  assignee: string;
+  assigneeId: number;
+  assigneeAgent: string;
   labels: string;
   dueDate: string; // "YYYY-MM-DD" or ""
 }
@@ -58,6 +59,10 @@ const PRIORITY_LABEL: Record<string, string> = {
 const PRIORITY_CLASS: Record<string, string> = {
   low: "kn-priority--low", medium: "kn-priority--medium",
   high: "kn-priority--high", urgent: "kn-priority--urgent",
+};
+
+const measuring = {
+  droppable: { strategy: MeasuringStrategy.Always },
 };
 
 function formatDue(ms: number): string {
@@ -101,15 +106,15 @@ const KanbanCard = memo(function KanbanCard({
       {...listeners}
     >
       {/* Top meta row: priority + assignee */}
-      {(card.priority || card.assignee) && (
+      {(card.priority || card.assignee_name) && (
         <div className="kn-card-meta">
           {card.priority && (
             <span className={`kn-priority ${PRIORITY_CLASS[card.priority] ?? ""}`}>
               {PRIORITY_LABEL[card.priority]}
             </span>
           )}
-          {card.assignee && (
-            <span className="kn-card-assignee">{card.assignee}</span>
+          {card.assignee_name && (
+            <span className="kn-card-assignee">{card.assignee_name}</span>
           )}
         </div>
       )}
@@ -155,16 +160,12 @@ const KanbanColumn = memo(function KanbanColumn({
   selectedCardId,
   onAddCard,
   onEditCard,
-  onDeleteColumn,
-  onRenameColumn,
 }: {
   column: Column;
   cards: Card[];
   selectedCardId: string | null;
   onAddCard: (column: Column) => void;
   onEditCard: (card: Card, columnName: string) => void;
-  onDeleteColumn: (column: Column) => void;
-  onRenameColumn: (column: Column) => void;
 }) {
   const { setNodeRef } = useSortable({
     id: `col-${column.id}`,
@@ -175,11 +176,7 @@ const KanbanColumn = memo(function KanbanColumn({
     <div ref={setNodeRef} className="kn-column">
       <div className="kn-column-header">
         <span className="kn-column-name">{column.name}</span>
-        <span className="kn-column-count">{cards.length}</span>
-        <div className="kn-column-menu">
-          <button className="kn-btn kn-btn--ghost" onClick={() => onRenameColumn(column)}>Rename</button>
-          <button className="kn-btn kn-btn--ghost kn-btn--danger" onClick={() => onDeleteColumn(column)}>Delete</button>
-        </div>
+        <span className="kn-column-count">({cards.length})</span>
       </div>
 
       <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
@@ -205,6 +202,331 @@ const KanbanColumn = memo(function KanbanColumn({
   );
 });
 
+// ── Column Manager ────────────────────────────────────────────────────────────
+
+function ColumnManager({
+  columns,
+  cards,
+  boardId,
+  onBack,
+  onColumnsChange,
+  onCardsChange,
+}: {
+  columns: Column[];
+  cards: Card[];
+  boardId: string;
+  onBack: () => void;
+  onColumnsChange: (cols: Column[]) => void;
+  onCardsChange: (cards: Card[]) => void;
+}) {
+  const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [reassignTarget, setReassignTarget] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+
+  const sorted = useMemo(
+    () => [...columns].sort((a, b) => a.position - b.position),
+    [columns]
+  );
+
+  function cardCount(colId: string): number {
+    return cards.filter((c) => c.column_id === colId).length;
+  }
+
+  async function createColumn() {
+    const name = newName.trim();
+    if (!name) return;
+    try {
+      const pos = positionAfter(sorted);
+      const col = await apiClient.tasks.createColumn(boardId, { name, position: pos });
+      onColumnsChange([...columns, col]);
+      setNewName("");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function renameColumn(colId: string) {
+    const name = renameValue.trim();
+    if (!name) return;
+    try {
+      const updated = await apiClient.tasks.updateColumn(boardId, colId, { name });
+      onColumnsChange(columns.map((c) => (c.id === updated.id ? updated : c)));
+      setRenaming(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function deleteColumn(colId: string) {
+    const count = cardCount(colId);
+    if (count > 0 && !reassignTarget) return;
+
+    try {
+      // Reassign cards first if needed
+      if (count > 0 && reassignTarget) {
+        const colCards = cards.filter((c) => c.column_id === colId);
+        for (const card of colCards) {
+          await apiClient.tasks.updateCard(boardId, card.id, { column_id: reassignTarget });
+        }
+        onCardsChange(
+          cards.map((c) => c.column_id === colId ? { ...c, column_id: reassignTarget } : c)
+        );
+      }
+
+      await apiClient.tasks.deleteColumn(boardId, colId);
+      onColumnsChange(columns.filter((c) => c.id !== colId));
+      setDeleting(null);
+      setReassignTarget("");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="kn-col-manager">
+      <div className="kn-col-manager-header">
+        <button className="kn-btn kn-btn--ghost" onClick={onBack}>Back to board</button>
+        <h3 className="kn-col-manager-title">Manage Columns</h3>
+      </div>
+
+      {error && <div className="kn-col-manager-error">{error}</div>}
+
+      <div className="kn-col-manager-list">
+        {sorted.map((col) => {
+          const count = cardCount(col.id);
+          const isRenaming = renaming === col.id;
+          const isDeleting = deleting === col.id;
+
+          return (
+            <div key={col.id} className="kn-col-manager-row">
+              {isRenaming ? (
+                <div className="kn-col-manager-rename">
+                  <input
+                    className="kn-input"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") renameColumn(col.id); if (e.key === "Escape") setRenaming(null); }}
+                    autoFocus
+                  />
+                  <button className="kn-btn kn-btn--primary" onClick={() => renameColumn(col.id)}>Save</button>
+                  <button className="kn-btn kn-btn--ghost" onClick={() => setRenaming(null)}>Cancel</button>
+                </div>
+              ) : isDeleting ? (
+                <div className="kn-col-manager-delete">
+                  <span className="kn-col-manager-delete-label">
+                    Delete "{col.name}"?
+                    {count > 0 && ` Move ${count} card${count !== 1 ? "s" : ""} to:`}
+                  </span>
+                  {count > 0 && (
+                    <select
+                      className="kn-input kn-select"
+                      value={reassignTarget}
+                      onChange={(e) => setReassignTarget(e.target.value)}
+                    >
+                      <option value="">Select column...</option>
+                      {sorted.filter((c) => c.id !== col.id).map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  <div className="kn-col-manager-delete-actions">
+                    <button
+                      className="kn-btn kn-btn--danger"
+                      disabled={count > 0 && !reassignTarget}
+                      onClick={() => deleteColumn(col.id)}
+                    >
+                      Confirm delete
+                    </button>
+                    <button className="kn-btn kn-btn--ghost" onClick={() => { setDeleting(null); setReassignTarget(""); }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <span className="kn-col-manager-name">{col.name}</span>
+                  <span className="kn-col-manager-count">({count})</span>
+                  <div className="kn-col-manager-actions">
+                    <button
+                      className="kn-btn kn-btn--ghost"
+                      onClick={() => { setRenaming(col.id); setRenameValue(col.name); setDeleting(null); }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="kn-btn kn-btn--ghost kn-btn--danger"
+                      onClick={() => { setDeleting(col.id); setRenaming(null); setReassignTarget(""); }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="kn-col-manager-create">
+        <input
+          className="kn-input"
+          placeholder="New column name"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createColumn(); }}
+        />
+        <button className="kn-btn kn-btn--primary" onClick={createColumn}>Create</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Assignee autocomplete ─────────────────────────────────────────────────────
+
+interface AssigneeOption {
+  key: string;
+  label: string;
+  detail: string;
+  kind: "user" | "agent";
+  userId?: number;
+  agentName?: string;
+}
+
+interface AssigneeValue {
+  userId: number;
+  agentName: string;
+  display: string;
+}
+
+function AssigneeAutocomplete({
+  value,
+  onChange,
+  users,
+  agents,
+}: {
+  value: AssigneeValue;
+  onChange: (val: AssigneeValue) => void;
+  users: UserDetails[];
+  agents: RegistryAlias[];
+}) {
+  const [query, setQuery] = useState(value.display);
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Sync external value changes (e.g. panel open with existing assignee)
+  useEffect(() => { setQuery(value.display); }, [value.display]);
+
+  const options = useMemo((): AssigneeOption[] => {
+    const items: AssigneeOption[] = [];
+    for (const u of users) {
+      items.push({
+        key: `user-${u.id}`,
+        label: u.display_name || u.email.split("@")[0],
+        detail: u.email,
+        kind: "user",
+        userId: Number(u.id),
+      });
+    }
+    for (const a of agents) {
+      items.push({
+        key: `agent-${a.name}`,
+        label: `@${a.name}`,
+        detail: `${a.type} · ${a.plugin}`,
+        kind: "agent",
+        agentName: a.name,
+      });
+    }
+    return items;
+  }, [users, agents]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options;
+    const q = query.toLowerCase();
+    return options.filter(
+      (o) => o.label.toLowerCase().includes(q) || o.detail.toLowerCase().includes(q)
+    );
+  }, [query, options]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        if (query !== value.display) setQuery(value.display);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [query, value.display]);
+
+  function selectOption(o: AssigneeOption) {
+    setQuery(o.label);
+    onChange({
+      userId: o.userId ?? 0,
+      agentName: o.agentName ?? "",
+      display: o.label,
+    });
+    setOpen(false);
+  }
+
+  function clearAssignee() {
+    setQuery("");
+    onChange({ userId: 0, agentName: "", display: "" });
+    setOpen(false);
+  }
+
+  return (
+    <div ref={wrapperRef} className="kn-assignee-autocomplete">
+      <div className="kn-assignee-input-wrap">
+        <input
+          className="kn-input"
+          placeholder="Search users or agents..."
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+        />
+        {value.display && (
+          <button
+            className="kn-assignee-clear"
+            onClick={clearAssignee}
+            type="button"
+            title="Clear assignee"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="kn-assignee-dropdown">
+          {filtered.length === 0 ? (
+            <div className="kn-assignee-dropdown-empty">No matches</div>
+          ) : (
+            filtered.map((o) => (
+              <button
+                key={o.key}
+                className="kn-assignee-option"
+                onClick={() => selectOption(o)}
+                type="button"
+              >
+                <div className="kn-assignee-option-row">
+                  <span className={`kn-assignee-kind kn-assignee-kind--${o.kind}`}>
+                    {o.kind === "agent" ? "AGENT" : "USER"}
+                  </span>
+                  <span className="kn-assignee-option-name">{o.label}</span>
+                </div>
+                <span className="kn-assignee-option-email">{o.detail}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Side panel ────────────────────────────────────────────────────────────────
 
 function formatCommentTime(ms: number): string {
@@ -226,10 +548,14 @@ function SidePanel({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("");
-  const [assignee, setAssignee] = useState("");
+  const [assignee, setAssignee] = useState<AssigneeValue>({ userId: 0, agentName: "", display: "" });
   const [labels, setLabels] = useState("");
   const [dueDate, setDueDate] = useState("");  // "YYYY-MM-DD" or ""
   const [comments, setComments] = useState<Comment[]>([]);
+  const [newComment, setNewComment] = useState("");
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [allUsers, setAllUsers] = useState<UserDetails[]>([]);
+  const [allAgents, setAllAgents] = useState<RegistryAlias[]>([]);
 
   useEffect(() => {
     if (panel.type === "edit-card") {
@@ -241,35 +567,58 @@ function SidePanel({
     }
   }, [panel]);
 
+  // Fetch users and agents for assignee autocomplete
+  useEffect(() => {
+    apiClient.users.listUsers()
+      .then(setAllUsers)
+      .catch(() => setAllUsers([]));
+    apiClient.agents.list()
+      .then(setAllAgents)
+      .catch(() => setAllAgents([]));
+  }, []);
+
   useEffect(() => {
     if (panel.type === "edit-card") {
       const c = panel.card;
       setTitle(c.title);
       setDescription(c.description ?? "");
       setPriority(c.priority ?? "");
-      setAssignee(c.assignee ?? "");
+      setAssignee({
+        userId: c.assignee_id ?? 0,
+        agentName: c.assignee_agent ?? "",
+        display: c.assignee_name ?? "",
+      });
       setLabels(c.labels ?? "");
       setDueDate(c.due_date ? new Date(c.due_date).toISOString().slice(0, 10) : "");
-    } else if (panel.type === "rename-column") {
-      setTitle(panel.column.name);
-      setDescription(""); setPriority(""); setAssignee(""); setLabels(""); setDueDate("");
     } else {
-      setTitle(""); setDescription(""); setPriority(""); setAssignee(""); setLabels(""); setDueDate("");
+      setTitle(""); setDescription(""); setPriority(""); setAssignee({ userId: 0, agentName: "", display: "" }); setLabels(""); setDueDate("");
     }
   }, [panel]);
 
   const isCard = panel.type === "new-card" || panel.type === "edit-card";
-  const isSimple = panel.type === "new-board" || panel.type === "new-column" || panel.type === "rename-column";
+  const isSimple = panel.type === "new-board";
 
   const heading =
     panel.type === "new-board" ? "New Board" :
-    panel.type === "new-column" ? "New Column" :
     panel.type === "new-card" ? `New Card` :
-    panel.type === "edit-card" ? panel.card.title :
-    `Rename Column`;
+    panel.card.title;
 
   function handleSubmit() {
-    onSubmit({ title, description, priority, assignee, labels, dueDate });
+    onSubmit({ title, description, priority, assigneeId: assignee.userId, assigneeAgent: assignee.agentName, labels, dueDate });
+  }
+
+  async function handleAddComment() {
+    if (!newComment.trim() || panel.type !== "edit-card") return;
+    setSubmittingComment(true);
+    try {
+      const created = await apiClient.tasks.createComment(panel.card.id, newComment.trim());
+      setComments((prev) => [...prev, created]);
+      setNewComment("");
+    } catch (err) {
+      console.error("Failed to post comment:", err);
+    } finally {
+      setSubmittingComment(false);
+    }
   }
 
   return (
@@ -284,8 +633,7 @@ function SidePanel({
         {/* Title / name */}
         <div className="kn-field">
           <label className="kn-label">
-            {panel.type === "new-board" ? "Board name" :
-             isSimple ? "Column name" : "Title"}
+            {panel.type === "new-board" ? "Board name" : "Title"}
           </label>
           <input
             className="kn-input"
@@ -298,7 +646,7 @@ function SidePanel({
 
         {/* Description — boards and cards */}
         {(isCard || panel.type === "new-board") && (
-          <div className="kn-field">
+          <div className="kn-field kn-field--grow">
             <label className="kn-label">Description</label>
             <textarea
               className="kn-input kn-textarea"
@@ -335,11 +683,11 @@ function SidePanel({
 
           <div className="kn-field">
             <label className="kn-label">Assignee</label>
-            <input
-              className="kn-input"
-              placeholder="Name or @handle"
+            <AssigneeAutocomplete
               value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
+              onChange={setAssignee}
+              users={allUsers}
+              agents={allAgents}
             />
           </div>
 
@@ -365,7 +713,7 @@ function SidePanel({
                 {comments.map((c) => (
                   <div key={c.id} className="kn-comment">
                     <div className="kn-comment-meta">
-                      <span className="kn-comment-author">{c.author || "agent"}</span>
+                      <span className="kn-comment-author">{c.author_name || "unknown"}</span>
                       <span className="kn-comment-time">{formatCommentTime(c.created_at)}</span>
                     </div>
                     <div className="kn-comment-body">{c.body}</div>
@@ -373,6 +721,32 @@ function SidePanel({
                 ))}
               </div>
             )}
+
+            <div className="kn-comment-editor">
+              <textarea
+                className="kn-input kn-comment-textarea"
+                placeholder="Write a comment..."
+                rows={3}
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && newComment.trim()) {
+                    e.preventDefault();
+                    handleAddComment();
+                  }
+                }}
+              />
+              <div className="kn-comment-editor-actions">
+                <span className="kn-comment-hint">Ctrl+Enter to submit</span>
+                <button
+                  className="kn-btn kn-btn--primary kn-btn--sm"
+                  disabled={!newComment.trim() || submittingComment}
+                  onClick={handleAddComment}
+                >
+                  {submittingComment ? "Posting..." : "Add Comment"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -388,7 +762,7 @@ function SidePanel({
           <div className="kn-panel-actions">
             <button className="kn-btn kn-btn--ghost" onClick={onClose}>Cancel</button>
             <button className="kn-btn kn-btn--primary" onClick={handleSubmit}>
-              {panel.type === "edit-card" || panel.type === "rename-column" ? "Save" : "Create"}
+              {panel.type === "edit-card" ? "Save" : "Create"}
             </button>
           </div>
         </div>
@@ -399,7 +773,18 @@ function SidePanel({
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-export default function KanbanBoard() {
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+export default function KanbanBoard({ initialSlug, onBoardChange }: {
+  initialSlug?: string;
+  onBoardChange?: (slug: string) => void;
+}) {
+  // Parse manage view from slug: "board-slug/manage"
+  const parsedSlug = initialSlug?.replace(/\/manage$/, "") || "";
+  const isManageView = initialSlug?.endsWith("/manage") ?? false;
+
   const [boards, setBoards] = useState<Board[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
@@ -409,6 +794,8 @@ export default function KanbanBoard() {
 
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
+  const [countdown, setCountdown] = useState(60);
+  const countdownRef = useRef(60);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
@@ -438,10 +825,16 @@ export default function KanbanBoard() {
     setLoading(true);
     loadBoards()
       .then((bs) => {
-        if (bs.length > 0) {
-          setActiveBoardId(bs[0].id);
-          return loadBoard(bs[0].id);
-        }
+        if (bs.length === 0) return;
+        // Match URL slug to a board name, fallback to first board
+        const match = parsedSlug
+          ? bs.find((b) => slugify(b.name) === parsedSlug)
+          : null;
+        const target = match ?? bs[0];
+        setActiveBoardId(target.id);
+        const suffix = isManageView ? "/manage" : "";
+        onBoardChange?.(slugify(target.name) + suffix);
+        return loadBoard(target.id);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
@@ -450,6 +843,44 @@ export default function KanbanBoard() {
   useEffect(() => {
     if (activeBoardId) loadBoard(activeBoardId).catch((e) => setError(String(e)));
   }, [activeBoardId]);
+
+  // Auto-refresh columns & cards with countdown
+  const refreshBoard = useCallback(() => {
+    loadBoards().catch(() => {});
+    if (activeBoardId) {
+      loadBoard(activeBoardId).catch(() => {});
+    }
+    countdownRef.current = 60;
+    setCountdown(60);
+  }, [activeBoardId, loadBoard, loadBoards]);
+
+  useEffect(() => {
+    if (!activeBoardId) return;
+    countdownRef.current = 60;
+    setCountdown(60);
+    const id = setInterval(() => {
+      countdownRef.current -= 1;
+      setCountdown(countdownRef.current);
+      if (countdownRef.current <= 0) {
+        loadBoard(activeBoardId).catch(() => {});
+        countdownRef.current = 60;
+        setCountdown(60);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [activeBoardId, loadBoard]);
+
+  // ── Navigation helpers ──────────────────────────────────────────────────────
+
+  const navigateToManage = useCallback(() => {
+    const board = boards.find((b) => b.id === activeBoardId);
+    if (board) onBoardChange?.(slugify(board.name) + "/manage");
+  }, [activeBoardId, boards, onBoardChange]);
+
+  const navigateToBoard = useCallback(() => {
+    const board = boards.find((b) => b.id === activeBoardId);
+    if (board) onBoardChange?.(slugify(board.name));
+  }, [activeBoardId, boards, onBoardChange]);
 
   // ── Drag ────────────────────────────────────────────────────────────────────
 
@@ -532,12 +963,7 @@ export default function KanbanBoard() {
         const b = await apiClient.tasks.createBoard({ name: trimTitle, description: data.description.trim() });
         setBoards((prev) => [...prev, b]);
         setActiveBoardId(b.id);
-      }
-
-      if (panel.type === "new-column" && activeBoardId) {
-        const pos = positionAfter([...columns].sort((a, b) => a.position - b.position));
-        const col = await apiClient.tasks.createColumn(activeBoardId, { name: trimTitle, position: pos });
-        setColumns((prev) => [...prev, col]);
+        onBoardChange?.(slugify(b.name));
       }
 
       if (panel.type === "new-card" && activeBoardId) {
@@ -549,7 +975,8 @@ export default function KanbanBoard() {
           title: trimTitle,
           description: data.description.trim(),
           priority: data.priority,
-          assignee: data.assignee.trim(),
+          assignee_id: data.assigneeId || undefined,
+          assignee_agent: data.assigneeAgent || undefined,
           labels: data.labels.trim(),
           due_date: dueDateMs,
           position: positionAfter(colCards),
@@ -562,17 +989,14 @@ export default function KanbanBoard() {
           title: trimTitle,
           description: data.description.trim(),
           priority: data.priority,
-          assignee: data.assignee.trim(),
+          assignee_id: data.assigneeId || undefined,
+          assignee_agent: data.assigneeAgent || undefined,
+          clear_assignee: !data.assigneeId && !data.assigneeAgent,
           labels: data.labels.trim(),
           due_date: dueDateMs ?? undefined,
           clear_due: !data.dueDate,
         });
         setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-      }
-
-      if (panel.type === "rename-column" && activeBoardId) {
-        const updated = await apiClient.tasks.updateColumn(activeBoardId, panel.column.id, { name: trimTitle });
-        setColumns((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       }
     } catch (e) {
       setError(String(e));
@@ -590,21 +1014,11 @@ export default function KanbanBoard() {
     setPanel(null);
   }, [activeBoardId]);
 
-  const deleteColumn = useCallback(async (column: Column) => {
-    if (!activeBoardId) return;
-    await apiClient.tasks.deleteColumn(activeBoardId, column.id);
-    setColumns((prev) => prev.filter((c) => c.id !== column.id));
-    setCards((prev) => prev.filter((c) => c.column_id !== column.id));
-  }, [activeBoardId]);
-
   const onAddCard = useCallback((c: Column) =>
     setPanel({ type: "new-card", columnId: c.id, columnName: c.name }), []);
 
   const onEditCard = useCallback((card: Card, columnName: string) =>
     setPanel({ type: "edit-card", card, columnName }), []);
-
-  const onRenameColumn = useCallback((c: Column) =>
-    setPanel({ type: "rename-column", column: c }), []);
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -644,7 +1058,7 @@ export default function KanbanBoard() {
             <button
               key={b.id}
               className={`kn-sidebar-item ${b.id === activeBoardId ? "kn-sidebar-item--active" : ""}`}
-              onClick={() => { setActiveBoardId(b.id); setPanel(null); }}
+              onClick={() => { setActiveBoardId(b.id); onBoardChange?.(slugify(b.name)); setPanel(null); }}
             >
               <span className="kn-sidebar-item-name">{b.name}</span>
               <span className="kn-sidebar-item-count">
@@ -680,18 +1094,30 @@ export default function KanbanBoard() {
             </div>
             <div className="kn-board-actions">
               <span className="kn-board-meta">{sortedColumns.length} columns · {cards.length} cards</span>
+              <button className="kn-btn kn-btn--outline kn-refresh-btn" onClick={refreshBoard}>
+                <span className="kn-refresh-countdown">({countdown}s)</span> Refresh
+              </button>
               <button
-                className={`kn-btn kn-btn--outline ${panel?.type === "new-column" ? "kn-btn--active" : ""}`}
-                onClick={() => setPanel(panel?.type === "new-column" ? null : { type: "new-column" })}
+                className={`kn-btn kn-btn--outline ${isManageView ? "kn-btn--active" : ""}`}
+                onClick={() => isManageView ? navigateToBoard() : navigateToManage()}
               >
-                + Column
+                Manage columns
               </button>
             </div>
           </div>
         )}
 
-        {/* Board */}
-        {!activeBoard ? (
+        {/* Manage columns view */}
+        {isManageView && activeBoard && activeBoardId ? (
+          <ColumnManager
+            columns={columns}
+            cards={cards}
+            boardId={activeBoardId}
+            onBack={navigateToBoard}
+            onColumnsChange={setColumns}
+            onCardsChange={setCards}
+          />
+        ) : !activeBoard ? (
           <div className="kn-empty">
             <p>No boards yet.</p>
             <button
@@ -705,6 +1131,7 @@ export default function KanbanBoard() {
           <DndContext
             sensors={sensors}
             collisionDetection={closestCorners}
+            measuring={measuring}
             onDragStart={onDragStart}
             onDragOver={onDragOver}
             onDragEnd={onDragEnd}
@@ -719,8 +1146,6 @@ export default function KanbanBoard() {
                     selectedCardId={selectedCardId}
                     onAddCard={onAddCard}
                     onEditCard={onEditCard}
-                    onDeleteColumn={deleteColumn}
-                    onRenameColumn={onRenameColumn}
                   />
                 ))}
                 {sortedColumns.length === 0 && (

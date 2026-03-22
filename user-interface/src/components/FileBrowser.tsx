@@ -6,16 +6,23 @@ import { apiClient } from "../api/client";
 import { formatBytes, filenameFromKey, folderName } from "@teamagentica/api-client";
 
 async function downloadFile(pluginId: string, key: string) {
-  const blob = await apiClient.files.fetchBlob(pluginId, key);
+  const isFolder = key.endsWith("/");
+  const blob = isFolder
+    ? await apiClient.files.fetchZip(pluginId, key)
+    : await apiClient.files.fetchBlob(pluginId, key);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = filenameFromKey(key);
+  a.href = url;
+  a.download = isFolder
+    ? folderName(key) + ".zip"
+    : filenameFromKey(key);
   document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 import UploadQueue from "./UploadQueue";
 import FileInfoPanel from "./FileInfoPanel";
 import FileViewer from "./FileViewer";
+import FileOpsPanel from "./FileOpsPanel";
 import FolderTree from "./FolderTree";
 import { findPreview } from "./previews/registry";
 
@@ -65,10 +72,26 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     }))
   );
 
+  const duplicateFile = useFileStore((s) => s.duplicateFile);
+  const renameFile = useFileStore((s) => s.renameFile);
+  const addCopyItem = useFileStore((s) => s.addCopyItem);
+  const addMoveItem = useFileStore((s) => s.addMoveItem);
+  const copyItems = useFileStore((s) => s.copyItems);
+  const moveItems = useFileStore((s) => s.moveItems);
   const enqueue = useUploadStore((s) => s.enqueue);
+
+  const hasOps = copyItems.length > 0 || moveItems.length > 0;
+
+  const createFolder = useFileStore((s) => s.createFolder);
+  const createFile = useFileStore((s) => s.createFile);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; key: string } | null>(null);
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [creating, setCreating] = useState<"folder" | "file" | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const createInputRef = useRef<HTMLInputElement>(null);
   const restoredFromUrl = useRef(false);
 
   // Notify parent of navigation so it can update the URL.
@@ -132,6 +155,58 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
   const canPreview = useCallback((f: { content_type: string; key: string }) => {
     return !!findPreview(f.content_type || "", filenameFromKey(f.key));
   }, []);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, key: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, key });
+  }, []);
+
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const handleRenameSubmit = useCallback((key: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (trimmed && trimmed !== filenameFromKey(key)) {
+      renameFile(key, trimmed);
+    }
+    setRenamingKey(null);
+  }, [renameFile]);
+
+  const handleCreateSubmit = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (trimmed && creating) {
+      if (creating === "folder") createFolder(trimmed);
+      else createFile(trimmed);
+    }
+    setCreating(null);
+  }, [creating, createFolder, createFile]);
+
+  // Auto-focus and select filename (without extension) when entering rename mode.
+  useEffect(() => {
+    if (!renamingKey || !renameInputRef.current) return;
+    const input = renameInputRef.current;
+    input.focus();
+    const dotIdx = input.value.lastIndexOf(".");
+    input.setSelectionRange(0, dotIdx > 0 ? dotIdx : input.value.length);
+  }, [renamingKey]);
+
+  // Auto-focus create input.
+  useEffect(() => {
+    if (!creating || !createInputRef.current) return;
+    createInputRef.current.focus();
+    if (creating === "file") {
+      // Select just "untitled" part, not ".txt"
+      createInputRef.current.setSelectionRange(0, 8);
+    }
+  }, [creating]);
+
+  // Close context menu on any click outside.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = () => setContextMenu(null);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [contextMenu]);
 
   const breadcrumbs = prefix
     ? prefix.replace(/\/$/, "").split("/")
@@ -197,6 +272,12 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                 <button className="file-action-btn" onClick={refresh} title="Refresh">
                   &#x21bb;
                 </button>
+                <button className="file-new-btn file-new-folder" onClick={() => setCreating("folder")} title="New Folder">
+                  + FOLDER
+                </button>
+                <button className="file-new-btn file-new-file" onClick={() => setCreating("file")} title="New File">
+                  + FILE
+                </button>
                 <button className="file-upload-btn" onClick={handleUpload}>
                   UPLOAD
                 </button>
@@ -235,19 +316,63 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                       <span className="file-col-actions"></span>
                     </div>
 
+                    {/* Inline create row */}
+                    {creating && (
+                      <div className="file-row file-create-row">
+                        <span className="file-col-name">
+                          <input
+                            ref={createInputRef}
+                            className="file-rename-input"
+                            defaultValue={creating === "file" ? "untitled.txt" : ""}
+                            placeholder={creating === "folder" ? "Folder name" : "File name"}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleCreateSubmit(e.currentTarget.value);
+                              if (e.key === "Escape") setCreating(null);
+                            }}
+                            onBlur={(e) => handleCreateSubmit(e.currentTarget.value)}
+                          />
+                        </span>
+                        <span className="file-col-size">-</span>
+                        <span className="file-col-type">{creating}</span>
+                        <span className="file-col-modified">-</span>
+                        <span className="file-col-actions">
+                          <button className="file-action-btn" onClick={() => setCreating(null)} title="Cancel">
+                            &#x2716;
+                          </button>
+                        </span>
+                      </div>
+                    )}
+
                     {/* Folders */}
                     {folders.map((f) => (
-                      <button
+                      <div
                         key={f}
                         className="file-row file-folder"
-                        onClick={() => handleBrowse(f)}
+                        onClick={() => { if (renamingKey !== f) handleBrowse(f); }}
+                        onContextMenu={(e) => handleContextMenu(e, f)}
                       >
-                        <span className="file-col-name">{folderName(f)}/</span>
+                        <span className="file-col-name">
+                          {renamingKey === f ? (
+                            <input
+                              ref={renameInputRef}
+                              className="file-rename-input"
+                              defaultValue={folderName(f)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameSubmit(f, e.currentTarget.value);
+                                if (e.key === "Escape") setRenamingKey(null);
+                              }}
+                              onBlur={(e) => handleRenameSubmit(f, e.currentTarget.value)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <>{folderName(f)}/</>
+                          )}
+                        </span>
                         <span className="file-col-size">-</span>
                         <span className="file-col-type">folder</span>
                         <span className="file-col-modified">-</span>
                         <span className="file-col-actions"></span>
-                      </button>
+                      </div>
                     ))}
 
                     {/* Files */}
@@ -255,9 +380,26 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                       <div
                         key={f.key}
                         className={`file-row file-selectable ${selectedFile?.key === f.key ? "selected" : ""}`}
-                        onClick={() => selectFile(selectedFile?.key === f.key ? null : f)}
+                        onClick={() => { if (!hasOps) selectFile(selectedFile?.key === f.key ? null : f); }}
+                        onContextMenu={(e) => handleContextMenu(e, f.key)}
                       >
-                        <span className="file-col-name">{filenameFromKey(f.key)}</span>
+                        <span className="file-col-name">
+                          {renamingKey === f.key ? (
+                            <input
+                              ref={renameInputRef}
+                              className="file-rename-input"
+                              defaultValue={filenameFromKey(f.key)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleRenameSubmit(f.key, e.currentTarget.value);
+                                if (e.key === "Escape") setRenamingKey(null);
+                              }}
+                              onBlur={(e) => handleRenameSubmit(f.key, e.currentTarget.value)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            filenameFromKey(f.key)
+                          )}
+                        </span>
                         <span className="file-col-size">{formatBytes(f.size)}</span>
                         <span className="file-col-type">{f.content_type || "-"}</span>
                         <span className="file-col-modified">
@@ -272,7 +414,7 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                               onClick={(e) => { e.stopPropagation(); viewFile(f); }}
                               title="View"
                             >
-                              &#x1F441;
+                              &#x1F441;&#xFE0E;
                             </button>
                           )}
                           <button
@@ -299,12 +441,60 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
           </>
         )}
       </div>
-      {selectedFile && selectedProvider && (
-        <FileInfoPanel
-          file={selectedFile}
-          pluginId={selectedProvider.id}
-          onClose={() => selectFile(null)}
-        />
+      {contextMenu && (
+        <div
+          className="file-context-menu"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="file-context-menu-item"
+            onClick={() => { setRenamingKey(contextMenu.key); closeContextMenu(); }}
+          >
+            Rename
+          </button>
+          <button
+            className="file-context-menu-item"
+            onClick={() => { duplicateFile(contextMenu.key); closeContextMenu(); }}
+          >
+            Duplicate
+          </button>
+          <button
+            className="file-context-menu-item"
+            onClick={() => { addCopyItem(contextMenu.key); closeContextMenu(); }}
+          >
+            Copy
+          </button>
+          <button
+            className="file-context-menu-item"
+            onClick={() => { addMoveItem(contextMenu.key); closeContextMenu(); }}
+          >
+            Move
+          </button>
+          <button
+            className="file-context-menu-item"
+            onClick={() => { handleDownload(contextMenu.key); closeContextMenu(); }}
+          >
+            Download
+          </button>
+          <button
+            className="file-context-menu-item file-context-menu-danger"
+            onClick={() => { handleDelete(contextMenu.key); closeContextMenu(); }}
+          >
+            Delete
+          </button>
+        </div>
+      )}
+      {hasOps ? (
+        <FileOpsPanel />
+      ) : (
+        selectedFile && selectedProvider && (
+          <FileInfoPanel
+            file={selectedFile}
+            pluginId={selectedProvider.id}
+            onClose={() => selectFile(null)}
+          />
+        )
       )}
       <UploadQueue />
     </div>

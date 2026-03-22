@@ -68,7 +68,12 @@ function groupedPlugins(plugins: Plugin[]): { id: string; name: string; plugins:
   return sections;
 }
 
-export default function PluginSettings() {
+interface Props {
+  initialPluginId?: string;
+  onPluginChange?: (pluginId: string) => void;
+}
+
+export default function PluginSettings({ initialPluginId, onPluginChange }: Props) {
   const { plugins, loading, error } = usePluginStore(
     useShallow((s) => ({ plugins: s.plugins, loading: s.loading, error: s.error }))
   );
@@ -78,7 +83,7 @@ export default function PluginSettings() {
   const restart = usePluginStore((s) => s.restart);
   const uninstall = usePluginStore((s) => s.uninstall);
   const [actionError, setActionError] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialPluginId || null);
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("config");
   const [hasPricing, setHasPricing] = useState(false);
@@ -90,16 +95,19 @@ export default function PluginSettings() {
     fetch();
   }, [fetch]);
 
+  // Select plugin and sync URL.
+  const selectPlugin = useCallback((id: string) => {
+    setSelectedId(id);
+    onPluginChange?.(id);
+  }, [onPluginChange]);
+
   // Auto-select first plugin when list loads and nothing selected.
   useEffect(() => {
-    if (plugins.length > 0 && !selectedId) {
-      setSelectedId(plugins[0].id);
-    }
-    // If selected plugin was uninstalled, clear selection.
-    if (selectedId && !plugins.find((p) => p.id === selectedId)) {
-      setSelectedId(plugins.length > 0 ? plugins[0].id : null);
-    }
-  }, [plugins, selectedId]);
+    if (plugins.length === 0) return;
+    if (selectedId && plugins.find((p) => p.id === selectedId)) return;
+    // Selected plugin missing or none selected — pick first.
+    selectPlugin(plugins[0].id);
+  }, [plugins, selectedId, selectPlugin]);
 
   const selected = plugins.find((p) => p.id === selectedId) || null;
   const groups = useMemo(() => groupedPlugins(plugins), [plugins]);
@@ -257,7 +265,7 @@ export default function PluginSettings() {
                   key={p.id}
                   className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}`}
                   onClick={() => {
-                    setSelectedId(p.id);
+                    selectPlugin(p.id);
                     setConfirmUninstall(null);
                     setActionError("");
                   }}
