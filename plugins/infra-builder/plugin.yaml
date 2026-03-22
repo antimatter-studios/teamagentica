@@ -2,7 +2,7 @@ id: infra-builder
 name: "Docker Builder"
 description: "Builds Docker images from source in storage-volume volumes"
 group: infrastructure
-version: "1.0.2"
+version: "1.0.3"
 image: "teamagentica-infra-builder:latest"
 author: teamagentica
 tags: [system, build, docker, infrastructure]

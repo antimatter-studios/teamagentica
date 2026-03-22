@@ -2,7 +2,7 @@ id: infra-redis
 name: "Redis Cache"
 description: "Shared Redis cache for plugin state, rate limiting, and ephemeral data"
 group: infrastructure
-version: "1.0.1"
+version: "1.0.2"
 image: "teamagentica-infra-redis:latest"
 author: teamagentica
 tags: [infrastructure, cache, redis, memory]

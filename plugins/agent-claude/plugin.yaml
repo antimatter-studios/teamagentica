@@ -2,7 +2,7 @@ id: agent-claude
 name: "Claude Agent"
 description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
 group: agents
-version: "1.0.39"
+version: "1.0.42"
 image: "teamagentica-agent-claude:latest"
 author: teamagentica
 tags: [chat, ai, agent, claude, anthropic]
@@ -40,6 +40,15 @@ config_schema:
     default: claude-sonnet-4-6
     dynamic: true
     order: 4
+  CLAUDE_SKIP_PERMISSIONS:
+    type: boolean
+    label: "Skip Permissions"
+    default: "false"
+    help_text: "Auto-approve all tool use (WebFetch, Bash, etc.) without prompting. Safe for headless agent containers."
+    visible_when:
+      field: CLAUDE_BACKEND
+      value: cli
+    order: 10
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

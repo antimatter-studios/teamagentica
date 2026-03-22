@@ -2,7 +2,7 @@ id: tool-nanobanana
 name: "Nano Banana Image"
 description: "AI image generation using Google Gemini's native image output"
 group: tools
-version: "1.0.7"
+version: "1.0.8"
 image: "teamagentica-tool-nanobanana:latest"
 author: teamagentica
 tags: [image, ai, tool, gemini, google]
