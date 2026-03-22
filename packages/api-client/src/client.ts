@@ -45,6 +45,7 @@ export class HttpTransport {
       const body = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(body.error || body.message || `HTTP ${res.status}`);
     }
+    if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
   }
 

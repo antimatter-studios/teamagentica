@@ -12,6 +12,7 @@ import { TasksAPI } from "./tasks.js";
 import { AgentRegistryAPI } from "./agents.js";
 import { UsersAPI } from "./users.js";
 import { SchedulerAPI } from "./scheduler.js";
+import { PersonaAPI } from "./personas.js";
 
 export class TeamAgenticaClient {
   readonly http: HttpTransport;
@@ -28,6 +29,7 @@ export class TeamAgenticaClient {
   readonly agents: AgentRegistryAPI;
   readonly users: UsersAPI;
   readonly scheduler: SchedulerAPI;
+  readonly personas: PersonaAPI;
 
   constructor(config: ClientConfig) {
     this.http = new HttpTransport(config);
@@ -44,6 +46,7 @@ export class TeamAgenticaClient {
     this.agents = new AgentRegistryAPI(this.http);
     this.users = new UsersAPI(this.http);
     this.scheduler = new SchedulerAPI(this.http);
+    this.personas = new PersonaAPI(this.http);
   }
 
   get baseUrl(): string {
@@ -115,3 +118,6 @@ export { UsersAPI } from "./users.js";
 
 export type { ScheduledEvent, EventLogEntry, CreateEventRequest, UpdateEventRequest } from "./scheduler.js";
 export { SchedulerAPI } from "./scheduler.js";
+
+export type { Persona, CreatePersonaRequest, UpdatePersonaRequest } from "./personas.js";
+export { PersonaAPI } from "./personas.js";

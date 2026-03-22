@@ -134,4 +134,8 @@ export class TasksAPI {
   async createComment(cardId: string, body: string): Promise<Comment> {
     return this.http.post<Comment>(`${ROUTE}/cards/${cardId}/comments`, { body });
   }
+
+  async deleteComment(cardId: string, commentId: string): Promise<void> {
+    return this.http.delete(`${ROUTE}/cards/${cardId}/comments/${commentId}`);
+  }
 }
