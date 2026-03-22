@@ -182,10 +182,23 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
 
   useEffect(() => {
     if (selected) {
-      probePricing(selected.id, selected.status);
-      probeTools(selected.id, selected.status);
-      probeSystemPrompt(selected.id, selected.status);
-      probeCommands(selected.id, selected.status);
+      const caps = parseCapabilities(selected);
+      const isAgent = caps.some((c) => c.startsWith("agent:"));
+      const isDiscord = caps.includes("messaging:discord");
+      if (isAgent) {
+        probePricing(selected.id, selected.status);
+        probeTools(selected.id, selected.status);
+        probeSystemPrompt(selected.id, selected.status);
+      } else {
+        setHasPricing(false);
+        setHasTools(false);
+        setHasSystemPrompt(false);
+      }
+      if (isDiscord) {
+        probeCommands(selected.id, selected.status);
+      } else {
+        setHasCommands(false);
+      }
       // Reset to config tab if current tab won't be available.
       if ((detailTab === "pricing" || detailTab === "tools" || detailTab === "system-prompt" || detailTab === "commands") && selected.status !== "running") {
         setDetailTab("config");
