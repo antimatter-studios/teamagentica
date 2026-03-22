@@ -686,6 +686,28 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 	c.Request.URL.Host = target.Host
 	c.Request.Host = target.Host
 
+	// Security: strip ALL X-User-* headers from the incoming request to prevent
+	// identity spoofing. Then inject trusted values from JWT context if present.
+	for key := range c.Request.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-user-") {
+			c.Request.Header.Del(key)
+		}
+	}
+
+	// Inject user identity headers from JWT context (authenticated routes only).
+	// Webhook routes (event_type=webhook) must NOT have user headers.
+	if eventType != "webhook" {
+		if uid, exists := c.Get("user_id"); exists {
+			c.Request.Header.Set("X-User-ID", fmt.Sprintf("%d", uid.(uint)))
+		}
+		if email, exists := c.Get("email"); exists {
+			c.Request.Header.Set("X-User-Email", email.(string))
+		}
+		if role, exists := c.Get("role"); exists {
+			c.Request.Header.Set("X-User-Role", role.(string))
+		}
+	}
+
 	// Extract the caller's origin (scheme+host only) to restrict iframe embedding.
 	var callerOrigin string
 	if origin := c.Request.Header.Get("Origin"); origin != "" {

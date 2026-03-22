@@ -223,8 +223,19 @@ func (cm *CertManager) GenerateKernelCert() (certPath, keyPath string, err error
 }
 
 // GetServerTLSConfig returns a tls.Config for the kernel's HTTPS server.
-// Uses VerifyClientCertIfGiven so health checks and UI can still connect
-// without client certs, while plugins that present certs are verified.
+//
+// SECURITY NOTE: This uses VerifyClientCertIfGiven (not RequireAndVerifyClientCert)
+// because the same Gin router serves both the HTTP (8080) and TLS (8081) ports.
+// Unauthenticated endpoints on the TLS port include:
+//   - /api/health           — Docker/orchestrator health checks
+//   - /api/webhook/:id/*    — external webhook ingress (Telegram, Discord, etc.)
+//   - /ws/:container_id/*   — workspace proxy (unguessable IDs)
+//
+// RequireAndVerifyClientCert would break these endpoints on port 8081.
+//
+// Plugin auth is enforced at the middleware layer: PluginTokenAuth() requires
+// either a valid mTLS client cert OR a valid JWT. On TLS connections, it rejects
+// JWT-only auth (plugins MUST present their mTLS cert when connecting over TLS).
 func (cm *CertManager) GetServerTLSConfig() (*tls.Config, error) {
 	certPath := filepath.Join(cm.certsDir, "kernel.crt")
 	keyPath := filepath.Join(cm.certsDir, "kernel.key")

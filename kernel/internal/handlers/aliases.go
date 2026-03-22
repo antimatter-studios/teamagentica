@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,12 +12,55 @@ import (
 )
 
 // ListAliases handles GET /api/aliases — returns all aliases.
-// Available to both plugin-token and admin auth.
-// Each alias includes the target plugin's capabilities for routing decisions.
+// Proxies to the infra-alias-registry plugin (source of truth) and enriches
+// each alias with the target plugin's capabilities for routing decisions.
 func (h *PluginHandler) ListAliases(c *gin.Context) {
-	var aliases []models.Alias
-	h.db.Order("name ASC").Find(&aliases)
+	// Look up the alias-registry plugin.
+	var registry models.Plugin
+	if err := h.db.First(&registry, "id = ?", "infra-alias-registry").Error; err != nil {
+		log.Printf("aliases: infra-alias-registry not found, returning empty list: %v", err)
+		c.JSON(http.StatusOK, gin.H{"aliases": []interface{}{}})
+		return
+	}
 
+	// Fetch aliases from the registry plugin.
+	url := fmt.Sprintf("%s://%s:%d/aliases", h.pluginScheme(), registry.Host, registry.HTTPPort)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build request"})
+		return
+	}
+
+	resp, err := h.proxyClient().Do(req)
+	if err != nil {
+		log.Printf("aliases: failed to fetch from alias-registry: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "alias-registry unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("aliases: alias-registry returned status %d", resp.StatusCode)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "alias-registry error"})
+		return
+	}
+
+	// Parse the registry response.
+	var registryResp struct {
+		Aliases []struct {
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			Plugin   string `json:"plugin"`
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		} `json:"aliases"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&registryResp); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode alias-registry response"})
+		return
+	}
+
+	// Transform into the API format expected by SDK consumers.
 	type aliasInfo struct {
 		Name         string   `json:"name"`
 		Target       string   `json:"target"`
@@ -23,24 +68,29 @@ func (h *PluginHandler) ListAliases(c *gin.Context) {
 		Capabilities []string `json:"capabilities"`
 	}
 
-	infos := make([]aliasInfo, 0, len(aliases))
-	for _, a := range aliases {
+	infos := make([]aliasInfo, 0, len(registryResp.Aliases))
+	for _, a := range registryResp.Aliases {
+		// Build target: "plugin:model" if model is set, otherwise just "plugin".
+		target := a.Plugin
+		if a.Model != "" {
+			target = a.Plugin + ":" + a.Model
+		}
+
+		// Look up plugin capabilities.
+		pluginID := a.Plugin
 		var caps []string
 		var plugin models.Plugin
-		// Target may include model suffix (e.g. "tool-nanobanana:gpt-4o"), strip it for lookup.
-		pluginID := a.Target
-		if idx := strings.Index(pluginID, ":"); idx > 0 {
-			pluginID = pluginID[:idx]
-		}
 		if h.db.First(&plugin, "id = ?", pluginID).Error == nil {
 			caps = plugin.GetCapabilities()
 		}
+
 		infos = append(infos, aliasInfo{
 			Name:         a.Name,
-			Target:       a.Target,
-			PluginID:     a.PluginID,
+			Target:       target,
+			PluginID:     a.Plugin,
 			Capabilities: caps,
 		})
 	}
+
 	c.JSON(http.StatusOK, gin.H{"aliases": infos})
 }

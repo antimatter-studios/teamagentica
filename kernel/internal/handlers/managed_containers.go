@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"crypto/rand"
+	"encoding/hex"
+
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 
 	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
@@ -56,6 +58,17 @@ func extractPluginID(c *gin.Context) (string, bool) {
 	return strings.TrimPrefix(claims.Email, "service:"), true
 }
 
+// generateContainerID returns a 32-char cryptographically random hex string.
+// This makes container IDs unguessable (128 bits of entropy), preventing
+// brute-force access to the unauthenticated /ws/:container_id proxy.
+func generateContainerID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
 // --- plugin-callable handlers (PluginTokenAuth) ---
 
 // CreateManagedContainer handles POST /api/plugins/containers.
@@ -79,7 +92,7 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 	}
 
 	mc := models.ManagedContainer{
-		ID:       uuid.New().String()[:8],
+		ID:       generateContainerID(),
 		PluginID: pluginID,
 		Name:     req.Name,
 		Image:         req.Image,
