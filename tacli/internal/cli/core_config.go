@@ -142,5 +142,8 @@ func buildKernelEnv(ks config.KernelState, networkName string) []string {
 	if ks.Name != "" {
 		env = append(env, "APP_NAME="+ks.Name)
 	}
+	if ks.JWTTTLHours > 0 {
+		env = append(env, fmt.Sprintf("JWT_TTL_HOURS=%d", ks.JWTTTLHours))
+	}
 	return env
 }

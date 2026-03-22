@@ -17,6 +17,7 @@ type KernelState struct {
 	DevMode     bool              `json:"dev_mode"`
 	NetworkName string            `json:"network_name,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
+	JWTTTLHours int               `json:"jwt_ttl_hours,omitempty"`
 }
 
 // Profile stores connection details and kernel config for an instance.
@@ -113,6 +114,9 @@ func (c *Config) SetProfile(p Profile) {
 			}
 			if p.Kernel.Labels != nil {
 				c.Profiles[i].Kernel.Labels = p.Kernel.Labels
+			}
+			if p.Kernel.JWTTTLHours != 0 {
+				c.Profiles[i].Kernel.JWTTTLHours = p.Kernel.JWTTTLHours
 			}
 			// bools are always applied when any other Kernel field is set
 			if p.Kernel.Image != "" || p.Kernel.Port != 0 || p.Kernel.Domain != "" {

@@ -113,6 +113,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if tc.Kernel.Name != "" {
 		env = append(env, "APP_NAME="+tc.Kernel.Name)
 	}
+	if tc.Kernel.JWTTTLHours > 0 {
+		env = append(env, fmt.Sprintf("JWT_TTL_HOURS=%d", tc.Kernel.JWTTTLHours))
+	}
+
 
 	// 6. Build labels.
 	labels := map[string]string{
@@ -202,6 +206,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			DevMode:     tc.Kernel.DevMode,
 			NetworkName: networkName,
 			Labels:      tc.Kernel.Labels,
+			JWTTTLHours: tc.Kernel.JWTTTLHours,
 		},
 	})
 	tacliCfg.ActiveProfile = flagCreateName

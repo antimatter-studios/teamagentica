@@ -23,13 +23,14 @@ type TAConfig struct {
 
 // KernelConfig holds kernel container settings.
 type KernelConfig struct {
-	Name    string            `yaml:"name"`
-	Image   string            `yaml:"image"`
-	Port    int               `yaml:"port"`
-	Domain  string            `yaml:"domain"`
-	DataDir string            `yaml:"data_dir"`
-	DevMode bool              `yaml:"dev_mode"`
-	Labels  map[string]string `yaml:"labels"`
+	Name        string            `yaml:"name"`
+	Image       string            `yaml:"image"`
+	Port        int               `yaml:"port"`
+	Domain      string            `yaml:"domain"`
+	DataDir     string            `yaml:"data_dir"`
+	DevMode     bool              `yaml:"dev_mode"`
+	Labels      map[string]string `yaml:"labels"`
+	JWTTTLHours int               `yaml:"jwt_ttl_hours"`
 }
 
 // AdminConfig holds the initial admin user credentials.
