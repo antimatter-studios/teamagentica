@@ -10,12 +10,14 @@ import (
 
 // Handler serves persona API endpoints.
 type Handler struct {
-	db *storage.DB
+	db                       *storage.DB
+	defaultWorkerPrompt      string
+	defaultCoordinatorPrompt string
 }
 
 // New creates a new Handler.
-func New(db *storage.DB) *Handler {
-	return &Handler{db: db}
+func New(db *storage.DB, defaultWorkerPrompt, defaultCoordinatorPrompt string) *Handler {
+	return &Handler{db: db, defaultWorkerPrompt: defaultWorkerPrompt, defaultCoordinatorPrompt: defaultCoordinatorPrompt}
 }
 
 // Health handles GET /health.
@@ -56,8 +58,7 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		return
 	}
 	if req.SystemPrompt == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "system_prompt is required"})
-		return
+		req.SystemPrompt = h.defaultPromptForAlias(req.Alias)
 	}
 	if err := h.db.Create(&req); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "persona already exists"})
@@ -101,6 +102,19 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 
 	p, _ := h.db.Get(alias)
 	c.JSON(http.StatusOK, p)
+}
+
+// defaultPromptForAlias returns the appropriate default prompt based on the persona alias.
+func (h *Handler) defaultPromptForAlias(alias string) string {
+	if alias == "default-coordinator" {
+		return h.defaultCoordinatorPrompt
+	}
+	return h.defaultWorkerPrompt
+}
+
+// DefaultPrompt returns the default worker system prompt for pre-filling new persona forms.
+func (h *Handler) DefaultPrompt(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"system_prompt": h.defaultWorkerPrompt})
 }
 
 // DeletePersona handles DELETE /personas/:alias.
@@ -211,9 +225,12 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Alias == "" || req.SystemPrompt == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "alias and system_prompt are required"})
+	if req.Alias == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
+	}
+	if req.SystemPrompt == "" {
+		req.SystemPrompt = h.defaultPromptForAlias(req.Alias)
 	}
 	if err := h.db.Create(&req); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "persona already exists"})
