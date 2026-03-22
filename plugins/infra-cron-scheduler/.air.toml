@@ -3,7 +3,7 @@ tmp_dir = "build"
 
 [build]
   bin = "./build/air-cron-scheduler"
-  cmd = "go build -o ./build/air-cron-scheduler ."
+  cmd = "CGO_ENABLED=1 go build -o ./build/air-cron-scheduler ."
   delay = 1000
   exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []

@@ -1,186 +1,129 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log"
+	"sort"
 	"sync"
+	"text/template"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
+
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-cron-scheduler/internal/storage"
 )
 
-// EventType distinguishes one-shot from repeating events.
-type EventType string
-
-const (
-	Once   EventType = "once"
-	Repeat EventType = "repeat"
-)
-
-// Event is a scheduled task that fires at a specific time or on an interval.
-type Event struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Text       string        `json:"text"`
-	Type       EventType     `json:"type"`
-	Interval   time.Duration `json:"interval_ns"`
-	IntervalHR string        `json:"interval"` // human-readable, e.g. "5m", "1h"
-	NextFire   time.Time     `json:"next_fire"`
-	CreatedAt  time.Time     `json:"created_at"`
-	UpdatedAt  time.Time     `json:"updated_at"`
-	Enabled    bool          `json:"enabled"`
-	FiredCount int           `json:"fired_count"`
+// SDKClient is the interface the scheduler needs from pluginsdk.Client.
+type SDKClient interface {
+	ReportEvent(eventType, detail string)
+	OnEvent(eventType string, debouncer pluginsdk.Debouncer) error
+	RouteToPlugin(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error)
 }
 
-// LogEntry records a single firing of an event.
-type LogEntry struct {
-	ID        string    `json:"id"`
-	EventID   string    `json:"event_id"`
-	EventName string    `json:"event_name"`
-	Text      string    `json:"text"`
-	FiredAt   time.Time `json:"fired_at"`
+// DispatchConfig holds dispatch queue configuration.
+type DispatchConfig struct {
+	Enabled        bool
+	GlobalLimit    int            // 0 = unlimited
+	AgentLimits    map[string]int // per-agent concurrency limits
+	PromptTemplate string         // Go text/template for agent prompts
 }
 
-// Scheduler manages scheduled events and fires them when due.
+// cacheEntry tracks the next fire time for timer jobs.
+type cacheEntry struct {
+	ID       string
+	NextFire time.Time
+}
+
+// Scheduler manages both timer and event-based job execution.
 type Scheduler struct {
-	mu     sync.RWMutex
-	events map[string]*Event
-	logMu  sync.RWMutex
-	logs   []LogEntry
-	stopCh chan struct{}
+	db               *storage.DB
+	sdk              SDKClient
+	mu               sync.Mutex
+	cache            []cacheEntry          // timer jobs only
+	registeredEvents map[string]bool       // event types we've subscribed to
+	stopCh           chan struct{}
+	dispatch         DispatchConfig
+	promptTmpl       *template.Template
 }
 
-// New creates and starts a new Scheduler.
-func New() *Scheduler {
+// New creates a Scheduler, loads jobs from DB, and starts the tick loop.
+func New(db *storage.DB, sdk SDKClient, cfg DispatchConfig) *Scheduler {
 	s := &Scheduler{
-		events: make(map[string]*Event),
-		stopCh: make(chan struct{}),
+		db:               db,
+		sdk:              sdk,
+		registeredEvents: make(map[string]bool),
+		stopCh:           make(chan struct{}),
+		dispatch:         cfg,
 	}
+
+	// Parse prompt template
+	tmplSrc := cfg.PromptTemplate
+	if tmplSrc == "" {
+		tmplSrc = defaultPromptTemplate
+	}
+	t, err := template.New("dispatch").Parse(tmplSrc)
+	if err != nil {
+		log.Printf("[dispatch] failed to parse prompt template, using default: %v", err)
+		t, _ = template.New("dispatch").Parse(defaultPromptTemplate)
+	}
+	s.promptTmpl = t
+
+	s.reloadTimerCache()
+	s.registerEventJobs()
+	s.initDispatch()
 	go s.run()
 	return s
 }
 
-// Stop halts the scheduler loop.
 func (s *Scheduler) Stop() {
 	close(s.stopCh)
 }
 
-// CreateEvent adds a new scheduled event.
-// timeout is how long from now until first firing.
-func CreateEvent(name, text string, eventType EventType, interval time.Duration) *Event {
+// Reload rebuilds timer cache and re-registers event subscriptions.
+func (s *Scheduler) Reload() {
+	s.reloadTimerCache()
+	s.registerEventJobs()
+}
+
+// --- Timer jobs ---
+
+func (s *Scheduler) reloadTimerCache() {
+	jobs, err := s.db.ListTimerJobs()
+	if err != nil {
+		log.Printf("[scheduler] failed to reload timer cache: %v", err)
+		return
+	}
+
 	now := time.Now()
-	hr := formatDuration(interval)
-	return &Event{
-		ID:         uuid.New().String(),
-		Name:       name,
-		Text:       text,
-		Type:       eventType,
-		Interval:   interval,
-		IntervalHR: hr,
-		NextFire:   now.Add(interval),
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		Enabled:    true,
-	}
-}
-
-// Add inserts an event into the scheduler.
-func (s *Scheduler) Add(e *Event) {
-	s.mu.Lock()
-	s.events[e.ID] = e
-	s.mu.Unlock()
-	log.Printf("[scheduler] added event %s (%s) type=%s interval=%s next_fire=%s",
-		e.ID, e.Name, e.Type, e.IntervalHR, e.NextFire.Format(time.RFC3339))
-}
-
-// Get returns a single event by ID.
-func (s *Scheduler) Get(id string) (*Event, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.events[id]
-	if !ok {
-		return nil, false
-	}
-	cp := *e
-	return &cp, true
-}
-
-// List returns all events.
-func (s *Scheduler) List() []*Event {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := make([]*Event, 0, len(s.events))
-	for _, e := range s.events {
-		cp := *e
-		result = append(result, &cp)
-	}
-	return result
-}
-
-// Update modifies an existing event. Returns error if not found.
-func (s *Scheduler) Update(id string, name, text *string, interval *time.Duration, enabled *bool) (*Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	e, ok := s.events[id]
-	if !ok {
-		return nil, fmt.Errorf("event %s not found", id)
-	}
-
-	if name != nil {
-		e.Name = *name
-	}
-	if text != nil {
-		e.Text = *text
-	}
-	if interval != nil {
-		e.Interval = *interval
-		e.IntervalHR = formatDuration(*interval)
-		e.NextFire = time.Now().Add(*interval)
-	}
-	if enabled != nil {
-		e.Enabled = *enabled
-		if *enabled && e.NextFire.Before(time.Now()) {
-			// Re-arm if re-enabling a past event.
-			e.NextFire = time.Now().Add(e.Interval)
+	s.cache = make([]cacheEntry, 0, len(jobs))
+	for _, j := range jobs {
+		nf := time.UnixMilli(j.NextFire)
+		if nf.Before(now) {
+			recalc, err := NextFireTime(j.Schedule, now)
+			if err != nil {
+				log.Printf("[scheduler] bad schedule for job %s: %v", j.ID, err)
+				continue
+			}
+			nf = recalc
+			_ = s.db.IncrementFired(j.ID, nf.UnixMilli(), false)
 		}
+		s.cache = append(s.cache, cacheEntry{ID: j.ID, NextFire: nf})
 	}
-	e.UpdatedAt = time.Now()
-
-	cp := *e
-	return &cp, nil
+	sortCache(s.cache)
 }
 
-// Delete removes an event. Returns false if not found.
-func (s *Scheduler) Delete(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.events[id]; !ok {
-		return false
-	}
-	delete(s.events, id)
-	return true
+func sortCache(c []cacheEntry) {
+	sort.Slice(c, func(i, j int) bool {
+		return c[i].NextFire.Before(c[j].NextFire)
+	})
 }
 
-// Logs returns the event firing log, newest first.
-func (s *Scheduler) Logs(limit int) []LogEntry {
-	s.logMu.RLock()
-	defer s.logMu.RUnlock()
-
-	n := len(s.logs)
-	if limit <= 0 || limit > n {
-		limit = n
-	}
-
-	// Return newest first.
-	result := make([]LogEntry, limit)
-	for i := 0; i < limit; i++ {
-		result[i] = s.logs[n-1-i]
-	}
-	return result
-}
-
-// run is the scheduler tick loop. Checks every second for due events.
 func (s *Scheduler) run() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -195,56 +138,145 @@ func (s *Scheduler) run() {
 	}
 }
 
-// tick checks all events and fires any that are due.
 func (s *Scheduler) tick(now time.Time) {
 	s.mu.Lock()
-	var toFire []*Event
-	for _, e := range s.events {
-		if !e.Enabled {
-			continue
-		}
-		if now.After(e.NextFire) || now.Equal(e.NextFire) {
-			toFire = append(toFire, e)
-		}
-	}
-
-	// Process firings while holding lock to update state atomically.
-	for _, e := range toFire {
-		e.FiredCount++
-		log.Printf("[scheduler] FIRED event %s (%s): %s", e.ID, e.Name, e.Text)
-
-		switch e.Type {
-		case Once:
-			e.Enabled = false
-		case Repeat:
-			e.NextFire = now.Add(e.Interval)
-		}
+	var due []cacheEntry
+	for len(s.cache) > 0 && !s.cache[0].NextFire.After(now) {
+		due = append(due, s.cache[0])
+		s.cache = s.cache[1:]
 	}
 	s.mu.Unlock()
 
-	// Append log entries outside the events lock.
-	if len(toFire) > 0 {
-		s.logMu.Lock()
-		for _, e := range toFire {
-			s.logs = append(s.logs, LogEntry{
-				ID:        uuid.New().String(),
-				EventID:   e.ID,
-				EventName: e.Name,
-				Text:      e.Text,
-				FiredAt:   now,
-			})
-		}
-		// Cap log at 1000 entries.
-		if len(s.logs) > 1000 {
-			s.logs = s.logs[len(s.logs)-1000:]
-		}
-		s.logMu.Unlock()
+	for _, entry := range due {
+		s.fireTimerJob(entry.ID, now)
+	}
+
+	// Process dispatch queue
+	if s.dispatch.Enabled {
+		s.processDispatchQueue()
 	}
 }
 
-func formatDuration(d time.Duration) string {
-	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
-		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+func (s *Scheduler) fireTimerJob(id string, now time.Time) {
+	job, err := s.db.GetJob(id)
+	if err != nil || !job.Enabled {
+		return
 	}
-	return d.String()
+
+	s.fireAndLog(job, "timer", now)
+
+	isOnce := job.Type == "once"
+	var nextFire int64
+	if !isOnce {
+		nf, err := NextFireTime(job.Schedule, now)
+		if err != nil {
+			log.Printf("[scheduler] bad schedule for job %s on refire: %v", id, err)
+			return
+		}
+		nextFire = nf.UnixMilli()
+	}
+	_ = s.db.IncrementFired(id, nextFire, isOnce)
+
+	if !isOnce {
+		s.mu.Lock()
+		s.cache = append(s.cache, cacheEntry{ID: id, NextFire: time.UnixMilli(nextFire)})
+		sortCache(s.cache)
+		s.mu.Unlock()
+	}
+}
+
+// --- Event jobs ---
+
+func (s *Scheduler) registerEventJobs() {
+	jobs, err := s.db.ListEventJobs()
+	if err != nil {
+		log.Printf("[scheduler] failed to load event jobs: %v", err)
+		return
+	}
+
+	for _, j := range jobs {
+		pattern := j.EventPattern
+		if pattern == "" || s.registeredEvents[pattern] {
+			continue
+		}
+
+		log.Printf("[scheduler] subscribing to event: %s", pattern)
+		handler := s.makeEventHandler(pattern)
+		if err := s.sdk.OnEvent(pattern, pluginsdk.NewNullDebouncer(handler)); err != nil {
+			log.Printf("[scheduler] failed to subscribe to %s: %v", pattern, err)
+			continue
+		}
+		s.registeredEvents[pattern] = true
+	}
+}
+
+func (s *Scheduler) makeEventHandler(pattern string) pluginsdk.EventHandler {
+	return func(e pluginsdk.EventCallback) {
+		log.Printf("[scheduler] received event %s: %s", e.EventType, e.Detail)
+
+		jobs, err := s.db.ListEventJobsByPattern(pattern)
+		if err != nil {
+			log.Printf("[scheduler] failed to query event jobs for %s: %v", pattern, err)
+			return
+		}
+
+		now := time.Now()
+		for _, job := range jobs {
+			s.fireAndLog(&job, "event:"+e.Detail, now)
+
+			isOnce := job.Type == "once"
+			_ = s.db.IncrementFired(job.ID, 0, isOnce)
+		}
+	}
+}
+
+// FireJob manually triggers a job (for the /mcp/trigger_job endpoint).
+func (s *Scheduler) FireJob(id string) error {
+	job, err := s.db.GetJob(id)
+	if err != nil {
+		return fmt.Errorf("job not found: %w", err)
+	}
+	s.fireAndLog(job, "manual", time.Now())
+	_ = s.db.IncrementFired(id, job.NextFire, false)
+	return nil
+}
+
+// --- Shared firing logic ---
+
+func (s *Scheduler) fireAndLog(job *storage.Job, trigger string, now time.Time) {
+	log.Printf("[scheduler] FIRED job %s (%s) trigger=%s: %s", job.ID, job.Name, trigger, job.Text)
+
+	_ = s.db.CreateLog(&storage.ExecutionLog{
+		JobID:   job.ID,
+		JobName: job.Name,
+		Text:    job.Text,
+		Result:  "ok",
+	})
+
+	if s.sdk != nil {
+		s.sdk.ReportEvent("cron:fired", job.Name+": "+job.Text)
+	}
+}
+
+// --- Schedule Parsing ---
+
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+func ParseSchedule(schedule string, from time.Time) (nextFire time.Time, schedType string, err error) {
+	if d, parseErr := time.ParseDuration(schedule); parseErr == nil {
+		if d < 1*time.Second {
+			return time.Time{}, "", fmt.Errorf("interval must be at least 1s")
+		}
+		return from.Add(d), "interval", nil
+	}
+	sched, parseErr := cronParser.Parse(schedule)
+	if parseErr != nil {
+		return time.Time{}, "", fmt.Errorf("invalid schedule %q: not a Go duration or cron expression", schedule)
+	}
+	return sched.Next(from), "cron", nil
+}
+
+func NextFireTime(schedule string, from time.Time) (time.Time, error) {
+	nf, _, err := ParseSchedule(schedule, from)
+	return nf, err
 }
