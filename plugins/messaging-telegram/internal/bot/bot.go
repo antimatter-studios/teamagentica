@@ -162,7 +162,7 @@ func (b *Bot) StartPolling() {
 	b.emitEvent("poll_start", fmt.Sprintf("started polling with timeout=%ds", b.pollTimeout))
 	log.Println("Telegram bot is now running (long polling)")
 
-	b.sendStartupAnnouncement("Online and ready.")
+	b.updateBotStatus("Online and ready.")
 
 	b.wg.Add(1)
 	go func() {
@@ -1063,6 +1063,44 @@ func (b *Bot) trackChat(chatID int64) {
 	b.knownChats[chatID] = true
 	log.Printf("[chats] tracking new chat %d (total: %d)", chatID, len(b.knownChats))
 	b.saveKnownChats()
+}
+
+// updateBotStatus sets the bot's profile description and short description
+// instead of sending messages to chats. Includes a timestamp as a heartbeat
+// so users can see when the bot last signalled it was alive.
+func (b *Bot) updateBotStatus(status string) {
+	ts := time.Now().Format("Jan 2 15:04 MST")
+	text := fmt.Sprintf("%s · since %s", status, ts)
+	if b.version != "" {
+		text = fmt.Sprintf("%s (v%s) · since %s", status, b.version, ts)
+	}
+
+	// Build a longer description with aliases and commands.
+	var descLines []string
+	descLines = append(descLines, text)
+	if !b.aliases.IsEmpty() {
+		var aliasNames []string
+		for _, entry := range b.aliases.List() {
+			aliasNames = append(aliasNames, "@"+entry.Alias)
+		}
+		descLines = append(descLines, fmt.Sprintf("Aliases: %s", strings.Join(aliasNames, ", ")))
+	}
+	descLines = append(descLines, "Commands: /help, /clear, /aliases")
+	desc := strings.Join(descLines, "\n")
+
+	// setMyDescription — shown when user opens bot for the first time.
+	descParams := tgbotapi.Params{"description": desc}
+	if _, err := b.api.MakeRequest("setMyDescription", descParams); err != nil {
+		log.Printf("setMyDescription failed: %v", err)
+	}
+
+	// setMyShortDescription — shown in bot profile card.
+	shortParams := tgbotapi.Params{"short_description": text}
+	if _, err := b.api.MakeRequest("setMyShortDescription", shortParams); err != nil {
+		log.Printf("setMyShortDescription failed: %v", err)
+	}
+
+	log.Printf("Bot status updated: %s", text)
 }
 
 // sendStartupAnnouncement sends a status message to all known chats.

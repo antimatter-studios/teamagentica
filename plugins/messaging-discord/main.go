@@ -100,7 +100,7 @@ func main() {
 		scheme = "https"
 	}
 	kernelBaseURL := fmt.Sprintf("%s://%s:%s", scheme, sdkCfg.KernelHost, sdkCfg.KernelPort)
-	kernelClient := kernel.NewClient(kernelBaseURL, sdkCfg.PluginToken, sdkClient.TLSConfig())
+	kernelClient := kernel.NewClient(kernelBaseURL, "", sdkClient.TLSConfig())
 
 	guildID := pluginConfig["DISCORD_GUILD_ID"]
 	msgBufferMS := 0

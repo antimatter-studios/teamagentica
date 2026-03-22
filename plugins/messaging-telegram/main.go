@@ -116,7 +116,7 @@ func main() {
 	dataDir := "/data"
 	os.MkdirAll(dataDir, 0755)
 
-	kernelClient := kernel.NewClient(kernelBaseURL, sdkCfg.PluginToken, debug)
+	kernelClient := kernel.NewClient(kernelBaseURL, "", debug)
 
 	msgBufferMS := 0
 	if v := pluginConfig["MESSAGE_BUFFER_MS"]; v != "" {

@@ -206,9 +206,9 @@ func (b *Bot) onResumed(s *discordgo.Session, r *discordgo.Resumed) {
 	log.Printf("Discord connection resumed after %v", downtime)
 	b.emitEvent("reconnected", fmt.Sprintf("resumed after %v", downtime))
 
-	// Announce reconnection if downtime was significant (>1 min).
+	// Update status on reconnection if downtime was significant (>1 min).
 	if downtime > 1*time.Minute {
-		b.sendStartupAnnouncement(fmt.Sprintf("Back online after %v downtime.", downtime))
+		b.updateBotStatus(fmt.Sprintf("Back online after %v downtime", downtime))
 	}
 }
 
@@ -246,14 +246,14 @@ func (b *Bot) discoverCommandsWithRetry(appID string) {
 		owners := b.discoverAndRegisterCommands(appID)
 		if len(owners) > 0 {
 			b.cmdOwners = owners
-			b.sendStartupAnnouncement("Online and ready.")
+			b.updateBotStatus("Online and ready")
 			return
 		}
 		log.Printf("Slash command discovery attempt %d/%d: no commands found", i+1, len(delays))
 	}
 	log.Printf("Slash command discovery gave up after %d attempts", len(delays))
-	// Still announce even if no commands were discovered.
-	b.sendStartupAnnouncement("Online and ready.")
+	// Still set status even if no commands were discovered.
+	b.updateBotStatus("Online and ready")
 }
 
 // sendStartupAnnouncement posts a status message to all text channels in the guild.
@@ -296,6 +296,24 @@ func (b *Bot) sendStartupAnnouncement(status string) {
 	// Mark as sent in cache so subsequent restarts within 1h are throttled.
 	if c := b.getCache(); c != nil && sent > 0 {
 		c.Set(context.Background(), throttleKey, time.Now().Unix(), throttleTTL)
+	}
+}
+
+// updateBotStatus sets the bot's custom status (presence) instead of sending messages.
+// Includes a timestamp so users can see when the bot last signalled it was alive.
+func (b *Bot) updateBotStatus(status string) {
+	if b.session == nil {
+		return
+	}
+	ts := time.Now().Format("Jan 2 15:04 MST")
+	text := fmt.Sprintf("%s · since %s", status, ts)
+	if b.version != "" {
+		text = fmt.Sprintf("%s (v%s) · since %s", status, b.version, ts)
+	}
+	if err := b.session.UpdateCustomStatus(text); err != nil {
+		log.Printf("Failed to update bot status: %v", err)
+	} else {
+		log.Printf("Bot status updated: %s", text)
 	}
 }
 
