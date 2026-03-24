@@ -1,0 +1,18 @@
+id: network-ngrok-ingress
+name: "Ngrok Ingress"
+description: "Public ingress via ngrok tunnel. Auto-discovers the webhook plugin and broadcasts ingress:ready events for other plugins to consume."
+group: network
+version: "1.0.13"
+image: "teamagentica-network-ngrok-ingress:latest"
+author: TeamAgentica
+tags: [tunnel, networking, ngrok, ingress]
+capabilities: ["network:ingress"]
+config_schema:
+  NGROK_AUTHTOKEN:
+    type: string
+    label: "Auth Token"
+    required: true
+    secret: true
+  NGROK_DOMAIN:
+    type: string
+    label: "Domain"
