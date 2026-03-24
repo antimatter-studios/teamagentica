@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -72,6 +73,18 @@ func main() {
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
+
+	// Apply config updates in-place without restarting the container.
+	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Config map[string]string `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("[config] failed to parse config:update detail: %v", err)
+			return
+		}
+		h.ApplyConfig(detail.Config)
+	}))
 
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{

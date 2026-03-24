@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -43,7 +44,7 @@ func main() {
 	apiKey := pluginConfig["STABILITY_API_KEY"]
 	model := pluginConfig["STABILITY_MODEL"]
 	if model == "" {
-		model = "sd3-medium"
+		model = "sd3.5-large"
 	}
 	dataPath := pluginConfig["STABILITY_DATA_PATH"]
 	if dataPath == "" {
@@ -67,15 +68,29 @@ func main() {
 	router.GET("/tools", h.Tools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.POST("/generate", h.Generate)
-	router.GET("/config/options/:field", h.ConfigOptions)
+	router.POST("/chat", h.Chat)
+	router.GET("/models", h.Models)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
 
+	// Apply config updates in-place without restarting the container.
+	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Config map[string]string `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("[config] failed to parse config:update detail: %v", err)
+			return
+		}
+		h.ApplyConfig(detail.Config)
+	}))
+
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "stability", Model: "sd3-medium", PerRequest: 0.035, Currency: "USD"},
-		{Provider: "stability", Model: "sd3-large", PerRequest: 0.065, Currency: "USD"},
-		{Provider: "stability", Model: "sd3-large-turbo", PerRequest: 0.04, Currency: "USD"},
+		{Provider: "stability", Model: "sd3.5-large", PerRequest: 0.065, Currency: "USD"},
+		{Provider: "stability", Model: "sd3.5-large-turbo", PerRequest: 0.04, Currency: "USD"},
+		{Provider: "stability", Model: "sd3.5-medium", PerRequest: 0.035, Currency: "USD"},
+		{Provider: "stability", Model: "sd3.5-flash", PerRequest: 0.025, Currency: "USD"},
 	}, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))

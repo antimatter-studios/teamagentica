@@ -6,44 +6,48 @@ import (
 )
 
 type Board struct {
-	ID          string `gorm:"primaryKey" json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CreatedAt   int64  `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt   int64  `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	ID          string         `gorm:"primaryKey" json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	CreatedAt   int64          `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt   int64          `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 type Column struct {
-	ID        string  `gorm:"primaryKey" json:"id"`
-	BoardID   string  `gorm:"index;not null" json:"board_id"`
-	Name      string  `json:"name"`
-	Position  float64 `json:"position"`
-	CreatedAt int64   `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	ID        string         `gorm:"primaryKey" json:"id"`
+	BoardID   string         `gorm:"index;not null" json:"board_id"`
+	Name      string         `json:"name"`
+	Position  float64        `json:"position"`
+	CreatedAt int64          `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt int64          `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 type Card struct {
-	ID            string  `gorm:"primaryKey" json:"id"`
-	BoardID       string  `gorm:"index;not null" json:"board_id"`
-	ColumnID      string  `gorm:"index;not null" json:"column_id"`
-	Title         string  `json:"title"`
-	Description   string  `json:"description"`
-	Priority      string  `json:"priority"`       // "", "low", "medium", "high", "urgent"
-	AssigneeID    uint    `json:"assignee_id"`     // user ID (0 = unassigned)
-	AssigneeAgent string  `json:"assignee_agent"`  // agent alias ("" = none)
-	Labels        string  `json:"labels"`          // comma-separated
-	DueDate       *int64  `json:"due_date"`        // unix ms, nullable
-	Position      float64 `json:"position"`
-	CreatedAt     int64   `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt     int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	ID            string         `gorm:"primaryKey" json:"id"`
+	BoardID       string         `gorm:"index;not null" json:"board_id"`
+	ColumnID      string         `gorm:"index;not null" json:"column_id"`
+	Title         string         `json:"title"`
+	Description   string         `json:"description"`
+	Priority      string         `json:"priority"`       // "", "low", "medium", "high", "urgent"
+	AssigneeID    uint           `json:"assignee_id"`     // user ID (0 = unassigned)
+	AssigneeAgent string         `json:"assignee_agent"`  // agent alias ("" = none)
+	Labels        string         `json:"labels"`          // comma-separated
+	DueDate       *int64         `json:"due_date"`        // unix ms, nullable
+	Position      float64        `json:"position"`
+	CreatedAt     int64          `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt     int64          `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 type Comment struct {
-	ID        string `gorm:"primaryKey" json:"id"`
-	CardID    string `gorm:"index;not null" json:"card_id"`
-	AuthorID  uint   `json:"author_id"` // user ID from X-User-ID header
-	Body      string `json:"body"`
-	CreatedAt int64  `gorm:"autoCreateTime:milli" json:"created_at"`
+	ID        string         `gorm:"primaryKey" json:"id"`
+	CardID    string         `gorm:"index;not null" json:"card_id"`
+	AuthorID  uint           `json:"author_id"` // user ID from X-User-ID header
+	Body      string         `json:"body"`
+	CreatedAt int64          `gorm:"autoCreateTime:milli" json:"created_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 type DB struct {

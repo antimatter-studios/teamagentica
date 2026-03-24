@@ -209,6 +209,7 @@ func TestStatusNotFound(t *testing.T) {
 	h := newTestHandler("test-key", "veo-3.1-generate-preview")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/status/nonexistent", nil)
 	c.Params = gin.Params{{Key: "taskId", Value: "nonexistent"}}
 
 	h.Status(c)

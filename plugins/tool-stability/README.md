@@ -6,6 +6,10 @@ AI image generation powered by Stable Diffusion 3 via the Stability AI API.
 
 Calls the Stability AI REST API to generate images from text prompts. Uses multipart/form-data with `Accept: application/json` to get base64-encoded image responses. Supports negative prompts, multiple aspect ratios, and output format selection.
 
+## OpenAPI
+
+In the `docs/openapi.json` file is the downloaded version of the specification as of 2026-03-23
+
 ## Capabilities
 
 - `agent:tool:image-gen`

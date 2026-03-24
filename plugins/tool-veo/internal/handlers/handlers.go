@@ -28,6 +28,7 @@ type task struct {
 }
 
 type Handler struct {
+	mu     sync.RWMutex
 	apiKey string
 	model  string
 	debug  bool
@@ -35,8 +36,7 @@ type Handler struct {
 	client *veo.Client
 	usage  *usage.Tracker
 
-	mu    sync.RWMutex
-	tasks map[string]*task
+	tasks  map[string]*task
 	nextID int
 }
 
@@ -55,6 +55,31 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	changed := false
+	if v, ok := config["GEMINI_API_KEY"]; ok && v != h.apiKey {
+		log.Printf("[config] updating API key")
+		h.apiKey = v
+		changed = true
+	}
+	if v, ok := config["VEO_MODEL"]; ok && v != "" && v != h.model {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+		changed = true
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+		changed = true
+	}
+	if changed {
+		h.client = veo.NewClient(h.apiKey, h.model, h.debug)
+	}
+}
+
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
 		h.sdk.ReportEvent(eventType, detail)
@@ -63,12 +88,16 @@ func (h *Handler) emitEvent(eventType, detail string) {
 
 // Health returns a simple health check response.
 func (h *Handler) Health(c *gin.Context) {
+	h.mu.RLock()
+	apiKey, model := h.apiKey, h.model
+	h.mu.RUnlock()
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
 		"plugin":     "tool-veo",
 		"version":    "1.0.0",
-		"configured": h.apiKey != "",
-		"model":      h.model,
+		"configured": apiKey != "",
+		"model":      model,
 	})
 }
 
@@ -81,7 +110,11 @@ type generateRequest struct {
 
 // Generate submits a video generation request to Veo.
 func (h *Handler) Generate(c *gin.Context) {
-	if h.apiKey == "" {
+	h.mu.RLock()
+	apiKey, model, client := h.apiKey, h.model, h.client
+	h.mu.RUnlock()
+
+	if apiKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set GEMINI_API_KEY."})
 		return
 	}
@@ -94,9 +127,9 @@ func (h *Handler) Generate(c *gin.Context) {
 
 	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
 
-	h.emitEvent("generate_request", fmt.Sprintf("model=%s prompt=%s", h.model, truncateStr(req.Prompt, 100)))
+	h.emitEvent("generate_request", fmt.Sprintf("model=%s prompt=%s", model, truncateStr(req.Prompt, 100)))
 
-	result, err := h.client.Generate(veo.GenerateRequest{
+	result, err := client.Generate(veo.GenerateRequest{
 		Prompt:         req.Prompt,
 		AspectRatio:    req.AspectRatio,
 		NegativePrompt: req.NegativePrompt,
@@ -115,7 +148,7 @@ func (h *Handler) Generate(c *gin.Context) {
 	t := &task{
 		ID:            taskID,
 		Prompt:        req.Prompt,
-		Model:         h.model,
+		Model:         model,
 		OperationName: result.OperationName,
 		Status:        "processing",
 		CreatedAt:     time.Now().UTC(),
@@ -124,7 +157,7 @@ func (h *Handler) Generate(c *gin.Context) {
 	h.mu.Unlock()
 
 	h.usage.RecordRequest(usage.RequestRecord{
-		Model:  h.model,
+		Model:  model,
 		Prompt: truncateStr(req.Prompt, 200),
 		TaskID: taskID,
 		Status: "submitted",
@@ -133,7 +166,7 @@ func (h *Handler) Generate(c *gin.Context) {
 		h.sdk.ReportUsage(pluginsdk.UsageReport{
 			UserID:     userID,
 			Provider:   "veo",
-			Model:      h.model,
+			Model:      model,
 			RecordType: "request",
 			Status:     "submitted",
 			Prompt:     truncateStr(req.Prompt, 200),
@@ -180,7 +213,11 @@ func (h *Handler) Status(c *gin.Context) {
 	}
 
 	// Poll the Veo API.
-	statusResult, err := h.client.CheckStatus(t.OperationName)
+	h.mu.RLock()
+	client := h.client
+	h.mu.RUnlock()
+
+	statusResult, err := client.CheckStatus(t.OperationName)
 	if err != nil {
 		log.Printf("Veo status check error: %v", err)
 		c.JSON(http.StatusOK, gin.H{
@@ -245,13 +282,17 @@ func (h *Handler) Status(c *gin.Context) {
 func (h *Handler) ConfigOptions(c *gin.Context) {
 	field := c.Param("field")
 
+	h.mu.RLock()
+	apiKey, client := h.apiKey, h.client
+	h.mu.RUnlock()
+
 	switch field {
 	case "VEO_MODEL":
-		if h.apiKey == "" {
+		if apiKey == "" {
 			c.JSON(http.StatusOK, gin.H{"options": defaultModels(), "fallback": true})
 			return
 		}
-		models, err := h.client.ListModels()
+		models, err := client.ListModels()
 		if err != nil {
 			log.Printf("ListModels error: %v", err)
 			c.JSON(http.StatusOK, gin.H{"options": defaultModels(), "fallback": true, "error": "Failed to fetch models: " + err.Error()})
@@ -284,8 +325,12 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 
 // SystemPrompt returns the system prompt this plugin would use when processing requests.
 func (h *Handler) SystemPrompt(c *gin.Context) {
+	h.mu.RLock()
+	model := h.model
+	h.mu.RUnlock()
+
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt": buildSystemPrompt(h.model),
+		"system_prompt": buildSystemPrompt(model),
 	})
 }
 

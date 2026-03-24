@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -60,13 +61,34 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
+	router.GET("/models", h.Models)
+	router.POST("/chat", h.Chat)
 	router.POST("/generate", h.Generate)
 	router.GET("/status/:taskId", h.Status)
+	router.POST("/callback/:taskId", h.WebhookCallback)
 	router.GET("/tools", h.Tools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
+
+	// Register webhook route with ingress for async Seedance API callbacks.
+	sdkClient.RegisterWebhook("/" + manifest.ID)
+	sdkClient.OnWebhookURL(func(webhookURL string) {
+		h.SetCallbackBaseURL(webhookURL)
+	})
+
+	// Apply config updates in-place without restarting the container.
+	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Config map[string]string `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("[config] failed to parse config:update detail: %v", err)
+			return
+		}
+		h.ApplyConfig(detail.Config)
+	}))
 
 	// Pricing endpoints — Seedance 2.0 credit-based pricing.
 	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{

@@ -20,7 +20,8 @@ type GenerateRequest struct {
 	Duration      string   `json:"duration,omitempty"`      // "4", "8", or "12"
 	GenerateAudio bool     `json:"generate_audio,omitempty"`
 	FixedLens     bool     `json:"fixed_lens,omitempty"`
-	ImageURLs     []string `json:"image_urls,omitempty"` // max 1 for image-to-video
+	ImageURLs     []string `json:"image_urls,omitempty"`    // max 1 for image-to-video
+	CallbackURL   string   `json:"callback_url,omitempty"`  // webhook for async status notifications
 }
 
 // GenerateResult is returned after submitting a generation request.
@@ -76,6 +77,9 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 	}
 	if len(req.ImageURLs) > 0 {
 		body["image_urls"] = req.ImageURLs
+	}
+	if req.CallbackURL != "" {
+		body["callback_url"] = req.CallbackURL
 	}
 
 	jsonBody, err := json.Marshal(body)

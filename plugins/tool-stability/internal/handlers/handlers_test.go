@@ -25,7 +25,7 @@ func newTestHandler(apiKey, model string) *Handler {
 }
 
 func TestHealth(t *testing.T) {
-	h := newTestHandler("test-key", "sd3-medium")
+	h := newTestHandler("test-key", "sd3.5-large")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -49,8 +49,8 @@ func TestHealth(t *testing.T) {
 	if resp["configured"] != true {
 		t.Errorf("expected configured=true, got %v", resp["configured"])
 	}
-	if resp["model"] != "sd3-medium" {
-		t.Errorf("expected model=sd3-medium, got %v", resp["model"])
+	if resp["model"] != "sd3.5-large" {
+		t.Errorf("expected model=sd3.5-large, got %v", resp["model"])
 	}
 	if resp["status"] != "ok" {
 		t.Errorf("expected status=ok, got %v", resp["status"])
@@ -58,7 +58,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestHealthNoAPIKey(t *testing.T) {
-	h := newTestHandler("", "sd3-medium")
+	h := newTestHandler("", "sd3.5-large")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -73,7 +73,7 @@ func TestHealthNoAPIKey(t *testing.T) {
 }
 
 func TestGenerateNoAPIKey(t *testing.T) {
-	h := newTestHandler("", "sd3-medium")
+	h := newTestHandler("", "sd3.5-large")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -97,7 +97,7 @@ func TestGenerateNoAPIKey(t *testing.T) {
 }
 
 func TestGenerateMissingPrompt(t *testing.T) {
-	h := newTestHandler("test-key", "sd3-medium")
+	h := newTestHandler("test-key", "sd3.5-large")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -120,7 +120,7 @@ func TestGenerateMissingPrompt(t *testing.T) {
 }
 
 func TestGenerateEmptyBody(t *testing.T) {
-	h := newTestHandler("test-key", "sd3-medium")
+	h := newTestHandler("test-key", "sd3.5-large")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -134,53 +134,8 @@ func TestGenerateEmptyBody(t *testing.T) {
 	}
 }
 
-func TestConfigOptionsModel(t *testing.T) {
-	h := newTestHandler("", "sd3-medium")
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Params = gin.Params{{Key: "field", Value: "STABILITY_MODEL"}}
-
-	h.ConfigOptions(c)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-
-	options, ok := resp["options"].([]interface{})
-	if !ok || len(options) == 0 {
-		t.Errorf("expected non-empty options list, got %v", resp["options"])
-	}
-	if resp["fallback"] != true {
-		t.Errorf("expected fallback=true when no API key, got %v", resp["fallback"])
-	}
-}
-
-func TestConfigOptionsUnknownField(t *testing.T) {
-	h := newTestHandler("", "sd3-medium")
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Params = gin.Params{{Key: "field", Value: "UNKNOWN"}}
-
-	h.ConfigOptions(c)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-
-	options, ok := resp["options"].([]interface{})
-	if !ok || len(options) != 0 {
-		t.Errorf("expected empty options for unknown field, got %v", resp["options"])
-	}
-}
-
 func TestUsageRecordsEmpty(t *testing.T) {
-	h := newTestHandler("test-key", "sd3-medium")
+	h := newTestHandler("test-key", "sd3.5-large")
 	h.usage = newTestTracker(t)
 
 	w := httptest.NewRecorder()

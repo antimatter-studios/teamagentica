@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ import (
 )
 
 type Handler struct {
+	mu     sync.RWMutex
 	apiKey string
 	model  string
 	debug  bool
@@ -36,6 +38,31 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	changed := false
+	if v, ok := config["GEMINI_API_KEY"]; ok && v != h.apiKey {
+		log.Printf("[config] updating API key")
+		h.apiKey = v
+		changed = true
+	}
+	if v, ok := config["NANOBANANA_MODEL"]; ok && v != "" && v != h.model {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+		changed = true
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+		changed = true
+	}
+	if changed {
+		h.client = nanobanana.NewClient(h.apiKey, h.model, h.debug)
+	}
+}
+
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
 		h.sdk.ReportEvent(eventType, detail)
@@ -44,21 +71,29 @@ func (h *Handler) emitEvent(eventType, detail string) {
 
 // Health returns a simple health check response.
 func (h *Handler) Health(c *gin.Context) {
+	h.mu.RLock()
+	apiKey, model := h.apiKey, h.model
+	h.mu.RUnlock()
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"plugin":     "tool-nanobanana",
-		"version":    "1.0.0",
-		"configured": h.apiKey != "",
-		"default_model": h.model,
+		"status":        "ok",
+		"plugin":        "tool-nanobanana",
+		"version":       "1.0.0",
+		"configured":    apiKey != "",
+		"default_model": model,
 	})
 }
 
 func (h *Handler) Models(c *gin.Context) {
-	if h.apiKey == "" {
+	h.mu.RLock()
+	apiKey, client := h.apiKey, h.client
+	h.mu.RUnlock()
+
+	if apiKey == "" {
 		c.JSON(http.StatusOK, gin.H{"models": []string{}})
 		return
 	}
-	models, err := h.client.ListModels()
+	models, err := client.ListModels()
 	if err != nil {
 		log.Printf("ListModels error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -76,7 +111,11 @@ type generateRequest struct {
 // Generate creates an image from a text prompt. Unlike video tools, this is
 // synchronous — the image data is returned directly in the response.
 func (h *Handler) Generate(c *gin.Context) {
-	if h.apiKey == "" {
+	h.mu.RLock()
+	apiKey, defaultModel, client := h.apiKey, h.model, h.client
+	h.mu.RUnlock()
+
+	if apiKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set GEMINI_API_KEY."})
 		return
 	}
@@ -89,7 +128,7 @@ func (h *Handler) Generate(c *gin.Context) {
 
 	model := req.Model
 	if model == "" {
-		model = h.model
+		model = defaultModel
 	}
 
 	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
@@ -98,7 +137,7 @@ func (h *Handler) Generate(c *gin.Context) {
 
 	start := time.Now()
 
-	result, err := h.client.Generate(nanobanana.GenerateRequest{
+	result, err := client.Generate(nanobanana.GenerateRequest{
 		Prompt:      req.Prompt,
 		Model:       model,
 		AspectRatio: req.AspectRatio,
@@ -165,13 +204,17 @@ func (h *Handler) Generate(c *gin.Context) {
 func (h *Handler) ConfigOptions(c *gin.Context) {
 	field := c.Param("field")
 
+	h.mu.RLock()
+	apiKey, client := h.apiKey, h.client
+	h.mu.RUnlock()
+
 	switch field {
 	case "NANOBANANA_MODEL":
-		if h.apiKey == "" {
+		if apiKey == "" {
 			c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "No API key configured"})
 			return
 		}
-		models, err := h.client.ListModels()
+		models, err := client.ListModels()
 		if err != nil {
 			log.Printf("ListModels error: %v", err)
 			c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": err.Error()})
@@ -211,7 +254,11 @@ type chatRequest struct {
 // Chat wraps Generate and returns a chat-format response with the image
 // embedded as a markdown data URL.
 func (h *Handler) Chat(c *gin.Context) {
-	if h.apiKey == "" {
+	h.mu.RLock()
+	apiKey, defaultModel, client := h.apiKey, h.model, h.client
+	h.mu.RUnlock()
+
+	if apiKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set GEMINI_API_KEY."})
 		return
 	}
@@ -224,7 +271,7 @@ func (h *Handler) Chat(c *gin.Context) {
 
 	model := req.Model
 	if model == "" {
-		model = h.model
+		model = defaultModel
 	}
 
 	// Extract prompt: prefer last user message from conversation, fall back to message field.
@@ -245,7 +292,7 @@ func (h *Handler) Chat(c *gin.Context) {
 
 	start := time.Now()
 
-	result, err := h.client.Generate(nanobanana.GenerateRequest{Prompt: prompt, Model: model})
+	result, err := client.Generate(nanobanana.GenerateRequest{Prompt: prompt, Model: model})
 	if err != nil {
 		log.Printf("Nano Banana chat/generate error: %v", err)
 		h.emitEvent("error", fmt.Sprintf("chat: %v", err))
@@ -311,8 +358,12 @@ func (h *Handler) Tools(c *gin.Context) {
 
 // SystemPrompt returns the system prompt this plugin would use when processing requests.
 func (h *Handler) SystemPrompt(c *gin.Context) {
+	h.mu.RLock()
+	model := h.model
+	h.mu.RUnlock()
+
 	c.JSON(http.StatusOK, gin.H{
-		"system_prompt": buildSystemPrompt(h.model),
+		"system_prompt": buildSystemPrompt(model),
 	})
 }
 

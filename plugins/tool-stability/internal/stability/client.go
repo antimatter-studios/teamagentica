@@ -9,6 +9,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -16,10 +17,13 @@ const baseURL = "https://api.stability.ai/v2beta/stable-image/generate"
 
 // GenerateRequest is the input for image generation.
 type GenerateRequest struct {
-	Prompt         string `json:"prompt"`
-	NegativePrompt string `json:"negative_prompt,omitempty"`
-	AspectRatio    string `json:"aspect_ratio,omitempty"` // 1:1, 16:9, 9:16, etc.
-	OutputFormat   string `json:"output_format,omitempty"` // png or jpeg
+	Prompt         string  `json:"prompt"`
+	NegativePrompt string  `json:"negative_prompt,omitempty"`
+	AspectRatio    string  `json:"aspect_ratio,omitempty"`
+	OutputFormat   string  `json:"output_format,omitempty"`
+	StylePreset    string  `json:"style_preset,omitempty"`
+	CfgScale       float64 `json:"cfg_scale,omitempty"`
+	Seed           int64   `json:"seed,omitempty"`
 }
 
 // GenerateResult holds the generated image data.
@@ -49,9 +53,7 @@ func NewClient(apiKey, model string, debug bool) *Client {
 }
 
 // Generate creates an image from a text prompt via the Stability AI API.
-// Uses multipart/form-data with Accept: application/json to get base64 response.
 func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
-	// Determine endpoint based on model.
 	endpoint := baseURL + "/sd3"
 
 	outputFormat := req.OutputFormat
@@ -74,8 +76,21 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 	writer.WriteField("aspect_ratio", aspectRatio)
 	writer.WriteField("output_format", outputFormat)
 
-	if req.NegativePrompt != "" && c.model != "sd3-large-turbo" {
+	// Negative prompt not supported on turbo/flash models.
+	if req.NegativePrompt != "" && !strings.Contains(c.model, "turbo") && !strings.Contains(c.model, "flash") {
 		writer.WriteField("negative_prompt", req.NegativePrompt)
+	}
+
+	if req.StylePreset != "" {
+		writer.WriteField("style_preset", req.StylePreset)
+	}
+
+	if req.CfgScale > 0 {
+		writer.WriteField("cfg_scale", fmt.Sprintf("%.1f", req.CfgScale))
+	}
+
+	if req.Seed > 0 {
+		writer.WriteField("seed", fmt.Sprintf("%d", req.Seed))
 	}
 
 	writer.Close()
@@ -105,7 +120,6 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Parse error response.
 		var errResp struct {
 			Name   string   `json:"name"`
 			Errors []string `json:"errors"`
@@ -116,7 +130,6 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, truncate(string(respBody), 500))
 	}
 
-	// Parse JSON response with base64 image.
 	var apiResp struct {
 		Image        string `json:"image"`
 		FinishReason string `json:"finish_reason"`
@@ -130,7 +143,6 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 		return nil, fmt.Errorf("no image in response (finish_reason=%s)", apiResp.FinishReason)
 	}
 
-	// Validate base64.
 	if _, err := base64.StdEncoding.DecodeString(apiResp.Image); err != nil {
 		return nil, fmt.Errorf("invalid base64 in response: %w", err)
 	}
@@ -138,6 +150,8 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 	mimeType := "image/png"
 	if outputFormat == "jpeg" {
 		mimeType = "image/jpeg"
+	} else if outputFormat == "webp" {
+		mimeType = "image/webp"
 	}
 
 	return &GenerateResult{
@@ -145,55 +159,6 @@ func (c *Client) Generate(req GenerateRequest) (*GenerateResult, error) {
 		MimeType:  mimeType,
 		Seed:      fmt.Sprintf("%d", apiResp.Seed),
 	}, nil
-}
-
-// ListModels fetches available engines from the Stability AI API.
-func (c *Client) ListModels() ([]string, bool, error) {
-	req, err := http.NewRequest("GET", "https://api.stability.ai/v1/engines/list", nil)
-	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("list engines: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return DefaultModels(), true, fmt.Errorf("list engines returned %d: %s", resp.StatusCode, truncate(string(body), 200))
-	}
-
-	var engines []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(body, &engines); err != nil {
-		return DefaultModels(), true, fmt.Errorf("parse engines: %w", err)
-	}
-
-	var models []string
-	for _, e := range engines {
-		models = append(models, e.ID)
-	}
-
-	if len(models) == 0 {
-		return DefaultModels(), true, nil
-	}
-
-	return models, false, nil
-}
-
-func DefaultModels() []string {
-	return []string{
-		"sd3-medium",
-		"sd3-large",
-		"sd3-large-turbo",
-	}
 }
 
 func truncate(s string, max int) string {
