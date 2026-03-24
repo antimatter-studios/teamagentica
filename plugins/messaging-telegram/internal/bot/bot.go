@@ -56,6 +56,17 @@ type Bot struct {
 	knownChats map[int64]bool // tracked chat IDs (groups + DMs)
 	cacheMu    sync.RWMutex
 	cache      *redis.Client // optional Redis cache for throttling
+
+	// Task group tracking for progress updates.
+	tasksMu    sync.Mutex
+	taskChats  map[string]taskProgress // task_group_id → progress state
+}
+
+// taskProgress tracks a pending task group for progress updates.
+type taskProgress struct {
+	ChatID    int64
+	MessageID int    // Telegram message ID for editMessageText
+	Cancel    context.CancelFunc // cancel typing loop
 }
 
 // New creates a new Bot instance and validates the token via GetMe().
@@ -89,6 +100,7 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		pollStopCh:   make(chan struct{}),
 		shutdownCh:   make(chan struct{}),
 		knownChats:  make(map[int64]bool),
+		taskChats:   make(map[string]taskProgress),
 	}
 
 	b.loadKnownChats()
@@ -646,25 +658,37 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 	// All text routing goes through the relay (alias, coordinator, workspace).
 	if b.relayClient != nil {
 		channelID := fmt.Sprintf("%d", chatID)
-		resp, err := b.relayClient.Chat(channelID, text, imageURLs)
-		msgCancel()
-
+		accepted, err := b.relayClient.Chat(channelID, text, imageURLs)
 		if err != nil {
+			msgCancel()
 			log.Printf("Relay error: %v", err)
 			b.emitEvent("error", fmt.Sprintf("relay: %v", err))
 			b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
 			return
 		}
 
-		b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", resp.Responder, len(resp.Response)))
-
-		response := formatAttributedResponse(resp.Responder, resp.Response)
-		if err := b.sendResponse(chatID, response); err != nil {
-			log.Printf("Error sending response: %v", err)
-			b.emitEvent("error", fmt.Sprintf("send error: %v", err))
-		} else {
-			b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(resp.Response)))
+		// Send initial "Thinking..." message and track it for progress updates.
+		thinkMsg := tgbotapi.NewMessage(chatID, "Thinking...")
+		sent, err := b.api.Send(thinkMsg)
+		if err != nil {
+			msgCancel()
+			log.Printf("Error sending thinking message: %v", err)
+			return
 		}
+
+		// Register task for progress updates — the typing loop continues
+		// and the event handler will update the message.
+		b.tasksMu.Lock()
+		b.taskChats[accepted.TaskGroupID] = taskProgress{
+			ChatID:    chatID,
+			MessageID: sent.MessageID,
+			Cancel:    msgCancel,
+		}
+		b.tasksMu.Unlock()
+
+		b.emitEvent("task_accepted", fmt.Sprintf("task_group=%s chat=%d", accepted.TaskGroupID, chatID))
+		// Don't cancel msgCtx here — the typing loop continues until
+		// the progress event handler calls cancel on completion.
 		return
 	}
 
@@ -834,6 +858,81 @@ func (b *Bot) pollVideoStatus(ctx context.Context, chatID int64, username, provi
 		// Slow down after first 30 seconds.
 		if time.Since(start) > 30*time.Second {
 			interval = laterInterval
+		}
+	}
+}
+
+// HandleRelayProgress processes a relay:progress event for task group updates.
+func (b *Bot) HandleRelayProgress(detail string) {
+	var ev struct {
+		TaskGroupID string `json:"task_group_id"`
+		ChannelID   string `json:"channel_id"`
+		Status      string `json:"status"`
+		Message     string `json:"message"`
+		Response    string `json:"response,omitempty"`
+		Responder   string `json:"responder,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(detail), &ev); err != nil {
+		log.Printf("[progress] failed to parse relay:progress: %v", err)
+		return
+	}
+
+	b.tasksMu.Lock()
+	tp, ok := b.taskChats[ev.TaskGroupID]
+	b.tasksMu.Unlock()
+
+	if !ok {
+		// Not a task we're tracking — might be for a different messaging client.
+		return
+	}
+
+	switch ev.Status {
+	case "completed":
+		// Cancel typing loop.
+		tp.Cancel()
+
+		// Delete the progress message and send the final response.
+		del := tgbotapi.NewDeleteMessage(tp.ChatID, tp.MessageID)
+		b.api.Send(del)
+
+		response := ev.Response
+		if ev.Responder != "" {
+			response = formatAttributedResponse(ev.Responder, response)
+		}
+		if err := b.sendResponse(tp.ChatID, response); err != nil {
+			log.Printf("[progress] error sending final response: %v", err)
+		}
+
+		// Clean up.
+		b.tasksMu.Lock()
+		delete(b.taskChats, ev.TaskGroupID)
+		b.tasksMu.Unlock()
+
+		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s chat=%d", ev.TaskGroupID, tp.ChatID))
+
+	case "failed":
+		tp.Cancel()
+
+		// Update the progress message with the error.
+		edit := tgbotapi.NewEditMessageText(tp.ChatID, tp.MessageID, "Error: "+ev.Message)
+		b.api.Send(edit)
+
+		b.tasksMu.Lock()
+		delete(b.taskChats, ev.TaskGroupID)
+		b.tasksMu.Unlock()
+
+		b.emitEvent("task_failed", fmt.Sprintf("task_group=%s error=%s", ev.TaskGroupID, ev.Message))
+
+	default:
+		// Progress update — edit the thinking message.
+		msg := ev.Message
+		if msg == "" {
+			msg = ev.Status + "..."
+		}
+		edit := tgbotapi.NewEditMessageText(tp.ChatID, tp.MessageID, msg)
+		if _, err := b.api.Send(edit); err != nil {
+			// Telegram may reject edits if content hasn't changed — ignore.
+			log.Printf("[progress] edit message error (may be duplicate): %v", err)
 		}
 	}
 }

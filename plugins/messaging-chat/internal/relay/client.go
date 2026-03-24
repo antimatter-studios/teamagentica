@@ -39,9 +39,12 @@ type Usage struct {
 type Attachment struct {
 	MimeType  string `json:"mime_type"`
 	ImageData string `json:"image_data"`
+	Type      string `json:"type,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
-// Response is the relay's reply, including agent metadata.
+// Response is the relay's full reply, delivered via relay:progress event.
 type Response struct {
 	Response    string       `json:"response"`
 	Responder   string       `json:"responder,omitempty"`
@@ -52,8 +55,14 @@ type Response struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
-// Chat sends a message through the relay and returns the full response.
-func (c *Client) Chat(channelID, message string, imageURLs []string) (*Response, error) {
+// AcceptedResponse is the immediate return from POST /chat.
+type AcceptedResponse struct {
+	TaskGroupID string `json:"task_group_id"`
+}
+
+// Chat sends a message to the relay. Returns a task_group_id immediately.
+// The actual response is delivered via relay:progress events.
+func (c *Client) Chat(channelID, message string, imageURLs []string) (*AcceptedResponse, error) {
 	req := Request{
 		SourcePlugin: c.sourceID,
 		ChannelID:    channelID,
@@ -71,13 +80,13 @@ func (c *Client) Chat(channelID, message string, imageURLs []string) (*Response,
 		return nil, fmt.Errorf("relay: %w", err)
 	}
 
-	var resp Response
+	var resp AcceptedResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	if resp.Response == "" {
-		return nil, fmt.Errorf("empty response from relay")
+	if resp.TaskGroupID == "" {
+		return nil, fmt.Errorf("no task_group_id in relay response")
 	}
 
 	return &resp, nil

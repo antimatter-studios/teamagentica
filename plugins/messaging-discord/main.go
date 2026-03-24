@@ -164,16 +164,20 @@ func main() {
 		}
 	})
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Handler for alias registry events (update + ready).
+	handleAliasEvent := func(event pluginsdk.EventCallback) {
 		infos := convertRegistryAliases(event.Detail)
 		if infos == nil {
-			log.Printf("Failed to parse alias:update detail")
+			log.Printf("Failed to parse alias registry event detail")
 			return
 		}
 		aliases.Replace(infos)
 		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
-	}))
+	}
+
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Subscribe to soft config updates for dynamic changes (immediate).
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -214,6 +218,13 @@ func main() {
 				sourceID = manifest.ID + ":" + entry.Alias
 			}
 			emitCoordinatorEvent(sdkClient, sourceID, entry.Alias)
+		}
+	}))
+
+	// Handle relay progress events — update Discord messages with task status.
+	sdkClient.OnEvent("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		for _, b := range bots {
+			b.HandleRelayProgress(event.Detail)
 		}
 	}))
 

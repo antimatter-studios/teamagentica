@@ -89,19 +89,29 @@ func main() {
 	router.GET("/conversations/:id", h.GetConversation)
 	router.PUT("/conversations/:id", h.UpdateConversation)
 	router.DELETE("/conversations/:id", h.DeleteConversation)
+	router.POST("/conversations/:id/read", h.MarkRead)
 	router.POST("/conversations/:id/messages", h.SendMessage)
 	router.POST("/upload", h.Upload)
 	router.GET("/files/*filepath", h.ServeFile)
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Handler for alias registry events (update + ready).
+	handleAliasEvent := func(event pluginsdk.EventCallback) {
 		infos := convertRegistryAliases(event.Detail)
 		if infos == nil {
-			log.Printf("Failed to parse alias:update detail")
+			log.Printf("Failed to parse alias registry event detail")
 			return
 		}
 		aliases.Replace(infos)
 		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
+	}
+
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+
+	// Handle progress updates from the relay (thinking, running, completed, failed).
+	sdkClient.OnEvent("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		h.HandleRelayProgress(event.Detail)
 	}))
 
 	// Subscribe to config updates for PLUGIN_DEBUG.

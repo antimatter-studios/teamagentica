@@ -112,8 +112,7 @@ func (h *Handler) ListConversations(c *gin.Context) {
 }
 
 type createConversationReq struct {
-	AgentAlias string `json:"agent_alias"`
-	Title      string `json:"title"`
+	Title string `json:"title"`
 }
 
 func (h *Handler) CreateConversation(c *gin.Context) {
@@ -216,58 +215,44 @@ func (h *Handler) DeleteConversation(c *gin.Context) {
 		return
 	}
 
-	// Collect file IDs and storage keys from messages for cleanup.
-	msgs, _ := h.db.ListMessages(uint(id))
-	var fileIDs []string
-	var storageKeys []string
-	for _, msg := range msgs {
-		if msg.Attachments == "" {
-			continue
-		}
-		var atts []storage.Attachment
-		if json.Unmarshal([]byte(msg.Attachments), &atts) == nil {
-			for _, a := range atts {
-				if a.FileID != "" {
-					fileIDs = append(fileIDs, a.FileID)
-				}
-				if a.StorageKey != "" {
-					storageKeys = append(storageKeys, a.StorageKey)
-				}
-			}
-		}
-	}
-
+	// Soft-delete conversation and its messages. Files are preserved.
 	if err := h.db.DeleteConversation(uint(id)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Clean up local files in background.
-	if len(fileIDs) > 0 {
-		go h.files.DeleteFiles(fileIDs)
-	}
-
-	// Clean up sss3 storage keys in background.
-	if len(storageKeys) > 0 {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			for _, key := range storageKeys {
-				if err := h.sdk.StorageDelete(ctx, key); err != nil {
-					log.Printf("[chat] failed to delete storage key %s: %v", key, err)
-				}
-			}
-		}()
-	}
-
 	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+// --- Mark Read ---
+
+func (h *Handler) MarkRead(c *gin.Context) {
+	userID, err := parseUserID(c.GetHeader("Authorization"))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	conv, err := h.db.GetConversation(uint(id))
+	if err != nil || conv.UserID != userID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if err := h.db.MarkRead(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // --- Messages ---
 
 type sendMessageReq struct {
 	Content       string   `json:"content"`
-	AgentAlias    string   `json:"agent_alias"`
 	AttachmentIDs []string `json:"attachment_ids"`
 }
 
@@ -351,10 +336,9 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Send to relay — it handles coordinator resolution, @alias routing, persona injection, and memory.
-	start := time.Now()
-	relayResp, err := h.relay.Chat(channelID, messageText, imageURLs)
-	elapsed := time.Since(start)
+	// Send to relay — returns task_group_id immediately.
+	// The actual response arrives via relay:progress events.
+	accepted, err := h.relay.Chat(channelID, messageText, imageURLs)
 	if err != nil {
 		log.Printf("[chat] relay error: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -364,45 +348,6 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	agentAlias := relayResp.Responder
-
-	// Process structured media attachments from relay response into local files.
-	var allAttachments []storage.Attachment
-	for _, att := range relayResp.Attachments {
-		saved, err := h.saveMediaAttachment(att.MimeType, att.ImageData)
-		if err != nil {
-			log.Printf("[chat] failed to save attachment: %v", err)
-			continue
-		}
-		allAttachments = append(allAttachments, saved)
-	}
-
-	var mediaAttJSON string
-	if len(allAttachments) > 0 {
-		b, _ := json.Marshal(allAttachments)
-		mediaAttJSON = string(b)
-	}
-
-	// Store assistant message with rich metadata for web UI display.
-	assistantMsg := &storage.Message{
-		ConversationID: uint(convID),
-		Role:           "assistant",
-		Content:        relayResp.Response,
-		AgentAlias:     agentAlias,
-		Model:          relayResp.Model,
-		DurationMs:     elapsed.Milliseconds(),
-		Attachments:    mediaAttJSON,
-	}
-	if relayResp.Usage != nil {
-		assistantMsg.InputTokens = relayResp.Usage.PromptTokens
-		assistantMsg.OutputTokens = relayResp.Usage.CompletionTokens
-	}
-	if err := h.db.CreateMessage(assistantMsg); err != nil {
-		log.Printf("[chat] error storing assistant message: %v", err)
-	}
-
-	// Update conversation metadata.
-	conv.UpdatedAt = time.Now()
 	// Auto-title on first exchange.
 	if conv.Title == "New Chat" {
 		title := req.Content
@@ -410,12 +355,13 @@ func (h *Handler) SendMessage(c *gin.Context) {
 			title = title[:50]
 		}
 		conv.Title = title
+		conv.UpdatedAt = time.Now()
+		h.db.UpdateConversation(conv)
 	}
-	h.db.UpdateConversation(conv)
 
-	c.JSON(http.StatusOK, gin.H{
-		"user_message":      userMsg,
-		"assistant_message": assistantMsg,
+	c.JSON(http.StatusAccepted, gin.H{
+		"user_message":   userMsg,
+		"task_group_id":  accepted.TaskGroupID,
 	})
 }
 
@@ -570,6 +516,129 @@ func extFromMime(mimeType string) string {
 		return ".m4a"
 	default:
 		return ".bin"
+	}
+}
+
+// --- Relay Progress ---
+
+// RelayProgressEvent is the payload from a relay:progress addressed event.
+type RelayProgressEvent struct {
+	TaskGroupID string `json:"task_group_id"`
+	ChannelID   string `json:"channel_id"`
+	Status      string `json:"status"` // thinking, planning, running, synthesizing, completed, failed
+	Message     string `json:"message"`
+	// Fields present on completed:
+	Response    string             `json:"response,omitempty"`
+	Responder   string             `json:"responder,omitempty"`
+	Model       string             `json:"model,omitempty"`
+	Backend     string             `json:"backend,omitempty"`
+	CostUSD     float64            `json:"cost_usd,omitempty"`
+	DurationMs  int64              `json:"duration_ms,omitempty"`
+	Usage       *relay.Usage       `json:"usage,omitempty"`
+	Attachments []relay.Attachment `json:"attachments,omitempty"`
+}
+
+// HandleRelayProgress processes a relay:progress event.
+func (h *Handler) HandleRelayProgress(detail string) {
+	var ev RelayProgressEvent
+	if err := json.Unmarshal([]byte(detail), &ev); err != nil {
+		log.Printf("[progress] failed to parse relay:progress: %v", err)
+		return
+	}
+
+	// Parse conversation ID from channel format "chat:<userID>:<convID>".
+	parts := strings.SplitN(ev.ChannelID, ":", 3)
+	if len(parts) != 3 {
+		log.Printf("[progress] unexpected channel format: %s", ev.ChannelID)
+		return
+	}
+	convID, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		log.Printf("[progress] invalid conv ID in channel %s: %v", ev.ChannelID, err)
+		return
+	}
+
+	switch ev.Status {
+	case "completed":
+		// Delete progress markers.
+		h.db.DeleteProgressMessages(uint(convID))
+
+		// Process attachments.
+		var allAttachments []storage.Attachment
+		for _, att := range ev.Attachments {
+			if att.ImageData != "" {
+				saved, err := h.saveMediaAttachment(att.MimeType, att.ImageData)
+				if err != nil {
+					log.Printf("[progress] failed to save attachment: %v", err)
+					continue
+				}
+				allAttachments = append(allAttachments, saved)
+			} else if att.URL != "" {
+				allAttachments = append(allAttachments, storage.Attachment{
+					Type:     att.Type,
+					MimeType: att.MimeType,
+					URL:      att.URL,
+					Filename: att.Filename,
+				})
+			}
+		}
+
+		var mediaAttJSON string
+		if len(allAttachments) > 0 {
+			b, _ := json.Marshal(allAttachments)
+			mediaAttJSON = string(b)
+		}
+
+		// Store assistant message.
+		assistantMsg := &storage.Message{
+			ConversationID: uint(convID),
+			Role:           "assistant",
+			Content:        ev.Response,
+			AgentAlias:     ev.Responder,
+			Model:          ev.Model,
+			CostUSD:        ev.CostUSD,
+			DurationMs:     ev.DurationMs,
+			Attachments:    mediaAttJSON,
+		}
+		if ev.Usage != nil {
+			assistantMsg.InputTokens = ev.Usage.PromptTokens
+			assistantMsg.OutputTokens = ev.Usage.CompletionTokens
+			assistantMsg.CachedTokens = ev.Usage.CachedTokens
+		}
+		if err := h.db.CreateMessage(assistantMsg); err != nil {
+			log.Printf("[progress] error storing assistant message: %v", err)
+		}
+
+		// Update conversation timestamp.
+		if conv, err := h.db.GetConversation(uint(convID)); err == nil {
+			conv.UpdatedAt = time.Now()
+			h.db.UpdateConversation(conv)
+		}
+
+		log.Printf("[progress] stored assistant message for conv %d (tg=%s)", convID, ev.TaskGroupID)
+
+	case "failed":
+		h.db.DeleteProgressMessages(uint(convID))
+
+		// Store error as assistant message so the user sees it.
+		errMsg := &storage.Message{
+			ConversationID: uint(convID),
+			Role:           "assistant",
+			Content:        ev.Message,
+		}
+		h.db.CreateMessage(errMsg)
+		log.Printf("[progress] stored error message for conv %d: %s", convID, ev.Message)
+
+	default:
+		// Progress update — upsert the progress marker.
+		msg := ev.Message
+		if msg == "" {
+			msg = ev.Status + "..."
+		}
+		if _, err := h.db.UpsertProgressMessage(uint(convID), msg); err != nil {
+			log.Printf("[progress] failed to upsert progress: %v", err)
+		}
+		log.Printf("[progress] conv %d: %s", convID, msg)
 	}
 }
 

@@ -28,13 +28,13 @@ type Request struct {
 	ImageURLs    []string `json:"image_urls,omitempty"`
 }
 
-// Response is the relay's reply.
+// Response is the relay's immediate reply with a task group ID.
 type Response struct {
-	Response  string `json:"response"`
-	Responder string `json:"responder,omitempty"`
+	TaskGroupID string `json:"task_group_id"`
 }
 
-// Chat sends a message through the relay and returns the response.
+// Chat sends a message through the relay. Returns a task_group_id immediately.
+// The actual response is delivered via relay:progress events.
 func (c *Client) Chat(channelID, message string, imageURLs []string) (*Response, error) {
 	req := Request{
 		SourcePlugin: c.sourceID,
@@ -58,8 +58,8 @@ func (c *Client) Chat(channelID, message string, imageURLs []string) (*Response,
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	if resp.Response == "" {
-		return nil, fmt.Errorf("empty response from relay")
+	if resp.TaskGroupID == "" {
+		return nil, fmt.Errorf("no task_group_id in relay response")
 	}
 
 	return &resp, nil

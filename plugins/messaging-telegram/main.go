@@ -169,16 +169,20 @@ func main() {
 		}
 	})
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Handler for alias registry events (update + ready).
+	handleAliasEvent := func(event pluginsdk.EventCallback) {
 		infos := convertRegistryAliases(event.Detail)
 		if infos == nil {
-			log.Printf("Failed to parse alias:update detail")
+			log.Printf("Failed to parse alias registry event detail")
 			return
 		}
 		aliases.Replace(infos)
 		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
-	}))
+	}
+
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Subscribe to soft config updates (immediate).
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -210,37 +214,22 @@ func main() {
 		}
 	}))
 
-	// When network-webhook-ingress broadcasts webhook:ready, send our route info.
-	sdkClient.OnEvent("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		log.Printf("Received webhook:ready — sending route update to network-webhook-ingress")
-		sendRouteUpdate(sdkClient, manifest.ID, hostname, httpPort)
-	}))
+	// Register webhook route with the ingress (handles webhook:ready subscription).
+	sdkClient.RegisterWebhook("/" + manifest.ID)
 
-	// When network-webhook-ingress sends us our full webhook URL, switch to webhook mode.
-	sdkClient.OnEvent("webhook:plugin:url", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var data struct {
-			WebhookURL string `json:"webhook_url"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &data); err != nil {
-			log.Printf("Failed to parse webhook:plugin:url: %v", err)
-			return
-		}
-		if data.WebhookURL == "" {
-			log.Printf("webhook:plugin:url has empty webhook_url")
-			return
-		}
-
+	// When we receive our public webhook URL, switch from polling to webhook mode.
+	sdkClient.OnWebhookURL(func(webhookURL string) {
 		if telegramBot == nil {
-			log.Printf("webhook:plugin:url received but no bots configured")
+			log.Printf("webhook URL received but no bots configured")
 			return
 		}
 
-		webhookURL := strings.TrimRight(data.WebhookURL, "/") + "/webhook"
+		webhookURL = strings.TrimRight(webhookURL, "/") + "/webhook"
 		log.Printf("Received webhook URL: %s", webhookURL)
 
-		// Skip if already in webhook mode with the same URL.
+		// Skip if already in webhook mode.
 		if telegramBot.IsWebhookActive() {
-			log.Printf("Already in webhook mode, ignoring duplicate webhook:plugin:url")
+			log.Printf("Already in webhook mode, ignoring duplicate URL")
 			return
 		}
 
@@ -258,6 +247,13 @@ func main() {
 		}
 
 		sdkClient.ReportEvent("webhook", fmt.Sprintf("mode=webhook active url=%s", webhookURL))
+	})
+
+	// Handle relay progress events — update Telegram messages with task status.
+	sdkClient.OnEvent("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		if telegramBot != nil {
+			telegramBot.HandleRelayProgress(event.Detail)
+		}
 	}))
 
 	// Start polling on all bots. For multi-bot mode, webhook is not supported
@@ -366,19 +362,6 @@ func main() {
 	}
 
 	log.Println("Telegram plugin shut down")
-}
-
-// sendRouteUpdate sends an addressed webhook:api:update event to network-webhook-ingress.
-func sendRouteUpdate(sdkClient *pluginsdk.Client, pluginID, hostname string, port int) {
-	payload := map[string]interface{}{
-		"plugin_id":   pluginID,
-		"prefix":      "/" + pluginID,
-		"target_host": hostname,
-		"target_port": port,
-	}
-	data, _ := json.Marshal(payload)
-	sdkClient.ReportAddressedEvent("webhook:api:update", string(data), "network-webhook-ingress")
-	log.Printf("Sent webhook:api:update to network-webhook-ingress: prefix=/%s target=%s:%d", pluginID, hostname, port)
 }
 
 // parseAllowedUsers parses a comma-separated list of Telegram user IDs into a set.

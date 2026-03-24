@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -43,6 +44,16 @@ type Bot struct {
 
 	cacheMu sync.RWMutex
 	cache   *redis.Client // optional Redis cache for throttling
+
+	// Task group tracking for progress updates.
+	tasksMu    sync.Mutex
+	taskChats  map[string]taskProgress // task_group_id → progress state
+}
+
+// taskProgress tracks a pending task group for progress updates.
+type taskProgress struct {
+	ChannelID string
+	MessageID string // Discord message ID for editing
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -65,6 +76,7 @@ func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*B
 		session:      session,
 		kernelClient: kernelClient,
 		aliases:      aliases,
+		taskChats:    make(map[string]taskProgress),
 	}
 
 	b.msgBuffer = msgbuffer.New(1*time.Second, func(channelID string, text string, mediaURLs []string) {
@@ -471,7 +483,7 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 
 	// All text routing goes through the relay (alias, coordinator, workspace).
 	if b.relayClient != nil {
-		resp, err := b.relayClient.Chat(channelID, text, mediaURLs)
+		accepted, err := b.relayClient.Chat(channelID, text, mediaURLs)
 		if err != nil {
 			log.Printf("Relay error: %v", err)
 			b.emitEvent("error", fmt.Sprintf("relay: %v", err))
@@ -479,19 +491,38 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 			return
 		}
 
-		if b.debug.Load() {
-			b.emitEvent("agent_response", fmt.Sprintf("from @%s: %s", resp.Responder, truncate(resp.Response, 200)))
-		} else {
-			b.emitEvent("agent_response", fmt.Sprintf("from @%s (%d chars)", resp.Responder, len(resp.Response)))
+		// Send initial "Thinking..." message and track it for progress updates.
+		sent, err := s.ChannelMessageSend(channelID, "Thinking...")
+		if err != nil {
+			log.Printf("Error sending thinking message: %v", err)
+			return
 		}
 
-		response := formatAttributedResponse(resp.Responder, resp.Response)
-		if err := b.sendResponse(s, channelID, response); err != nil {
-			log.Printf("Error sending response: %v", err)
-			b.emitEvent("error", fmt.Sprintf("send error: %v", err))
-		} else {
-			b.emitEvent("message_sent", fmt.Sprintf("response (%d chars)", len(resp.Response)))
+		// Start typing indicator loop.
+		go func() {
+			ticker := time.NewTicker(8 * time.Second)
+			defer ticker.Stop()
+			for {
+				// Check if task is still tracked.
+				b.tasksMu.Lock()
+				_, active := b.taskChats[accepted.TaskGroupID]
+				b.tasksMu.Unlock()
+				if !active {
+					return
+				}
+				s.ChannelTyping(channelID)
+				<-ticker.C
+			}
+		}()
+
+		b.tasksMu.Lock()
+		b.taskChats[accepted.TaskGroupID] = taskProgress{
+			ChannelID: channelID,
+			MessageID: sent.ID,
 		}
+		b.tasksMu.Unlock()
+
+		b.emitEvent("task_accepted", fmt.Sprintf("task_group=%s channel=%s", accepted.TaskGroupID, channelID))
 		return
 	}
 
@@ -554,7 +585,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 
-	resp, err := b.relayClient.Chat(channelID, callbackMsg, nil)
+	accepted, err := b.relayClient.Chat(channelID, callbackMsg, nil)
 	if err != nil {
 		log.Printf("Menu relay error: %v", err)
 		b.emitEvent("error", fmt.Sprintf("menu relay: %v", err))
@@ -564,18 +595,21 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 
-	response := formatAttributedResponse(resp.Responder, resp.Response)
-	// Split long responses into chunks — followup messages also have the 2000 char limit.
-	chunks := splitMessage(response, maxMessageLength)
-	for j, chunk := range chunks {
-		if j == 0 {
-			s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: chunk})
-		} else {
-			s.ChannelMessageSend(channelID, chunk)
-		}
+	// Send followup as thinking message, track for progress.
+	followup, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: "Thinking..."})
+	if err != nil {
+		log.Printf("Error sending followup: %v", err)
+		return
 	}
 
-	b.emitEvent("menu_response", fmt.Sprintf("from @%s (%d chars)", resp.Responder, len(resp.Response)))
+	b.tasksMu.Lock()
+	b.taskChats[accepted.TaskGroupID] = taskProgress{
+		ChannelID: channelID,
+		MessageID: followup.ID,
+	}
+	b.tasksMu.Unlock()
+
+	b.emitEvent("menu_task_accepted", fmt.Sprintf("task_group=%s", accepted.TaskGroupID))
 }
 
 // isBotMentioned checks whether the bot was mentioned in the message.
@@ -619,6 +653,69 @@ func truncate(s string, maxLen int) string {
 // sendResponse sends a message to the channel, splitting into chunks if over 2000 chars.
 // Retries once on failure — the relay round-trip can take long enough for idle connections
 // to be reset by network proxies, but a fresh connection succeeds immediately.
+// HandleRelayProgress processes a relay:progress event for task group updates.
+func (b *Bot) HandleRelayProgress(detail string) {
+	var ev struct {
+		TaskGroupID string `json:"task_group_id"`
+		ChannelID   string `json:"channel_id"`
+		Status      string `json:"status"`
+		Message     string `json:"message"`
+		Response    string `json:"response,omitempty"`
+		Responder   string `json:"responder,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(detail), &ev); err != nil {
+		log.Printf("[progress] failed to parse relay:progress: %v", err)
+		return
+	}
+
+	b.tasksMu.Lock()
+	tp, ok := b.taskChats[ev.TaskGroupID]
+	b.tasksMu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	switch ev.Status {
+	case "completed":
+		// Delete the thinking message.
+		b.session.ChannelMessageDelete(tp.ChannelID, tp.MessageID)
+
+		// Send the final response.
+		response := ev.Response
+		if ev.Responder != "" {
+			response = formatAttributedResponse(ev.Responder, response)
+		}
+		b.sendResponse(b.session, tp.ChannelID, response)
+
+		b.tasksMu.Lock()
+		delete(b.taskChats, ev.TaskGroupID)
+		b.tasksMu.Unlock()
+
+		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s", ev.TaskGroupID))
+
+	case "failed":
+		// Edit the thinking message with the error.
+		b.session.ChannelMessageEdit(tp.ChannelID, tp.MessageID, "Error: "+ev.Message)
+
+		b.tasksMu.Lock()
+		delete(b.taskChats, ev.TaskGroupID)
+		b.tasksMu.Unlock()
+
+		b.emitEvent("task_failed", fmt.Sprintf("task_group=%s error=%s", ev.TaskGroupID, ev.Message))
+
+	default:
+		// Progress update — edit the thinking message.
+		msg := ev.Message
+		if msg == "" {
+			msg = ev.Status + "..."
+		}
+		if _, err := b.session.ChannelMessageEdit(tp.ChannelID, tp.MessageID, msg); err != nil {
+			log.Printf("[progress] edit error (may be duplicate): %v", err)
+		}
+	}
+}
+
 func (b *Bot) sendResponse(s *discordgo.Session, channelID, response string) error {
 	if len(response) == 0 {
 		response = "(empty response)"

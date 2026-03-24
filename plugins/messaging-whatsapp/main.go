@@ -99,16 +99,20 @@ func main() {
 	router.GET("/webhook", b.VerifyWebhook(verifyToken))
 	router.POST("/webhook", b.HandleWebhook)
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Handler for alias registry events (update + ready).
+	handleAliasEvent := func(event pluginsdk.EventCallback) {
 		infos := convertRegistryAliases(event.Detail)
 		if infos == nil {
-			log.Printf("Failed to parse alias:update detail")
+			log.Printf("Failed to parse alias registry event detail")
 			return
 		}
 		aliases.Replace(infos)
 		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
-	}))
+	}
+
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Subscribe to config updates.
 	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -123,33 +127,15 @@ func main() {
 		_ = detail
 	}))
 
-	// When network-webhook-ingress broadcasts webhook:ready, send our route info.
-	sdkClient.OnEvent("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		log.Printf("Received webhook:ready — sending route update to network-webhook-ingress")
-		payload := map[string]interface{}{
-			"plugin_id":   manifest.ID,
-			"prefix":      "/" + manifest.ID,
-			"target_host": hostname,
-			"target_port": httpPort,
-		}
-		data, _ := json.Marshal(payload)
-		sdkClient.ReportAddressedEvent("webhook:api:update", string(data), "network-webhook-ingress")
-		log.Printf("Sent webhook:api:update to network-webhook-ingress: prefix=/%s", manifest.ID)
-	}))
+	// Register webhook route with the webhooks plugin (handles webhook:ready subscription).
+	sdkClient.RegisterWebhook("/" + manifest.ID)
 
-	// When network-webhook-ingress sends us our full webhook URL, log it.
+	// When webhooks plugin sends us our full webhook URL, log it.
 	// (Meta manages actual webhook registration via their dashboard — we just log for visibility.)
-	sdkClient.OnEvent("webhook:plugin:url", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var data struct {
-			WebhookURL string `json:"webhook_url"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &data); err != nil {
-			log.Printf("Failed to parse webhook:plugin:url: %v", err)
-			return
-		}
-		log.Printf("Webhook URL assigned: %s/webhook", data.WebhookURL)
-		sdkClient.ReportEvent("webhook:url", fmt.Sprintf("url=%s/webhook (Meta manages registration)", data.WebhookURL))
-	}))
+	sdkClient.OnWebhookURL(func(webhookURL string) {
+		log.Printf("Webhook URL assigned: %s/webhook", webhookURL)
+		sdkClient.ReportEvent("webhook:url", fmt.Sprintf("url=%s/webhook (Meta manages registration)", webhookURL))
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", httpPort),
