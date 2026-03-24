@@ -12,10 +12,11 @@ import CodeEditor from "./components/CodeEditor";
 import KanbanBoard from "./components/KanbanBoard";
 import Agents from "./components/Agents";
 import Users from "./components/Users";
-import CronScheduler from "./components/CronScheduler";
+import TaskScheduler from "./components/TaskScheduler";
 import { useAuthStore } from "./stores/authStore";
 import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
+import { useChatStore } from "./stores/chatStore";
 import { useTheme } from "./hooks/useTheme";
 import { useRouter, type Page } from "./hooks/useRouter";
 
@@ -41,6 +42,8 @@ export default function App() {
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
   const disconnectEvents = useEventStore((s) => s.disconnect);
+  const inFlightCount = useChatStore((s) => Object.keys(s.inFlightTasks).length);
+  const totalUnread = useChatStore((s) => s.conversations.reduce((sum, c) => sum + (c.unread_count ?? 0), 0));
 
   const checkCapabilities = useCallback(() => {
     Promise.all([
@@ -48,7 +51,7 @@ export default function App() {
       apiClient.plugins.search("workspace:manager").then((p) => setHasEditor(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("system:tasks").then((p) => setHasTasks(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("tool:aliases").then((p) => setHasAgents(p.length > 0)).catch(() => {}),
-      apiClient.plugins.search("infra:cron").then((p) => setHasScheduler(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("infra:scheduler").then((p) => setHasScheduler(p.length > 0)).catch(() => {}),
     ]).finally(() => setCapabilitiesLoaded(true));
   }, []);
 
@@ -146,6 +149,12 @@ export default function App() {
               onClick={() => setPage("chat")}
             >
               CHAT
+              {inFlightCount > 0 && page !== "chat" && (
+                <span className="nav-badge nav-badge-inflight">{inFlightCount}</span>
+              )}
+              {totalUnread > 0 && inFlightCount === 0 && page !== "chat" && (
+                <span className="nav-badge nav-badge-resolved">{totalUnread}</span>
+              )}
             </button>
           )}
           {hasEditor && (
@@ -242,7 +251,7 @@ export default function App() {
       {page === "costs" && <CostDashboard />}
       {page === "console" && <DebugConsole />}
       {page === "users" && <Users />}
-      {page === "scheduler" && <CronScheduler />}
+      {page === "scheduler" && <TaskScheduler />}
 
       {/* Chat and Code stay mounted (hidden) to preserve iframe/websocket state */}
       {hasChat && (

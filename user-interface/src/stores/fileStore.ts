@@ -36,6 +36,14 @@ interface FileStore {
   pasteMoveItem: (key: string) => Promise<void>;
   createFolder: (name: string) => Promise<void>;
   createFile: (name: string) => Promise<void>;
+  // Sidebar refresh
+  sidebarVersion: number;
+  // Trash
+  trashMode: boolean;
+  setTrashMode: (on: boolean) => void;
+  browseTrash: (prefix: string) => Promise<void>;
+  restoreFile: (key: string) => Promise<void>;
+  emptyTrash: (key?: string) => Promise<void>;
 }
 
 export const useFileStore = create<FileStore>((set, get) => ({
@@ -48,6 +56,8 @@ export const useFileStore = create<FileStore>((set, get) => ({
   error: null,
   selectedFile: null,
   viewingFile: null,
+
+  sidebarVersion: 0,
 
   selectFile: (file) => set({ selectedFile: file }),
   viewFile: (file) => set({ viewingFile: file }),
@@ -75,7 +85,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
     set({ loading: true, error: null, prefix, selectedFile: null, viewingFile: null });
     try {
       const result = await apiClient.files.browse(provider.id, prefix);
-      set({ folders: result.folders || [], files: result.files || [], loading: false });
+      set((s) => ({ folders: result.folders || [], files: result.files || [], loading: false, sidebarVersion: s.sidebarVersion + 1 }));
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : "Browse failed" });
     }
@@ -265,6 +275,63 @@ export const useFileStore = create<FileStore>((set, get) => ({
   },
 
   refresh: async () => {
-    await get().browse(get().prefix);
+    const provider = get().selectedProvider;
+    if (provider) {
+      // Re-warm the backend index to pick up any out-of-band changes.
+      await apiClient.files.refreshIndex(provider.id).catch(() => {});
+    }
+    if (get().trashMode) {
+      await get().browseTrash(get().prefix);
+    } else {
+      await get().browse(get().prefix);
+    }
+  },
+
+  // Trash
+  trashMode: false,
+
+  setTrashMode: (on: boolean) => {
+    set({ trashMode: on, prefix: "", folders: [], files: [], selectedFile: null, viewingFile: null });
+    if (on) {
+      get().browseTrash("");
+    } else {
+      get().browse("");
+    }
+  },
+
+  browseTrash: async (prefix: string) => {
+    const provider = get().selectedProvider;
+    if (!provider) return;
+    set({ loading: true, error: null, prefix, selectedFile: null, viewingFile: null });
+    try {
+      const result = await apiClient.files.browseTrash(provider.id, prefix);
+      set((s) => ({ folders: result.folders || [], files: result.files || [], loading: false, sidebarVersion: s.sidebarVersion + 1 }));
+    } catch (err) {
+      set({ loading: false, error: err instanceof Error ? err.message : "Browse trash failed" });
+    }
+  },
+
+  restoreFile: async (key: string) => {
+    const provider = get().selectedProvider;
+    if (!provider) return;
+    set({ error: null });
+    try {
+      await apiClient.files.restoreFromTrash(provider.id, key);
+      await get().browseTrash(get().prefix);
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Restore failed" });
+    }
+  },
+
+  emptyTrash: async (key?: string) => {
+    const provider = get().selectedProvider;
+    if (!provider) return;
+    set({ error: null });
+    try {
+      await apiClient.files.emptyTrash(provider.id, key);
+      await get().browseTrash(get().prefix);
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Empty trash failed" });
+    }
   },
 }));

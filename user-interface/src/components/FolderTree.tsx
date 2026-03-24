@@ -12,16 +12,22 @@ interface FolderTreeProps {
   provider: Plugin;
   isSelected: boolean;
   activePath: string;
+  trashActive: boolean;
+  refreshVersion: number;
   onSelectProvider: (p: Plugin) => void;
   onNavigate: (prefix: string) => void;
+  onTrashClick: () => void;
 }
 
 export default function FolderTree({
   provider,
   isSelected,
   activePath,
+  trashActive,
+  refreshVersion,
   onSelectProvider,
   onNavigate,
+  onTrashClick,
 }: FolderTreeProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FolderNode[] | null>(null);
@@ -42,6 +48,16 @@ export default function FolderTree({
         .finally(() => setLoading(false));
     }
   }, [expanded]);
+
+  // Re-fetch root children when storage changes (e.g. new folder created).
+  useEffect(() => {
+    if (!isSelected || !expanded || refreshVersion === 0) return;
+    apiClient.files.browse(provider.id, "")
+      .then((r) =>
+        setChildren((r.folders || []).map((f) => ({ path: f, name: folderName(f) })))
+      )
+      .catch(() => {});
+  }, [refreshVersion]);
 
   const handleRootClick = () => {
     if (!isSelected) onSelectProvider(provider);
@@ -80,7 +96,7 @@ export default function FolderTree({
             </div>
           )}
           {children &&
-            children.map((node, i) => (
+            children.map((node) => (
               <TreeNode
                 key={node.path}
                 node={node}
@@ -88,10 +104,19 @@ export default function FolderTree({
                 isProviderSelected={isSelected}
                 activePath={activePath}
                 onNavigate={onNavigate}
-                isLast={i === children.length - 1}
+                isLast={false}
                 parentPrefix=""
               />
             ))}
+          {/* Trash virtual item — always last */}
+          <button
+            className={`ftree-row ftree-trash ${isSelected && trashActive ? "active" : ""}`}
+            onClick={(e) => { e.stopPropagation(); onTrashClick(); }}
+          >
+            <span className="ftree-prefix">{"└─ "}</span>
+            <span className="ftree-icon">{"\uD83D\uDDD1\uFE0E"}</span>
+            <span className="ftree-name">Trash</span>
+          </button>
         </div>
       )}
     </div>
@@ -173,6 +198,7 @@ function TreeNode({
         onClick={handleClick}
       >
         <span className="ftree-prefix">{parentPrefix}{branch}</span>
+        <span className="ftree-icon">{expanded ? "\uD83D\uDCC2" : "\uD83D\uDCC1"}</span>
         <span className="ftree-name">{node.name}</span>
       </button>
       {expanded && loading && (

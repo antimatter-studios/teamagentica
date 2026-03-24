@@ -35,6 +35,10 @@ const MAX_EVENTS = 500;
 
 let abortController: AbortController | null = null;
 
+// Kernel sends keepalive comments every 15s. If we receive nothing for 20s,
+// the connection is stale — throw to trigger reconnect.
+const STALE_TIMEOUT_MS = 20_000;
+
 async function readSSE(
   signal: AbortSignal,
   onAudit: (evt: DebugEvent) => void,
@@ -60,29 +64,49 @@ async function readSSE(
   let buffer = "";
   let currentChannel = "audit";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // Stale connection watchdog — resets on every chunk received.
+  let staleTimer = setTimeout(() => {
+    reader.cancel();
+  }, STALE_TIMEOUT_MS);
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+  const resetStaleTimer = () => {
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(() => {
+      reader.cancel();
+    }, STALE_TIMEOUT_MS);
+  };
 
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        currentChannel = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        try {
-          const parsed = JSON.parse(line.slice(6));
-          if (currentChannel === "event") {
-            onEvent(parsed as EventLogEntry);
-          } else {
-            onAudit(parsed as DebugEvent);
-          }
-        } catch {}
-        currentChannel = "audit"; // reset after consuming data
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      resetStaleTimer();
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          currentChannel = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          try {
+            const parsed = JSON.parse(line.slice(6));
+            if (currentChannel === "event") {
+              onEvent(parsed as EventLogEntry);
+            } else {
+              onAudit(parsed as DebugEvent);
+            }
+          } catch {}
+          currentChannel = "audit"; // reset after consuming data
+        }
+        // keepalive comments (": keepalive") are implicitly handled —
+        // the chunk arrival already reset the stale timer above.
       }
     }
+  } finally {
+    clearTimeout(staleTimer);
   }
   onStatus(false);
 }
@@ -106,6 +130,7 @@ export const useEventStore = create<EventStore>((set) => ({
     };
 
     const addEventLog = (entry: EventLogEntry) => {
+      console.log("[sse] event-channel entry:", entry.id, entry.event_type, entry.detail?.substring(0, 120));
       set((state) => {
         const next = [entry, ...state.eventLogEvents];
         return { eventLogEvents: next.length > MAX_EVENTS ? next.slice(0, MAX_EVENTS) : next };

@@ -5,6 +5,20 @@ import { useUploadStore } from "../stores/uploadStore";
 import { apiClient } from "../api/client";
 import { formatBytes, filenameFromKey, folderName } from "@teamagentica/api-client";
 
+/** Simple file-type icon based on content_type or filename extension. */
+function fileIcon(contentType: string, filename: string): string {
+  if (contentType.startsWith("image/")) return "🖼";
+  if (contentType.startsWith("video/")) return "🎬";
+  if (contentType.startsWith("audio/")) return "🎵";
+  if (contentType === "application/pdf") return "📄";
+  if (contentType.startsWith("text/")) return "📝";
+  const ext = filename.split(".").pop()?.toLowerCase() || "";
+  if (["zip", "tar", "gz", "rar", "7z"].includes(ext)) return "📦";
+  if (["json", "yaml", "yml", "xml", "toml"].includes(ext)) return "⚙";
+  if (["js", "ts", "go", "py", "rs", "c", "cpp", "java", "sh"].includes(ext)) return "📜";
+  return "📄";
+}
+
 async function downloadFile(pluginId: string, key: string) {
   const isFolder = key.endsWith("/");
   const blob = isFolder
@@ -51,6 +65,12 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     selectFile,
     viewingFile,
     viewFile,
+    trashMode,
+    setTrashMode,
+    browseTrash,
+    restoreFile,
+    emptyTrash,
+    sidebarVersion,
   } = useFileStore(
     useShallow((s) => ({
       providers: s.providers,
@@ -69,6 +89,12 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
       selectFile: s.selectFile,
       viewingFile: s.viewingFile,
       viewFile: s.viewFile,
+      trashMode: s.trashMode,
+      setTrashMode: s.setTrashMode,
+      browseTrash: s.browseTrash,
+      restoreFile: s.restoreFile,
+      emptyTrash: s.emptyTrash,
+      sidebarVersion: s.sidebarVersion,
     }))
   );
 
@@ -86,7 +112,9 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
   const createFile = useFileStore((s) => s.createFile);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [deleteModal, setDeleteModal] = useState<{ key: string; permanent?: boolean } | null>(null);
+  const [emptyTrashModal, setEmptyTrashModal] = useState(false);
+  const [restoreModal, setRestoreModal] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; key: string } | null>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [creating, setCreating] = useState<"folder" | "file" | null>(null);
@@ -95,15 +123,20 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
   const restoredFromUrl = useRef(false);
 
   // Notify parent of navigation so it can update the URL.
-  const notifyPath = useCallback((providerId: string, pfx: string) => {
-    onPathChange?.(pfx ? `${providerId}/${pfx}` : providerId);
+  const notifyPath = useCallback((providerId: string, pfx: string, trash?: boolean) => {
+    const trashSegment = trash ? ".trash/" : "";
+    onPathChange?.(pfx ? `${providerId}/${trashSegment}${pfx}` : `${providerId}/${trashSegment}`);
   }, [onPathChange]);
 
   // Wrap browse to also notify parent.
   const handleBrowse = useCallback((pfx: string) => {
-    browse(pfx);
-    if (selectedProvider) notifyPath(selectedProvider.id, pfx);
-  }, [browse, selectedProvider, notifyPath]);
+    if (trashMode) {
+      browseTrash(pfx);
+    } else {
+      browse(pfx);
+    }
+    if (selectedProvider) notifyPath(selectedProvider.id, pfx, trashMode);
+  }, [browse, browseTrash, trashMode, selectedProvider, notifyPath]);
 
   // Wrap selectProvider to also notify parent.
   const handleSelectProvider = useCallback((p: Parameters<typeof selectProvider>[0]) => {
@@ -121,13 +154,20 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     restoredFromUrl.current = true;
     const slashIdx = initialPath.indexOf("/");
     const providerId = slashIdx === -1 ? initialPath : initialPath.slice(0, slashIdx);
-    const urlPrefix = slashIdx === -1 ? "" : initialPath.slice(slashIdx + 1);
+    let urlPrefix = slashIdx === -1 ? "" : initialPath.slice(slashIdx + 1);
+    const isTrash = urlPrefix.startsWith(".trash/");
+    if (isTrash) urlPrefix = urlPrefix.slice(".trash/".length);
     const provider = providers.find((p) => p.id === providerId);
     if (provider) {
       selectProvider(provider);
-      if (urlPrefix) browse(urlPrefix);
+      if (isTrash) {
+        setTrashMode(true);
+        if (urlPrefix) browseTrash(urlPrefix);
+      } else if (urlPrefix) {
+        browse(urlPrefix);
+      }
     }
-  }, [providers, initialPath, selectProvider, browse]);
+  }, [providers, initialPath, selectProvider, browse, browseTrash, setTrashMode]);
 
   const handleUpload = () => fileInputRef.current?.click();
 
@@ -139,12 +179,7 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
   };
 
   const handleDelete = (key: string) => {
-    if (confirmDelete === key) {
-      deleteFile(key);
-      setConfirmDelete(null);
-    } else {
-      setConfirmDelete(key);
-    }
+    setDeleteModal({ key, permanent: false });
   };
 
   const handleDownload = (key: string) => {
@@ -226,9 +261,24 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                 key={p.id}
                 provider={p}
                 isSelected={selectedProvider?.id === p.id}
-                activePath={selectedProvider?.id === p.id ? prefix : ""}
+                activePath={selectedProvider?.id === p.id && !trashMode ? prefix : ""}
+                trashActive={selectedProvider?.id === p.id && trashMode}
+                refreshVersion={sidebarVersion}
                 onSelectProvider={handleSelectProvider}
-                onNavigate={handleBrowse}
+                onNavigate={(pfx) => {
+                  if (trashMode) {
+                    setTrashMode(false);
+                    if (pfx) setTimeout(() => browse(pfx), 0);
+                    notifyPath(p.id, pfx);
+                  } else {
+                    handleBrowse(pfx);
+                  }
+                }}
+                onTrashClick={() => {
+                  if (selectedProvider?.id !== p.id) handleSelectProvider(p);
+                  setTrashMode(true);
+                  notifyPath(p.id, "", true);
+                }}
               />
             ))}
           </div>
@@ -249,10 +299,28 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
               <div className="file-breadcrumbs">
                 <button
                   className="file-breadcrumb-btn"
-                  onClick={() => handleBrowse("")}
+                  onClick={() => {
+                    if (trashMode) {
+                      setTrashMode(false);
+                      if (selectedProvider) notifyPath(selectedProvider.id, "");
+                    } else {
+                      handleBrowse("");
+                    }
+                  }}
                 >
                   {selectedProvider?.name || selectedProvider?.id || "Disk"}
                 </button>
+                {trashMode && (
+                  <>
+                    <span className="file-breadcrumb-sep">/</span>
+                    <button
+                      className="file-breadcrumb-btn file-trash-crumb"
+                      onClick={() => handleBrowse("")}
+                    >
+                      Trash
+                    </button>
+                  </>
+                )}
                 {breadcrumbs.map((part, i) => {
                   const crumbPath = breadcrumbs.slice(0, i + 1).join("/") + "/";
                   return (
@@ -272,22 +340,35 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                 <button className="file-action-btn" onClick={refresh} title="Refresh">
                   &#x21bb;
                 </button>
-                <button className="file-new-btn file-new-folder" onClick={() => setCreating("folder")} title="New Folder">
-                  + FOLDER
-                </button>
-                <button className="file-new-btn file-new-file" onClick={() => setCreating("file")} title="New File">
-                  + FILE
-                </button>
-                <button className="file-upload-btn" onClick={handleUpload}>
-                  UPLOAD
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  style={{ display: "none" }}
-                  onChange={handleFileChange}
-                />
+                {!trashMode && (
+                  <>
+                    <button className="file-new-btn file-new-folder" onClick={() => setCreating("folder")} title="New Folder">
+                      + FOLDER
+                    </button>
+                    <button className="file-new-btn file-new-file" onClick={() => setCreating("file")} title="New File">
+                      + FILE
+                    </button>
+                    <button className="file-upload-btn" onClick={handleUpload}>
+                      UPLOAD
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={handleFileChange}
+                    />
+                  </>
+                )}
+                {trashMode && (
+                  <button
+                    className="file-action-btn file-delete-btn"
+                    onClick={() => setEmptyTrashModal(true)}
+                    title="Empty Trash"
+                  >
+                    EMPTY TRASH
+                  </button>
+                )}
               </div>
             </div>
 
@@ -320,6 +401,7 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                     {creating && (
                       <div className="file-row file-create-row">
                         <span className="file-col-name">
+                          <span className="file-icon">{creating === "folder" ? "📁" : "📄"}</span>
                           <input
                             ref={createInputRef}
                             className="file-rename-input"
@@ -365,7 +447,7 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <>{folderName(f)}/</>
+                            <><span className="file-icon">📁</span>{folderName(f)}/</>
                           )}
                         </span>
                         <span className="file-col-size">-</span>
@@ -397,40 +479,67 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            filenameFromKey(f.key)
+                            <><span className="file-icon">{fileIcon(f.content_type || "", filenameFromKey(f.key))}</span>{filenameFromKey(f.key)}</>
                           )}
                         </span>
                         <span className="file-col-size">{formatBytes(f.size)}</span>
                         <span className="file-col-type">{f.content_type || "-"}</span>
                         <span className="file-col-modified">
                           {f.last_modified
-                            ? new Date(f.last_modified).toLocaleDateString()
+                            ? new Date(f.last_modified).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
                             : "-"}
                         </span>
                         <span className="file-col-actions">
-                          {canPreview(f) && (
-                            <button
-                              className="file-action-btn"
-                              onClick={(e) => { e.stopPropagation(); viewFile(f); }}
-                              title="View"
-                            >
-                              &#x1F441;&#xFE0E;
-                            </button>
+                          {trashMode ? (
+                            <>
+                              <button
+                                className="file-action-btn file-restore-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRestoreModal(f.key);
+                                }}
+                                title="Restore"
+                              >
+                                &#x21A9;
+                              </button>
+                              <button
+                                className="file-action-btn file-delete-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteModal({ key: f.key, permanent: true });
+                                }}
+                                title="Delete permanently"
+                              >
+                                &#x2716;
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {canPreview(f) && (
+                                <button
+                                  className="file-action-btn"
+                                  onClick={(e) => { e.stopPropagation(); viewFile(f); }}
+                                  title="View"
+                                >
+                                  &#x1F441;&#xFE0E;
+                                </button>
+                              )}
+                              <button
+                                className="file-action-btn"
+                                onClick={(e) => { e.stopPropagation(); handleDownload(f.key); }}
+                                title="Download"
+                              >
+                                &#x2B07;
+                              </button>
+                              <button
+                                className="file-action-btn file-delete-btn"
+                                onClick={(e) => { e.stopPropagation(); handleDelete(f.key); }}
+                                title="Delete"
+                              >
+                                &#x2716;
+                              </button>
+                            </>
                           )}
-                          <button
-                            className="file-action-btn"
-                            onClick={(e) => { e.stopPropagation(); handleDownload(f.key); }}
-                            title="Download"
-                          >
-                            &#x2B07;
-                          </button>
-                          <button
-                            className={`file-action-btn file-delete-btn ${confirmDelete === f.key ? "confirm" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); handleDelete(f.key); }}
-                            title={confirmDelete === f.key ? "Click again to confirm" : "Delete"}
-                          >
-                            {confirmDelete === f.key ? "?" : "\u2716"}
-                          </button>
                         </span>
                       </div>
                     ))}
@@ -497,6 +606,96 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
         )
       )}
       <UploadQueue />
+
+      {/* Delete confirmation modal */}
+      {deleteModal && (
+        <div className="modal-overlay" onClick={() => setDeleteModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+            <div className="modal-header">
+              <div className="modal-title">{deleteModal.permanent ? "Permanently delete" : "Delete"}</div>
+            </div>
+            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
+              Are you sure you want to {deleteModal.permanent ? "permanently delete" : "delete"}{" "}
+              <strong>"{filenameFromKey(deleteModal.key)}"</strong>?
+              {deleteModal.permanent && " This cannot be undone."}
+            </p>
+            <div className="modal-actions">
+              <button className="modal-btn modal-btn--ghost" onClick={() => setDeleteModal(null)}>
+                No
+              </button>
+              <button
+                className="modal-btn modal-btn--danger"
+                onClick={() => {
+                  if (deleteModal.permanent) {
+                    emptyTrash(deleteModal.key);
+                  } else {
+                    deleteFile(deleteModal.key);
+                  }
+                  setDeleteModal(null);
+                }}
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Empty trash confirmation modal */}
+      {emptyTrashModal && (
+        <div className="modal-overlay" onClick={() => setEmptyTrashModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+            <div className="modal-header">
+              <div className="modal-title">Empty Trash</div>
+            </div>
+            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
+              Are you sure you want to permanently delete all items in the trash? This cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button className="modal-btn modal-btn--ghost" onClick={() => setEmptyTrashModal(false)}>
+                No
+              </button>
+              <button
+                className="modal-btn modal-btn--danger"
+                onClick={() => {
+                  emptyTrash();
+                  setEmptyTrashModal(false);
+                }}
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore confirmation modal */}
+      {restoreModal && (
+        <div className="modal-overlay" onClick={() => setRestoreModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+            <div className="modal-header">
+              <div className="modal-title">Restore file</div>
+            </div>
+            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
+              Do you want to restore <strong>"{filenameFromKey(restoreModal)}"</strong>?
+            </p>
+            <div className="modal-actions">
+              <button className="modal-btn modal-btn--ghost" onClick={() => setRestoreModal(null)}>
+                No
+              </button>
+              <button
+                className="modal-btn modal-btn--primary"
+                onClick={() => {
+                  restoreFile(restoreModal);
+                  setRestoreModal(null);
+                }}
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

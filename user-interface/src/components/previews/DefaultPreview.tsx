@@ -1,7 +1,7 @@
 import type { PreviewProps } from "./registry";
 
-export default function DefaultPreview({ file }: PreviewProps) {
-  const ext = file.key.split(".").pop()?.toUpperCase() || "FILE";
+export default function DefaultPreview({ filename }: PreviewProps) {
+  const ext = filename.split(".").pop()?.toUpperCase() || "FILE";
   return (
     <div className="file-preview-placeholder">
       <span className="file-preview-placeholder-ext">{ext}</span>

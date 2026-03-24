@@ -1,9 +1,174 @@
+import React, { useState } from "react";
 import type { Plugin } from "@teamagentica/api-client";
 import {
   usePluginConfig,
   type ConfigField,
-  type SchemaSection,
+  type SelectOption,
 } from "../hooks/usePluginConfig";
+
+// Extract value and label from a select option (string or {label, value}).
+function optValue(opt: SelectOption): string {
+  return typeof opt === "string" ? opt : opt.value;
+}
+function optLabel(opt: SelectOption): string {
+  return typeof opt === "string" ? opt : opt.label;
+}
+
+/** Truncate text to maxLen characters with ellipsis. */
+function truncate(text: string, maxLen: number): string {
+  return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
+}
+
+/** Format milliseconds as a human-readable duration. */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+interface DAGNode {
+  id: string;
+  alias: string;
+  tool?: string;
+  prompt?: string;
+  state: string;
+  duration_ms?: number;
+  error?: string;
+}
+
+/** Collapsible raw JSON debug view. */
+function DAGRawJson({ item }: { item: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="dag-raw-json-section">
+      <div className="dag-raw-json-toggle" onClick={() => setOpen(!open)}>
+        <span style={{ marginRight: 6, display: "inline-block", width: 10, fontSize: 9 }}>
+          {open ? "▼" : "▶"}
+        </span>
+        Raw JSON
+      </div>
+      {open && (
+        <pre className="schema-readonly-json" style={{ margin: 0, padding: "8px 0" }}>
+          {JSON.stringify(item, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** Expandable item row — click to reveal DAG node detail. */
+function ExpandableItem({ item, idx }: { item: Record<string, unknown>; idx: number }) {
+  const [open, setOpen] = useState(false);
+  const state = String(item.state || "");
+  const stateColor = state === "running" ? "#f59e0b"
+    : state === "completed" ? "#22c55e"
+    : state === "failed" ? "#ef4444"
+    : "#888";
+  const message = String(item.message || "");
+  const nodes = (item.nodes || []) as DAGNode[];
+
+  return (
+    <div key={String(item.id || idx)}>
+      <div
+        className="schema-readonly-row schema-readonly-row-clickable"
+        onClick={() => setOpen(!open)}
+        style={{ cursor: "pointer" }}
+      >
+        <span style={{ color: stateColor, fontWeight: state === "running" ? 600 : 400 }}>
+          <span style={{ marginRight: 6, display: "inline-block", width: 12, fontSize: 10 }}>
+            {open ? "▼" : "▶"}
+          </span>
+          {String(item.time || "")} {truncate(message, 30)}
+        </span>
+        <span className="schema-readonly-value" style={{ color: stateColor }}>
+          {String(item.summary || "")}
+        </span>
+      </div>
+      {open && (
+        <div className="dag-detail">
+          <div className="dag-detail-message">{message}</div>
+          {nodes.length > 0 && (
+            <div className="dag-nodes-grid">
+              <div className="dag-nodes-header">
+                <span>STATUS</span>
+                <span>ALIAS</span>
+                <span>TOOL</span>
+                <span>DURATION</span>
+              </div>
+              {nodes.map((node, ni) => {
+                const nc = node.state === "running" ? "#f59e0b"
+                  : node.state === "completed" ? "#22c55e"
+                  : node.state === "failed" ? "#ef4444"
+                  : "#888";
+                const icon = node.state === "running" ? "▶"
+                  : node.state === "completed" ? "✓"
+                  : node.state === "failed" ? "✗"
+                  : "○";
+                return (
+                  <React.Fragment key={node.id || ni}>
+                    <div className="dag-node-row">
+                      <span style={{ color: nc }}>{icon} {node.state}</span>
+                      <span>@{node.alias}</span>
+                      <span style={{ color: "var(--text-muted)" }}>{node.tool || "—"}</span>
+                      <span>{node.duration_ms ? formatDuration(node.duration_ms) : "—"}</span>
+                    </div>
+                    {node.prompt && (
+                      <div className="dag-node-prompt">
+                        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>prompt:</span>
+                        <span style={{ fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          {node.prompt}
+                        </span>
+                      </div>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          )}
+          {nodes.length === 0 && (
+            <div className="dag-nodes-empty">No steps recorded</div>
+          )}
+          <DAGRawJson item={item} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+import type { SchemaSection } from "../hooks/usePluginConfig";
+
+function ReadonlySection({ section }: { section: SchemaSection }) {
+  return (
+    <div className="schema-readonly-section">
+      <div className="schema-readonly-header">
+        {section.name.replace(/_/g, " ").toUpperCase()}
+      </div>
+      <div className="schema-readonly-fields">
+        {section.items ? (
+          <>
+            {section.items.map((item, idx) => (
+              <ExpandableItem key={String(item.id || idx)} item={item} idx={idx} />
+            ))}
+            {section.items.length === 0 && (
+              <div className="schema-readonly-empty">No entries</div>
+            )}
+          </>
+        ) : (
+          <>
+            {section.fields.map((f) => (
+              <div className="schema-readonly-row" key={f.key}>
+                <span className="schema-readonly-key">{f.key}</span>
+                <span className="schema-readonly-value">{f.value}</span>
+              </div>
+            ))}
+            {section.fields.length === 0 && (
+              <div className="schema-readonly-empty">No entries</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   plugin: Plugin;
@@ -206,7 +371,8 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
           const isLoading = dyn?.loading ?? false;
           const dynError = dyn?.error;
           const opts = dyn?.options ?? [];
-          const allOpts = field.value && !opts.includes(field.value)
+          const optValues = opts.map(optValue);
+          const allOpts = field.value && !optValues.includes(field.value)
             ? [field.value, ...opts]
             : opts;
           const isDisabled = isReadOnly || isLoading || !!dynError;
@@ -228,7 +394,7 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
                   <>
                     <option value="">-- Select --</option>
                     {allOpts.map((opt) => (
-                      <option key={opt} value={opt}>{opt}</option>
+                      <option key={optValue(opt)} value={optValue(opt)}>{optLabel(opt)}</option>
                     ))}
                   </>
                 )}
@@ -252,7 +418,7 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
           >
             <option value="">-- Select --</option>
             {schema.options.map((opt) => (
-              <option key={opt} value={opt}>{opt}</option>
+              <option key={optValue(opt)} value={optValue(opt)}>{optLabel(opt)}</option>
             ))}
           </select>
         ) : fieldType === "boolean" ? (
@@ -340,22 +506,7 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
       })}
 
       {extraSections.length > 0 && extraSections.map((section) => (
-        <div className="schema-readonly-section" key={section.name}>
-          <div className="schema-readonly-header">
-            {section.name.replace(/_/g, " ").toUpperCase()}
-          </div>
-          <div className="schema-readonly-fields">
-            {section.fields.map((f) => (
-              <div className="schema-readonly-row" key={f.key}>
-                <span className="schema-readonly-key">{f.key}</span>
-                <span className="schema-readonly-value">{f.value}</span>
-              </div>
-            ))}
-            {section.fields.length === 0 && (
-              <div className="schema-readonly-empty">No entries</div>
-            )}
-          </div>
-        </div>
+        <ReadonlySection key={section.name} section={section} />
       ))}
 
       {plugin.status === "running" && dirty && (

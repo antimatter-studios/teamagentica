@@ -19,8 +19,10 @@ export interface OAuthFieldState {
   error?: string;
 }
 
+export type SelectOption = string | { label: string; value: string };
+
 export interface DynamicOptionState {
-  options: string[];
+  options: SelectOption[];
   loading: boolean;
   error?: string;
   fallback?: boolean;
@@ -29,6 +31,8 @@ export interface DynamicOptionState {
 export interface SchemaSection {
   name: string;
   fields: { key: string; value: string }[];
+  /** Structured list items (e.g. DAGs) — present when the schema value is an array of objects. */
+  items?: Record<string, unknown>[];
 }
 
 export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
@@ -165,6 +169,46 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     }
   }
 
+  // Fetch readonly schema sections (non-config) from running plugin.
+  async function refreshExtraSections() {
+    if (plugin.status !== "running") {
+      setExtraSections([]);
+      return;
+    }
+    try {
+      const fullSchema = await apiClient.plugins.getSchema(plugin.id);
+      const sections: SchemaSection[] = [];
+      for (const [sectionName, raw] of Object.entries(fullSchema)) {
+        if (sectionName === "config") continue;
+        if (typeof raw !== "object" || raw === null) continue;
+        if (Array.isArray(raw)) {
+          // Array of objects (e.g. DAGs) — store as structured items.
+          sections.push({ name: sectionName, fields: [], items: raw as Record<string, unknown>[] });
+          continue;
+        }
+        const kvMap = raw as Record<string, unknown>;
+        const sectionFields = Object.entries(kvMap)
+          .map(([k, v]) => ({
+            key: k,
+            value: typeof v === "string" ? v : v == null ? "" : JSON.stringify(v),
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key));
+        sections.push({ name: sectionName, fields: sectionFields });
+      }
+      sections.sort((a, b) => a.name.localeCompare(b.name));
+      setExtraSections(sections);
+    } catch {
+      // Non-critical — just skip extra sections.
+    }
+  }
+
+  // Poll readonly sections every 1s while plugin is running.
+  useEffect(() => {
+    if (plugin.status !== "running") return;
+    const timer = setInterval(refreshExtraSections, 1000);
+    return () => clearInterval(timer);
+  }, [plugin.id, plugin.status]);
+
   useEffect(() => {
     async function load() {
       try {
@@ -192,31 +236,8 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
 
         setFields(configFields);
 
-        // Fetch full schema to extract non-config readonly sections.
-        if (plugin.status === "running") {
-          try {
-            const fullSchema = await apiClient.plugins.getSchema(plugin.id);
-            const sections: SchemaSection[] = [];
-            for (const [sectionName, raw] of Object.entries(fullSchema)) {
-              if (sectionName === "config") continue;
-              if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
-              const kvMap = raw as Record<string, unknown>;
-              const sectionFields = Object.entries(kvMap)
-                .map(([k, v]) => ({
-                  key: k,
-                  value: typeof v === "string" ? v : v == null ? "" : JSON.stringify(v),
-                }))
-                .sort((a, b) => a.key.localeCompare(b.key));
-              sections.push({ name: sectionName, fields: sectionFields });
-            }
-            sections.sort((a, b) => a.name.localeCompare(b.name));
-            setExtraSections(sections);
-          } catch {
-            // Non-critical — just skip extra sections.
-          }
-        } else {
-          setExtraSections([]);
-        }
+        // Initial fetch of readonly sections.
+        await refreshExtraSections();
 
         const dynamicFields = Object.entries(schema).filter(
           ([, f]) => f.dynamic && f.type === "select"

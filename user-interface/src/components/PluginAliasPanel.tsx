@@ -80,7 +80,7 @@ export default function PluginAliasPanel({ plugin, onSaved }: Props) {
     setModelsLoading(true);
     setModelsError("");
     apiClient.plugins.getFieldOptions(plugin.id, modelFieldKey)
-      .then((res) => setModelOptions(res.options || []))
+      .then((res) => setModelOptions((res.options || []).map((o) => typeof o === "string" ? o : o.value)))
       .catch((err) => {
         setModelsError(err instanceof Error ? err.message : "Failed to fetch models");
       })

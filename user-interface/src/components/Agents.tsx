@@ -12,7 +12,7 @@ const CAPABILITY_MAP: Record<string, string[]> = {
   tool: ["tool:", "storage:", "infra:"],
 };
 
-const DEFAULT_COORDINATOR = "default-coordinator";
+const COORDINATOR_ALIAS = "coordinator";
 
 interface SidebarSection {
   key: string;
@@ -115,12 +115,12 @@ export default function Agents({ subpath, onNavigate }: Props) {
     }
 
     if (!route) {
-      const hasCoordinator = personas.some((p) => p.alias === DEFAULT_COORDINATOR);
+      const hasCoordinator = personas.some((p) => p.alias === COORDINATOR_ALIAS);
       return (
         <div className="agents-main-empty">
           {!hasCoordinator && (
             <div className="agents-error" style={{ marginBottom: 16 }}>
-              No "{DEFAULT_COORDINATOR}" persona configured — task dispatch will not work.
+              No "{COORDINATOR_ALIAS}" persona configured — create one to enable task dispatch.
             </div>
           )}
           <p>Select an item from the sidebar or create a new one.</p>

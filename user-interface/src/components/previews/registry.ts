@@ -1,9 +1,14 @@
 import type { ComponentType } from "react";
-import type { StorageFile } from "@teamagentica/api-client";
 
 export interface PreviewProps {
-  file: StorageFile;
-  pluginId: string;
+  /** blob URL for binary content (images, PDFs, video) or text content for text-based previews */
+  src: string;
+  filename: string;
+  contentType: string;
+  /** optional CSS class override for the outermost wrapper */
+  className?: string;
+  /** optional click handler (e.g. open full-size) */
+  onClick?: () => void;
 }
 
 export type PreviewComponent = ComponentType<PreviewProps>;
@@ -53,6 +58,14 @@ registerPreview(
 registerPreview(
   (ct, filename) => ct === "application/pdf" || /\.pdf$/i.test(filename),
   () => import("./PdfPreview"),
+);
+
+// Video
+const VIDEO_EXTENSIONS = /\.(mp4|webm|ogv|mov|avi|mkv)$/i;
+
+registerPreview(
+  (ct, filename) => ct.startsWith("video/") || VIDEO_EXTENSIONS.test(filename),
+  () => import("./VideoPreview"),
 );
 
 // Text / code / JSON — broad catch-all for readable files

@@ -1,9 +1,17 @@
-import { lazy, Suspense, useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { StorageFile } from "@teamagentica/api-client";
 import { formatBytes, filenameFromKey } from "@teamagentica/api-client";
+import { apiClient } from "../api/client";
 import { findPreview } from "./previews/registry";
 
 const DefaultPreview = lazy(() => import("./previews/DefaultPreview"));
+
+const TEXT_TYPES = /^text\/|application\/json|application\/xml|application\/x-yaml/;
+const TEXT_EXTENSIONS = /\.(txt|json|csv|xml|yaml|yml|toml|ini|cfg|conf|log|env|sh|bash|zsh|fish|bat|cmd|ps1|py|rb|js|jsx|ts|tsx|go|rs|c|cpp|h|hpp|java|kt|scala|swift|cs|php|lua|r|sql|graphql|gql|html|htm|css|scss|sass|less|vue|svelte|astro|makefile|dockerfile|gitignore|gitattributes|editorconfig|eslintrc|prettierrc|babelrc|md|mdx|markdown)$/i;
+
+function isTextContent(contentType: string, filename: string): boolean {
+  return TEXT_TYPES.test(contentType) || TEXT_EXTENSIONS.test(filename);
+}
 
 interface Props {
   file: StorageFile;
@@ -13,14 +21,51 @@ interface Props {
 
 export default function FileInfoPanel({ file, pluginId, onClose }: Props) {
   const filename = filenameFromKey(file.key);
+  const contentType = file.content_type || "";
   const ext = filename.includes(".") ? filename.split(".").pop()!.toUpperCase() : "-";
 
+  const [src, setSrc] = useState<string | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
+
   const PreviewComponent = useMemo(() => {
-    const loader = findPreview(file.content_type || "", filename);
+    const loader = findPreview(contentType, filename);
     return loader ? lazy(loader) : null;
-  }, [file.content_type, filename]);
+  }, [contentType, filename]);
 
   const Preview = PreviewComponent || DefaultPreview;
+
+  useEffect(() => {
+    setSrc(null);
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+
+    let cancelled = false;
+
+    if (isTextContent(contentType, filename)) {
+      apiClient.files.fetchText(pluginId, file.key)
+        .then((text) => { if (!cancelled) setSrc(text); })
+        .catch(() => {});
+    } else {
+      apiClient.files.fetchBlob(pluginId, file.key)
+        .then((blob) => {
+          if (cancelled) return;
+          const url = URL.createObjectURL(blob);
+          blobUrlRef.current = url;
+          setSrc(url);
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      cancelled = true;
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, [pluginId, file.key, contentType, filename]);
 
   return (
     <div className="file-info-panel">
@@ -34,7 +79,11 @@ export default function FileInfoPanel({ file, pluginId, onClose }: Props) {
       <div className="file-info-body">
         {/* Preview area */}
         <Suspense fallback={<div className="file-preview-placeholder">Loading...</div>}>
-          <Preview file={file} pluginId={pluginId} />
+          {src !== null ? (
+            <Preview src={src} filename={filename} contentType={contentType} />
+          ) : (
+            <div className="file-preview-placeholder">Loading...</div>
+          )}
         </Suspense>
 
         {/* Properties */}

@@ -36,6 +36,13 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
   const handlePluginChange = (pluginId: string) => {
     setPlugin(pluginId);
     setModel("");
+    setProvider("");
+  };
+
+  const handleModelChange = (m: string) => {
+    setModel(m);
+    const slash = m.indexOf("/");
+    setProvider(slash > 0 ? m.slice(0, slash) : "");
   };
 
   const save = useCallback(async () => {
@@ -128,7 +135,7 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
         {modelsLoading ? (
           <span className="agents-models-loading">loading...</span>
         ) : models.length > 0 ? (
-          <select className="agents-select" value={model} onChange={(e) => setModel(e.target.value)}>
+          <select className="agents-select" value={model} onChange={(e) => handleModelChange(e.target.value)}>
             <option value="">Default</option>
             {models.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -136,22 +143,24 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
           <input
             className="agents-input"
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => handleModelChange(e.target.value)}
             placeholder={plugin ? "no models found" : "select plugin first"}
             disabled={!plugin}
           />
         )}
       </div>
 
-      <div className="agents-form-field">
-        <label className="agents-form-label">Provider</label>
-        <input
-          className="agents-input"
-          value={provider}
-          onChange={(e) => setProvider(e.target.value)}
-          placeholder="provider"
-        />
-      </div>
+      {provider && (
+        <div className="agents-form-field">
+          <label className="agents-form-label">Provider</label>
+          <input
+            className="agents-input"
+            value={provider}
+            readOnly
+            style={{ opacity: 0.7 }}
+          />
+        </div>
+      )}
 
       <div className="agents-form-field agents-form-field--grow">
         <label className="agents-form-label">System Prompt</label>
