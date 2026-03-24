@@ -11,17 +11,19 @@ import (
 type TargetType int
 
 const (
-	TargetAgent TargetType = iota
-	TargetImage
-	TargetVideo
-	TargetStorage
+	TargetAgent   TargetType = iota // agent:chat — has /chat, can be called directly
+	TargetImage                     // agent:tool:image — has /chat, direct-callable
+	TargetVideo                     // agent:tool:video — has /chat, direct-callable
+	TargetStorage                   // storage:* — MCP-only, must go through an agent
+	TargetTool                      // tool:* — MCP-only, must go through an agent
 )
 
 // Target describes the plugin an alias resolves to.
 type Target struct {
-	PluginID string
-	Model    string // optional, agents only
-	Type     TargetType
+	PluginID     string
+	Model        string   // optional, agents only
+	Type         TargetType
+	Capabilities []string // original capabilities, used for prompt generation
 }
 
 // AliasEntry is a single alias→target pair for listing.
@@ -87,13 +89,13 @@ func buildMap(infos []AliasInfo) map[string]Target {
 		if name == "" || target == "" {
 			continue
 		}
-		aliases[name] = targetFromInfo(target, info.Capabilities)
+		aliases[name] = TargetFromInfo(target, info.Capabilities)
 	}
 	return aliases
 }
 
-// targetFromInfo determines the Target from a plugin ID and its capabilities.
-func targetFromInfo(pluginID string, capabilities []string) Target {
+// TargetFromInfo determines the Target from a plugin ID and its capabilities.
+func TargetFromInfo(pluginID string, capabilities []string) Target {
 	// Check for model override: "agent-openai:gpt-4o".
 	model := ""
 	if idx := strings.Index(pluginID, ":"); idx > 0 {
@@ -102,24 +104,34 @@ func targetFromInfo(pluginID string, capabilities []string) Target {
 	}
 
 	targetType := typeFromCapabilities(capabilities)
-	return Target{PluginID: pluginID, Model: model, Type: targetType}
+	return Target{PluginID: pluginID, Model: model, Type: targetType, Capabilities: capabilities}
 }
 
 // typeFromCapabilities determines the target type from plugin capabilities.
+// agent:tool:* plugins have /chat and can be called directly (TargetImage/Video).
+// tool:* and storage:* plugins are MCP-only (TargetTool/TargetStorage) and must
+// be used through an agent.
 func typeFromCapabilities(capabilities []string) TargetType {
 	for _, cap := range capabilities {
-		if strings.HasPrefix(cap, "agent:tool:image") || strings.HasPrefix(cap, "tool:image") {
+		// agent:tool:* — direct-callable, has /chat endpoint.
+		if strings.HasPrefix(cap, "agent:tool:image") {
 			return TargetImage
 		}
-		if strings.HasPrefix(cap, "agent:tool:video") || strings.HasPrefix(cap, "tool:video") {
+		if strings.HasPrefix(cap, "agent:tool:video") {
 			return TargetVideo
 		}
+		// tool:* and storage:* — MCP-only, no /chat.
 		if strings.HasPrefix(cap, "tool:storage") || strings.HasPrefix(cap, "storage:") {
 			return TargetStorage
+		}
+		if strings.HasPrefix(cap, "tool:") {
+			return TargetTool
 		}
 	}
 	return TargetAgent
 }
+
+
 
 // Parse checks whether text starts with @alias and returns the match.
 // Only matches at the start of the message (case-insensitive).
@@ -229,6 +241,33 @@ func (m *AliasMap) With(name string, target Target) *AliasMap {
 	return result
 }
 
+// Set adds or replaces a single alias entry (copy-on-write).
+func (m *AliasMap) Set(name string, target Target) {
+	old := m.getMap()
+	clone := make(map[string]Target, len(old)+1)
+	for k, v := range old {
+		clone[k] = v
+	}
+	clone[strings.ToLower(strings.TrimSpace(name))] = target
+	m.p.Store(&clone)
+}
+
+// Remove deletes a single alias entry (copy-on-write). No-op if not found.
+func (m *AliasMap) Remove(name string) {
+	old := m.getMap()
+	key := strings.ToLower(strings.TrimSpace(name))
+	if _, ok := old[key]; !ok {
+		return
+	}
+	clone := make(map[string]Target, len(old))
+	for k, v := range old {
+		if k != key {
+			clone[k] = v
+		}
+	}
+	m.p.Store(&clone)
+}
+
 // IsEmpty returns true if no aliases are configured.
 func (m *AliasMap) IsEmpty() bool {
 	aliases := m.getMap()
@@ -238,106 +277,28 @@ func (m *AliasMap) IsEmpty() bool {
 // ToolInfo describes a discovered tool for system prompt generation.
 type ToolInfo struct {
 	FullName    string // e.g. "nb2__generate_image" or "tool-nanobanana__generate_image"
+	Name        string // short name, e.g. "generate_video"
 	Description string
 	PluginID    string
-	AliasName   string // empty for anonymous tools
+	AliasName   string                 // empty for anonymous tools
+	Endpoint    string                 // e.g. "/generate", "/status/:taskId"
+	Parameters  map[string]interface{} // JSON Schema for the tool's parameters
 }
 
-// SystemPromptBlock generates the alias-awareness section for the coordinator's
-// system prompt. Returns "" if no aliases are configured.
+// SystemPromptBlock generates a simple alias-awareness section listing
+// available agents and tools. Used by the MCP server to give agents
+// awareness of the platform. The full coordinator prompt (with routing
+// instructions) is now generated by the relay's template.
 func (m *AliasMap) SystemPromptBlock() string {
-	return m.SystemPromptBlockWithTools(nil)
-}
-
-// SystemPromptBlockWithTools generates the coordinator system prompt with full
-// tool/agent context. If discoveredTools is provided, anonymous (non-aliased)
-// tools are also listed so the coordinator knows all available capabilities.
-func (m *AliasMap) SystemPromptBlockWithTools(discoveredTools []ToolInfo) string {
 	entries := m.List()
-	if len(entries) == 0 && len(discoveredTools) == 0 {
+	if len(entries) == 0 {
 		return ""
 	}
 
-	var agents, aliasedTools, storageAliases []AliasEntry
-	for _, e := range entries {
-		switch e.Target.Type {
-		case TargetAgent:
-			agents = append(agents, e)
-		case TargetImage, TargetVideo:
-			aliasedTools = append(aliasedTools, e)
-		case TargetStorage:
-			storageAliases = append(storageAliases, e)
-		}
-	}
-
 	var sb strings.Builder
-	sb.WriteString("You are the coordinator agent. You can answer directly or delegate to specialized agents and tools.\n\n")
-
-	if len(agents) > 0 {
-		sb.WriteString("AVAILABLE AGENTS:\n")
-		for _, e := range agents {
-			desc := e.Target.PluginID
-			if e.Target.Model != "" {
-				desc += " (model: " + e.Target.Model + ")"
-			}
-			sb.WriteString(fmt.Sprintf("- @%s → %s\n", e.Alias, desc))
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(aliasedTools) > 0 {
-		sb.WriteString("AVAILABLE TOOLS (aliased):\n")
-		for _, e := range aliasedTools {
-			toolType := "image generation"
-			if e.Target.Type == TargetVideo {
-				toolType = "video generation"
-			}
-			desc := fmt.Sprintf("%s via %s", toolType, e.Target.PluginID)
-			if e.Target.Model != "" {
-				desc += " (model: " + e.Target.Model + ")"
-			}
-			sb.WriteString(fmt.Sprintf("- @%s → %s\n", e.Alias, desc))
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(storageAliases) > 0 {
-		sb.WriteString("AVAILABLE STORAGE:\n")
-		for _, e := range storageAliases {
-			desc := fmt.Sprintf("file storage via %s", e.Target.PluginID)
-			sb.WriteString(fmt.Sprintf("- @%s → %s — use its tools (list_files, read_file, write_file, delete_file, create_folder) to save and retrieve files\n", e.Alias, desc))
-		}
-		sb.WriteString("\n")
-	}
-
-	// List anonymous tools (not covered by any alias).
-	aliasedPlugins := make(map[string]bool)
+	sb.WriteString("Available agents and tools on this platform:\n")
 	for _, e := range entries {
-		aliasedPlugins[e.Target.PluginID] = true
+		sb.WriteString(fmt.Sprintf("- @%s → %s\n", e.Alias, e.Target.PluginID))
 	}
-	var anonTools []ToolInfo
-	for _, t := range discoveredTools {
-		if t.AliasName == "" && !aliasedPlugins[t.PluginID] {
-			anonTools = append(anonTools, t)
-		}
-	}
-	if len(anonTools) > 0 {
-		sb.WriteString("AVAILABLE TOOLS (anonymous — no alias):\n")
-		for _, t := range anonTools {
-			desc := t.Description
-			if desc == "" {
-				desc = t.PluginID
-			}
-			sb.WriteString(fmt.Sprintf("- %s → %s\n", t.FullName, desc))
-		}
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("ROUTING INSTRUCTIONS:\n")
-	sb.WriteString("- If the request requires delegation, respond with a JSON task plan:\n```json\n{\"tasks\": [{\"id\": \"t1\", \"alias\": \"agentName\", \"prompt\": \"task\", \"depends_on\": []}]}\n```\n")
-	sb.WriteString("- Tasks with empty depends_on run in parallel. Reference prior results with {tN} in prompts.\n")
-	sb.WriteString("- Use alias \"self\" to synthesize results in worker mode (combine multiple outputs into a final answer).\n")
-	sb.WriteString("- If you can answer directly without delegation, just respond normally — no JSON needed.\n")
-
 	return sb.String()
 }

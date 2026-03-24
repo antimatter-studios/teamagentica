@@ -79,6 +79,59 @@ func LoadManifest() Manifest {
 	return m
 }
 
+// SelectOption represents a select field option with a display label and API value.
+// It can be unmarshaled from either a plain string or a {label, value} object.
+type SelectOption struct {
+	Label string `json:"label" yaml:"label"`
+	Value string `json:"value" yaml:"value"`
+}
+
+// UnmarshalYAML allows SelectOption to be parsed from a plain string or a map.
+func (o *SelectOption) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Try string first
+	var s string
+	if err := unmarshal(&s); err == nil {
+		o.Label = s
+		o.Value = s
+		return nil
+	}
+	// Try map
+	type raw struct {
+		Label string `yaml:"label"`
+		Value string `yaml:"value"`
+	}
+	var r raw
+	if err := unmarshal(&r); err != nil {
+		return err
+	}
+	o.Label = r.Label
+	o.Value = r.Value
+	return nil
+}
+
+// UnmarshalJSON allows SelectOption to be parsed from a plain string or a JSON object.
+func (o *SelectOption) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		o.Label = s
+		o.Value = s
+		return nil
+	}
+	// Try object
+	type raw struct {
+		Label string `json:"label"`
+		Value string `json:"value"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	o.Label = r.Label
+	o.Value = r.Value
+	return nil
+}
+
 // ConfigSchemaField describes a single configuration field for a plugin.
 type ConfigSchemaField struct {
 	Type        string            `json:"type" yaml:"type"`
@@ -87,7 +140,7 @@ type ConfigSchemaField struct {
 	Secret      bool              `json:"secret,omitempty" yaml:"secret,omitempty"`
 	ReadOnly    bool              `json:"readonly,omitempty" yaml:"readonly,omitempty"`
 	Default     string            `json:"default,omitempty" yaml:"default,omitempty"`
-	Options     []string          `json:"options,omitempty" yaml:"options,omitempty"`
+	Options     []SelectOption    `json:"options,omitempty" yaml:"options,omitempty"`
 	Dynamic     bool              `json:"dynamic,omitempty" yaml:"dynamic,omitempty"`
 	HelpText    string            `json:"help_text,omitempty" yaml:"help_text,omitempty"`
 	VisibleWhen *VisibleWhen      `json:"visible_when,omitempty" yaml:"visible_when,omitempty"`
@@ -705,6 +758,84 @@ func (c *Client) handleEventCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// ── Webhook helpers ──────────────────────────────────────────────────────────
+
+// RegisterWebhook registers this plugin's webhook route with the webhook ingress.
+// prefix is the URL prefix the ingress will match (e.g. "/tool-seedance").
+// Also subscribes to webhook:ready so the route is re-registered if the ingress restarts.
+func (c *Client) RegisterWebhook(prefix string) {
+	// Ensure prefix starts with /
+	if prefix == "" || prefix[0] != '/' {
+		prefix = "/" + prefix
+	}
+
+	pluginID := c.registration.ID
+	hostname := c.registration.Host
+	port := c.registration.Port
+
+	send := func() {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"plugin_id":   pluginID,
+			"prefix":      prefix,
+			"target_host": hostname,
+			"target_port": port,
+		})
+		c.ReportAddressedEvent("webhook:api:update", string(payload), "network-webhook")
+		log.Printf("pluginsdk: sent webhook route to ingress: prefix=%s target=%s:%d", prefix, hostname, port)
+	}
+
+	// Subscribe to webhook:ready so we re-register when the ingress (re)starts.
+	c.OnEvent("webhook:ready", NewNullDebouncer(func(event EventCallback) {
+		log.Printf("pluginsdk: webhook:ready received — registering route")
+		send()
+	}))
+}
+
+// OnWebhookURL registers a callback that fires when the webhook ingress sends
+// this plugin its public webhook URL. The callback receives the full URL
+// (e.g. "https://abc.ngrok.io/tool-seedance").
+func (c *Client) OnWebhookURL(fn func(webhookURL string)) {
+	c.OnEvent("webhook:plugin:url", NewNullDebouncer(func(event EventCallback) {
+		var data struct {
+			WebhookURL string `json:"webhook_url"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &data); err != nil {
+			log.Printf("pluginsdk: failed to parse webhook:plugin:url: %v", err)
+			return
+		}
+		if data.WebhookURL == "" {
+			log.Printf("pluginsdk: webhook:plugin:url has empty URL")
+			return
+		}
+		log.Printf("pluginsdk: received webhook URL: %s", data.WebhookURL)
+		fn(data.WebhookURL)
+	}))
+}
+
+// ── Progress helpers ────────────────────────────────────────────────────────
+
+// ProgressUpdate describes a status update from an async task.
+type ProgressUpdate struct {
+	TaskID      string `json:"task_id"`
+	Status      string `json:"status"`      // "processing", "completed", "failed"
+	Message     string `json:"message"`     // human-readable status text
+	VideoURL    string `json:"video_url,omitempty"`
+	Attachments []struct {
+		Type     string `json:"type,omitempty"`
+		MimeType string `json:"mime_type,omitempty"`
+		URL      string `json:"url,omitempty"`
+		Filename string `json:"filename,omitempty"`
+	} `json:"attachments,omitempty"`
+}
+
+// ReportRelayProgress sends a progress update to the agent relay via addressed event.
+// The relay can forward this to the appropriate messaging plugin.
+func (c *Client) ReportRelayProgress(update ProgressUpdate) {
+	payload, _ := json.Marshal(update)
+	c.ReportAddressedEvent("relay:task:progress", string(payload), "infra-agent-relay")
+	log.Printf("pluginsdk: sent progress to relay: task=%s status=%s", update.TaskID, update.Status)
 }
 
 // FetchAliases retrieves the current alias list from the alias-registry plugin
