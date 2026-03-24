@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -85,6 +86,18 @@ func main() {
 	}, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
+
+	// Apply config updates in-place without restarting the container.
+	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Config map[string]string `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("[config] failed to parse config:update detail: %v", err)
+			return
+		}
+		h.ApplyConfig(detail.Config)
+	}))
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", defaultPort),

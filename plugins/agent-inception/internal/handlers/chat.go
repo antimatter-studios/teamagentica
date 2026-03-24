@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +18,7 @@ import (
 
 // Handler holds the plugin's configuration and exposes HTTP handlers.
 type Handler struct {
+	mu            sync.RWMutex
 	apiKey        string
 	model         string
 	endpoint      string
@@ -46,6 +49,38 @@ func NewHandler(apiKey, model, endpoint, dataPath string, debug, diffusing, inst
 // SetSDK attaches the plugin SDK client for event reporting.
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+}
+
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v, ok := config["INCEPTION_API_KEY"]; ok {
+		h.apiKey = v
+	}
+	if v, ok := config["INCEPTION_MODEL"]; ok && v != "" {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+	}
+	if v, ok := config["INCEPTION_API_ENDPOINT"]; ok && v != "" {
+		log.Printf("[config] updating endpoint: %s → %s", h.endpoint, v)
+		h.endpoint = v
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+	}
+	if v, ok := config["INCEPTION_DIFFUSING"]; ok {
+		h.diffusing = v == "true"
+	}
+	if v, ok := config["INCEPTION_INSTANT"]; ok {
+		h.instant = v == "true"
+	}
+	if v, ok := config["TOOL_LOOP_LIMIT"]; ok && v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			log.Printf("[config] updating tool_loop_limit: %d → %d", h.toolLoopLimit, n)
+			h.toolLoopLimit = n
+		}
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -139,12 +174,11 @@ func (h *Handler) Chat(c *gin.Context) {
 		h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
 	}
 
-	// Build agent's own system prompt.
-	identityPrompt := req.SystemPrompt
-	if identityPrompt == "" {
-		identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
+	// Use injected system prompt (enriched by the relay) or fall back to embedded default.
+	systemPrompt := req.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = h.defaultPrompt
 	}
-	systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 	if systemPrompt != "" {
 		filtered := make([]inception.Message, 0, len(messages))
 		for _, m := range messages {
@@ -213,9 +247,9 @@ func (h *Handler) Chat(c *gin.Context) {
 					result = fmt.Sprintf(`{"error": "%s"}`, err.Error())
 				} else {
 					h.emitEvent("tool_result", fmt.Sprintf("tool=%s result_len=%d", tc.Function.Name, len(result)))
-					cleaned, att := processToolResultMedia(result)
-					if att != nil {
-						mediaAttachments = append(mediaAttachments, *att)
+					cleaned, atts := processToolResultMedia(result)
+					if len(atts) > 0 {
+						mediaAttachments = append(mediaAttachments, atts...)
 						result = cleaned
 					}
 				}
@@ -406,11 +440,10 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+// SystemPrompt returns the system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
+		"default_prompt": h.defaultPrompt,
 	})
 }
 
@@ -437,11 +470,8 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 		}
 	}
 
-	aliases := discoverAliases(h.sdk)
-
 	c.JSON(http.StatusOK, gin.H{
-		"tools":          entries,
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases),
+		"tools": entries,
 	})
 }
 

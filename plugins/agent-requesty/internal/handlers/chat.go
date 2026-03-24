@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ import (
 )
 
 type Handler struct {
+	mu     sync.RWMutex
 	apiKey string
 	model  string
 	debug  bool
@@ -34,6 +36,26 @@ func NewHandler(apiKey, model, dataPath string, debug bool) *Handler {
 
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+}
+
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v, ok := config["REQUESTY_API_KEY"]; ok {
+		h.apiKey = v
+		h.client = requesty.NewClient(v, h.debug)
+		log.Printf("[config] updated API key")
+	}
+	if v, ok := config["REQUESTY_MODEL"]; ok && v != "" {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+		h.client = requesty.NewClient(h.apiKey, h.debug)
+		log.Printf("[config] debug: %v", h.debug)
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,7 @@ import (
 )
 
 type Handler struct {
+	mu            sync.RWMutex
 	apiKey        string
 	model         string
 	toolLoopLimit int
@@ -49,6 +51,34 @@ func NewHandler(cfg HandlerConfig) *Handler {
 
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+}
+
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v, ok := config["GEMINI_MODEL"]; ok && v != "" {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+	}
+	rebuildClient := false
+	if v, ok := config["GEMINI_API_KEY"]; ok {
+		if v != h.apiKey {
+			h.apiKey = v
+			rebuildClient = true
+		}
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		newDebug := v == "true"
+		if newDebug != h.debug {
+			h.debug = newDebug
+			rebuildClient = true
+		}
+	}
+	if rebuildClient {
+		h.client = gemini.NewClient(h.apiKey, h.debug)
+		log.Printf("[config] rebuilt gemini client (debug=%v)", h.debug)
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -127,12 +157,11 @@ func (h *Handler) Chat(c *gin.Context) {
 		h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
 	}
 
-	// Build agent's own system prompt.
-	identityPrompt := req.SystemPrompt
-	if identityPrompt == "" {
-		identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
+	// Use injected system prompt (enriched by the relay) or fall back to embedded default.
+	systemPrompt := req.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = h.defaultPrompt
 	}
-	systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 	if systemPrompt != "" {
 		filtered := make([]gemini.Message, 0, len(messages))
 		for _, m := range messages {
@@ -189,9 +218,9 @@ func (h *Handler) Chat(c *gin.Context) {
 				result = fmt.Sprintf(`{"error": "%s"}`, execErr.Error())
 			} else {
 				h.emitEvent("tool_result", fmt.Sprintf("tool=%s result_len=%d", fc.Name, len(result)))
-				cleaned, att := processToolResultMedia(result)
-				if att != nil {
-					mediaAttachments = append(mediaAttachments, *att)
+				cleaned, atts := processToolResultMedia(result)
+				if len(atts) > 0 {
+					mediaAttachments = append(mediaAttachments, atts...)
 					result = cleaned
 				}
 			}
@@ -286,9 +315,8 @@ func (h *Handler) Chat(c *gin.Context) {
 
 // SystemPrompt returns the system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
+		"default_prompt": h.defaultPrompt,
 	})
 }
 
@@ -315,12 +343,8 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 		}
 	}
 
-	aliases := discoverAliases(h.sdk)
-	systemPrompt := buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases)
-
 	c.JSON(http.StatusOK, gin.H{
-		"tools":          entries,
-		"default_prompt": systemPrompt,
+		"tools": entries,
 	})
 }
 

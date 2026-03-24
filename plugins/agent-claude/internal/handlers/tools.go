@@ -8,7 +8,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"text/template"
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
@@ -34,73 +33,6 @@ type toolCache struct {
 }
 
 var globalToolCache = &toolCache{ttl: 60 * time.Second}
-
-// aliasEntry holds a cached alias from the kernel.
-type aliasEntry struct {
-	Name         string
-	Target       string
-	Capabilities []string
-}
-
-// aliasCache holds discovered aliases with a TTL.
-type aliasCache struct {
-	mu        sync.RWMutex
-	aliases   []aliasEntry
-	fetchedAt time.Time
-	ttl       time.Duration
-}
-
-var globalAliasCache = &aliasCache{ttl: 60 * time.Second}
-
-// discoverAliases fetches the current alias list from the kernel via the SDK.
-func discoverAliases(sdk *pluginsdk.Client) []aliasEntry {
-	if sdk == nil {
-		return nil
-	}
-
-	globalAliasCache.mu.RLock()
-	if time.Since(globalAliasCache.fetchedAt) < globalAliasCache.ttl && globalAliasCache.aliases != nil {
-		aliases := globalAliasCache.aliases
-		globalAliasCache.mu.RUnlock()
-		return aliases
-	}
-	globalAliasCache.mu.RUnlock()
-
-	globalAliasCache.mu.Lock()
-	defer globalAliasCache.mu.Unlock()
-
-	if time.Since(globalAliasCache.fetchedAt) < globalAliasCache.ttl && globalAliasCache.aliases != nil {
-		return globalAliasCache.aliases
-	}
-
-	fetched, err := sdk.FetchAliases()
-	if err != nil {
-		log.Printf("agent-claude: alias discovery failed: %v", err)
-		return nil
-	}
-
-	var entries []aliasEntry
-	for _, a := range fetched {
-		entries = append(entries, aliasEntry{
-			Name:         a.Name,
-			Target:       a.Target,
-			Capabilities: a.Capabilities,
-		})
-	}
-
-	globalAliasCache.aliases = entries
-	globalAliasCache.fetchedAt = time.Now()
-
-	if len(entries) > 0 {
-		names := make([]string, len(entries))
-		for i, a := range entries {
-			names[i] = "@" + a.Name
-		}
-		log.Printf("agent-claude: discovered %d aliases: %s", len(entries), strings.Join(names, ", "))
-	}
-
-	return entries
-}
 
 // discoverTools queries the kernel for tool:* plugins and fetches their tool schemas.
 func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
@@ -230,82 +162,70 @@ func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, block anthro
 	return string(resp), nil
 }
 
-// renderDefaultPrompt executes the embedded system-prompt.md template with the given alias.
-func renderDefaultPrompt(templateText, agentAlias string) string {
-	tmpl, err := template.New("prompt").Parse(templateText)
-	if err != nil {
-		return templateText
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, struct{ Alias string }{Alias: agentAlias}); err != nil {
-		return templateText
-	}
-	return buf.String()
-}
-
-// buildSystemPrompt assembles the full system prompt from an identity section plus dynamic aliases/tools.
-func buildSystemPrompt(identityPrompt string, tools []discoveredTool, aliases []aliasEntry) string {
-	var sb strings.Builder
-
-	sb.WriteString(strings.TrimRight(identityPrompt, "\n"))
-	sb.WriteString("\n\n")
-
-	if len(aliases) > 0 {
-		sb.WriteString("AVAILABLE ALIASES:\n")
-		sb.WriteString("The following @aliases are available in this platform. Use @name to reference them:\n")
-		for _, a := range aliases {
-			caps := ""
-			if len(a.Capabilities) > 0 {
-				caps = " [" + strings.Join(a.Capabilities, ", ") + "]"
-			}
-			sb.WriteString(fmt.Sprintf("- @%s → %s%s\n", a.Name, a.Target, caps))
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(tools) > 0 {
-		sb.WriteString("AVAILABLE TOOLS (function calling):\n")
-		sb.WriteString("You have access to the following tools that you can invoke via function calling:\n")
-		for _, t := range tools {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", t.PrefixedName, t.Description))
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-// mediaAttachment represents an extracted image from a tool result.
+// mediaAttachment represents an extracted media item from a tool result.
 type mediaAttachment struct {
 	MimeType  string `json:"mime_type"`
-	ImageData string `json:"image_data"`
+	ImageData string `json:"image_data,omitempty"`
+	Type      string `json:"type,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
-// processToolResultMedia inspects a tool result for embedded image data.
-// If the JSON contains "image_data" + "mime_type" fields, it extracts them
-// and replaces the base64 blob with a short placeholder so the model gets a clean summary.
-// Returns (cleanedResult, attachment or nil).
-func processToolResultMedia(result string) (string, *mediaAttachment) {
+// processToolResultMedia inspects a tool result for embedded media.
+// Handles both base64 image_data and URL-based attachments (e.g. video URLs).
+// Returns (cleanedResult, attachments extracted).
+func processToolResultMedia(result string) (string, []mediaAttachment) {
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 		return result, nil
 	}
 
+	var attachments []mediaAttachment
+
+	// Check for inline base64 image data.
 	imageData, hasImage := parsed["image_data"].(string)
 	mimeType, hasMime := parsed["mime_type"].(string)
-	if !hasImage || !hasMime || imageData == "" || mimeType == "" {
+	if hasImage && hasMime && imageData != "" && mimeType != "" {
+		attachments = append(attachments, mediaAttachment{
+			MimeType:  mimeType,
+			ImageData: imageData,
+		})
+		parsed["image_data"] = "[image generated]"
+	}
+
+	// Check for URL-based attachments array (e.g. from video generation tools).
+	if rawAtts, ok := parsed["attachments"].([]interface{}); ok {
+		for _, rawAtt := range rawAtts {
+			att, ok := rawAtt.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			attURL, _ := att["url"].(string)
+			attMime, _ := att["mime_type"].(string)
+			attType, _ := att["type"].(string)
+			attFilename, _ := att["filename"].(string)
+			if attURL != "" && attMime != "" {
+				attachments = append(attachments, mediaAttachment{
+					MimeType: attMime,
+					Type:     attType,
+					URL:      attURL,
+					Filename: attFilename,
+				})
+			}
+		}
+		if len(attachments) > 0 {
+			parsed["attachments"] = "[media attached]"
+		}
+	}
+
+	if len(attachments) == 0 {
 		return result, nil
 	}
 
-	// Replace the base64 blob so the model sees a short summary instead.
-	parsed["image_data"] = "[image generated]"
 	cleaned, err := json.Marshal(parsed)
 	if err != nil {
-		return result, nil
+		return result, attachments
 	}
 
-	return string(cleaned), &mediaAttachment{
-		MimeType:  mimeType,
-		ImageData: imageData,
-	}
+	return string(cleaned), attachments
 }

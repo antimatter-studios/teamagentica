@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,7 @@ import (
 )
 
 type Handler struct {
+	mu            sync.RWMutex
 	apiKey        string
 	model         string
 	toolLoopLimit int
@@ -39,6 +41,26 @@ func NewHandler(apiKey, model, dataPath string, debug bool, defaultPrompt string
 
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+}
+
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v, ok := config["KIMI_API_KEY"]; ok {
+		if v != h.apiKey {
+			log.Printf("[config] updating api key")
+			h.apiKey = v
+			h.client = kimi.NewClient(v, h.debug)
+		}
+	}
+	if v, ok := config["KIMI_MODEL"]; ok && v != "" {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -116,12 +138,11 @@ func (h *Handler) Chat(c *gin.Context) {
 		h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
 	}
 
-	// Build agent's own system prompt.
-	identityPrompt := req.SystemPrompt
-	if identityPrompt == "" {
-		identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
+	// Use injected system prompt (enriched by the relay) or fall back to embedded default.
+	systemPrompt := req.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = h.defaultPrompt
 	}
-	systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 	if systemPrompt != "" {
 		filtered := make([]kimi.Message, 0, len(messages))
 		for _, m := range messages {
@@ -171,9 +192,9 @@ func (h *Handler) Chat(c *gin.Context) {
 					result = fmt.Sprintf(`{"error": "%s"}`, err.Error())
 				} else {
 					h.emitEvent("tool_result", fmt.Sprintf("tool=%s result_len=%d", tc.Function.Name, len(result)))
-					cleaned, att := processToolResultMedia(result)
-					if att != nil {
-						mediaAttachments = append(mediaAttachments, *att)
+					cleaned, atts := processToolResultMedia(result)
+					if len(atts) > 0 {
+						mediaAttachments = append(mediaAttachments, atts...)
 						result = cleaned
 					}
 				}
@@ -258,11 +279,10 @@ func (h *Handler) Chat(c *gin.Context) {
 	})
 }
 
-// SystemPrompt returns the system prompts this agent would use in coordinator and direct modes.
+// SystemPrompt returns the system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
+		"default_prompt": h.defaultPrompt,
 	})
 }
 
@@ -289,11 +309,8 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 		}
 	}
 
-	aliases := discoverAliases(h.sdk)
-
 	c.JSON(http.StatusOK, gin.H{
-		"tools":          entries,
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases),
+		"tools": entries,
 	})
 }
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,9 +18,9 @@ import (
 )
 
 // Handler holds the plugin's configuration and exposes HTTP handlers.
-// Config is immutable after construction — it comes from the kernel API.
-// There are no runtime config endpoints.
+// Mutable config fields are protected by mu and updated via ApplyConfig.
 type Handler struct {
+	mu            sync.RWMutex
 	backend       string // "subscription" or "api_key"
 	apiKey        string
 	model         string
@@ -74,21 +76,51 @@ func (h *Handler) SetCodexCLI(client *codexcli.Client) {
 	h.codexCLI = client
 }
 
+// ApplyConfig updates mutable config fields in-place without restarting.
+func (h *Handler) ApplyConfig(config map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if v, ok := config["OPENAI_MODEL"]; ok && v != "" {
+		log.Printf("[config] updating model: %s → %s", h.model, v)
+		h.model = v
+	}
+	if v, ok := config["OPENAI_API_KEY"]; ok {
+		h.apiKey = v
+	}
+	if v, ok := config["OPENAI_API_ENDPOINT"]; ok && v != "" {
+		log.Printf("[config] updating endpoint: %s → %s", h.endpoint, v)
+		h.endpoint = v
+	}
+	if v, ok := config["PLUGIN_DEBUG"]; ok {
+		h.debug = v == "true"
+	}
+	if v, ok := config["TOOL_LOOP_LIMIT"]; ok && v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			log.Printf("[config] updating tool_loop_limit: %d → %d", h.toolLoopLimit, n)
+			h.toolLoopLimit = n
+		}
+	}
+}
+
 // Health returns a simple health check response.
 func (h *Handler) Health(c *gin.Context) {
+	h.mu.RLock()
+	backend := h.backend
+	apiKey := h.apiKey
+	h.mu.RUnlock()
 	configured := false
-	switch h.backend {
+	switch backend {
 	case "subscription":
 		configured = h.codexCLI != nil && h.codexCLI.IsAuthenticated()
 	case "api_key":
-		configured = h.apiKey != ""
+		configured = apiKey != ""
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
 		"plugin":     "agent-openai",
 		"version":    "1.0.0",
 		"configured": configured,
-		"backend":    h.backend,
+		"backend":    backend,
 	})
 }
 
@@ -134,8 +166,17 @@ func (h *Handler) Chat(c *gin.Context) {
 		}
 	}
 
-	// Use per-request model override if provided.
+	// Snapshot mutable config under read lock.
+	h.mu.RLock()
 	model := h.model
+	apiKey := h.apiKey
+	endpoint := h.endpoint
+	backend := h.backend
+	toolLoopLimit := h.toolLoopLimit
+	debug := h.debug
+	h.mu.RUnlock()
+
+	// Use per-request model override if provided.
 	if req.Model != "" {
 		model = req.Model
 	}
@@ -151,7 +192,7 @@ func (h *Handler) Chat(c *gin.Context) {
 	if len(messages) > 0 {
 		lastMsg = messages[len(messages)-1].Content
 	}
-	if h.debug {
+	if debug {
 		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d workspace=%s content=%s", model, len(messages), req.WorkspaceID, truncateStr(lastMsg, 200)))
 	} else {
 		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d workspace=%s", model, len(messages), req.WorkspaceID))
@@ -159,7 +200,7 @@ func (h *Handler) Chat(c *gin.Context) {
 
 	start := time.Now()
 
-	switch h.backend {
+	switch backend {
 	case "subscription":
 		if h.codexCLI == nil {
 			h.emitEvent("error", "subscription backend not initialised")
@@ -167,12 +208,11 @@ func (h *Handler) Chat(c *gin.Context) {
 			return
 		}
 
-		// Use injected system prompt if provided, otherwise build from context.
-		identityPrompt := req.SystemPrompt
-		if identityPrompt == "" {
-			identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
+		// Use injected system prompt (enriched by the relay) or fall back to embedded default.
+		systemPrompt := req.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = h.defaultPrompt
 		}
-		systemPrompt := buildSystemPrompt(identityPrompt, nil, discoverAliases(h.sdk))
 		if systemPrompt != "" {
 			filtered := make([]openai.Message, 0, len(messages))
 			for _, m := range messages {
@@ -214,7 +254,7 @@ func (h *Handler) Chat(c *gin.Context) {
 			responseText = resp.Choices[0].Message.Content
 		}
 
-		if h.debug {
+		if debug {
 			h.emitEvent("chat_response", fmt.Sprintf("backend=subscription model=%s tokens=%d+%d time=%dms response=%s",
 				model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, elapsed.Milliseconds(), truncateStr(responseText, 200)))
 		} else {
@@ -233,7 +273,7 @@ func (h *Handler) Chat(c *gin.Context) {
 		})
 
 	case "api_key":
-		if h.apiKey == "" {
+		if apiKey == "" {
 			h.emitEvent("error", "api_key backend has no OPENAI_API_KEY")
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "api_key backend is configured but OPENAI_API_KEY is not set."})
 			return
@@ -247,12 +287,11 @@ func (h *Handler) Chat(c *gin.Context) {
 			h.emitEvent("tool_discovery", fmt.Sprintf("found %d tools", len(tools)))
 		}
 
-		// Use injected system prompt if provided, otherwise build from context.
-		identityPrompt := req.SystemPrompt
-		if identityPrompt == "" {
-			identityPrompt = renderDefaultPrompt(h.defaultPrompt, req.AgentAlias)
+		// Use injected system prompt (enriched by the relay) or fall back to embedded default.
+		systemPrompt := req.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = h.defaultPrompt
 		}
-		systemPrompt := buildSystemPrompt(identityPrompt, tools, discoverAliases(h.sdk))
 		if systemPrompt != "" {
 			filtered := make([]openai.Message, 0, len(messages))
 			for _, m := range messages {
@@ -270,15 +309,15 @@ func (h *Handler) Chat(c *gin.Context) {
 		var mediaAttachments []mediaAttachment
 
 		// Tool-use loop: configurable iteration limit (0 = unrestricted).
-		maxIter := h.toolLoopLimit
+		maxIter := toolLoopLimit
 		for iteration := 0; maxIter == 0 || iteration <= maxIter; iteration++ {
 			var resp *openai.ChatResponse
 			var err error
 
 			if len(toolDefs) > 0 {
-				resp, err = openai.ChatCompletionWithTools(h.apiKey, h.endpoint, model, messages, toolDefs)
+				resp, err = openai.ChatCompletionWithTools(apiKey, endpoint, model, messages, toolDefs)
 			} else {
-				resp, err = openai.ChatCompletion(h.apiKey, h.endpoint, model, messages)
+				resp, err = openai.ChatCompletion(apiKey, endpoint, model, messages)
 			}
 			if err != nil {
 				log.Printf("OpenAI error: %v", err)
@@ -322,9 +361,9 @@ func (h *Handler) Chat(c *gin.Context) {
 					} else {
 						h.emitEvent("tool_result", fmt.Sprintf("tool=%s result_len=%d", tc.Function.Name, len(result)))
 						// Extract any embedded image data before sending to OpenAI.
-						cleaned, att := processToolResultMedia(result)
-						if att != nil {
-							mediaAttachments = append(mediaAttachments, *att)
+						cleaned, atts := processToolResultMedia(result)
+						if len(atts) > 0 {
+							mediaAttachments = append(mediaAttachments, atts...)
 							result = cleaned
 						}
 					}
@@ -353,7 +392,7 @@ func (h *Handler) Chat(c *gin.Context) {
 			h.emitUsage("openai", model, totalInput, totalOutput, totalInput+totalOutput, 0, elapsed.Milliseconds(), userID)
 
 			responseText := choice.Message.Content
-			if h.debug {
+			if debug {
 				h.emitEvent("chat_response", fmt.Sprintf("backend=api_key model=%s tokens=%d+%d time=%dms response=%s",
 					model, totalInput, totalOutput, elapsed.Milliseconds(), truncateStr(responseText, 200)))
 			} else {
@@ -391,8 +430,8 @@ func (h *Handler) Chat(c *gin.Context) {
 		})
 
 	default:
-		h.emitEvent("error", fmt.Sprintf("unknown backend: %s", h.backend))
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unknown backend %q. Set OPENAI_BACKEND to 'subscription' or 'api_key'.", h.backend)})
+		h.emitEvent("error", fmt.Sprintf("unknown backend: %s", backend))
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unknown backend %q. Set OPENAI_BACKEND to 'subscription' or 'api_key'.", backend)})
 	}
 }
 
@@ -428,9 +467,8 @@ func isValidWorkspaceID(id string) bool {
 
 // SystemPrompt returns the system prompt this agent would use.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	tools := discoverTools(h.sdk)
 	c.JSON(http.StatusOK, gin.H{
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, discoverAliases(h.sdk)),
+		"default_prompt": h.defaultPrompt,
 	})
 }
 
@@ -457,11 +495,8 @@ func (h *Handler) DiscoveredTools(c *gin.Context) {
 		}
 	}
 
-	aliases := discoverAliases(h.sdk)
-
 	c.JSON(http.StatusOK, gin.H{
-		"tools":          entries,
-		"default_prompt": buildSystemPrompt(renderDefaultPrompt(h.defaultPrompt, ""), tools, aliases),
+		"tools": entries,
 	})
 }
 
@@ -477,17 +512,23 @@ func truncateStr(s string, maxLen int) string {
 
 // Models returns available models and the current default.
 func (h *Handler) Models(c *gin.Context) {
-	if h.backend == "api_key" && h.apiKey != "" {
-		models, _, err := openai.ListModels(h.apiKey, h.endpoint)
+	h.mu.RLock()
+	backend := h.backend
+	apiKey := h.apiKey
+	endpoint := h.endpoint
+	model := h.model
+	h.mu.RUnlock()
+	if backend == "api_key" && apiKey != "" {
+		models, _, err := openai.ListModels(apiKey, endpoint)
 		if err == nil {
-			c.JSON(http.StatusOK, gin.H{"models": models, "current": h.model})
+			c.JSON(http.StatusOK, gin.H{"models": models, "current": model})
 			return
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"models":  []string{h.model},
-		"current": h.model,
+		"models":  []string{model},
+		"current": model,
 	})
 }
 
@@ -498,10 +539,17 @@ func (h *Handler) Models(c *gin.Context) {
 func (h *Handler) ConfigOptions(c *gin.Context) {
 	field := c.Param("field")
 
+	h.mu.RLock()
+	backend := h.backend
+	apiKey := h.apiKey
+	endpoint := h.endpoint
+	model := h.model
+	h.mu.RUnlock()
+
 	switch field {
 	case "OPENAI_MODEL":
-		if h.backend == "api_key" && h.apiKey != "" {
-			models, fallback, err := openai.ListModels(h.apiKey, h.endpoint)
+		if backend == "api_key" && apiKey != "" {
+			models, fallback, err := openai.ListModels(apiKey, endpoint)
 			if err != nil {
 				log.Printf("ListModels error: %v", err)
 				c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
@@ -510,7 +558,7 @@ func (h *Handler) ConfigOptions(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"options": models, "fallback": fallback})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"options": []string{h.model}})
+		c.JSON(http.StatusOK, gin.H{"options": []string{model}})
 
 	default:
 		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Unknown field"})

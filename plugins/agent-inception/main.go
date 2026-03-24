@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -94,6 +95,18 @@ func main() {
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
+
+	// Apply config updates in-place without restarting the container.
+	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var detail struct {
+			Config map[string]string `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
+			log.Printf("[config] failed to parse config:update detail: %v", err)
+			return
+		}
+		h.ApplyConfig(detail.Config)
+	}))
 
 	// Inception-specific code editing endpoints.
 	router.POST("/apply-edit", h.ApplyEdit)
