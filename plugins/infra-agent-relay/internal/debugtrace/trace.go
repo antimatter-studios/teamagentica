@@ -28,28 +28,32 @@ const (
 	TypeFinalResponse       = "final_response"
 )
 
-// Attachment holds mime type and base64 data for storage in traces.
+// Attachment holds mime type and base64 data or URL for storage in traces.
 type Attachment struct {
 	MimeType  string `json:"mime_type"`
-	ImageData string `json:"image_data"`
+	ImageData string `json:"image_data,omitempty"`
+	Type      string `json:"type,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
 // Trace is the GORM model for the traces table.
 type Trace struct {
-	ID              string    `gorm:"primaryKey" json:"id"`
-	RequestID       string    `gorm:"index;not null" json:"request_id"`
-	ParentID        string    `json:"parent_id,omitempty"`
-	Type            string    `gorm:"not null" json:"type"`
-	Alias           string    `json:"alias,omitempty"`
-	PluginID        string    `json:"plugin_id,omitempty"`
-	TaskID          string    `json:"task_id,omitempty"`
-	Message         string    `json:"message,omitempty"`
-	Attachments     int       `json:"attachments"`
-	AttachmentsData string    `json:"attachments_data,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	DurationMS      int64     `json:"duration_ms,omitempty"`
-	Error           string    `json:"error,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              string         `gorm:"primaryKey" json:"id"`
+	RequestID       string         `gorm:"index;not null" json:"request_id"`
+	ParentID        string         `json:"parent_id,omitempty"`
+	Type            string         `gorm:"not null" json:"type"`
+	Alias           string         `json:"alias,omitempty"`
+	PluginID        string         `json:"plugin_id,omitempty"`
+	TaskID          string         `json:"task_id,omitempty"`
+	Message         string         `json:"message,omitempty"`
+	Attachments     int            `json:"attachments"`
+	AttachmentsData string         `json:"attachments_data,omitempty"`
+	Model           string         `json:"model,omitempty"`
+	DurationMS      int64          `json:"duration_ms,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // Open creates or opens the trace database at the given path.

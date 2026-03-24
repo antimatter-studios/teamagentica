@@ -6,12 +6,6 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-// CoordinatorRoute maps a source plugin to its default coordinator agent.
-type CoordinatorRoute struct {
-	PluginID string `json:"plugin_id"`
-	Model    string `json:"model,omitempty"`
-}
-
 // WorkspaceRoute maps a channel to a workspace bridge.
 type WorkspaceRoute struct {
 	WorkspaceID string `json:"workspace_id"`
@@ -26,47 +20,16 @@ type routeKey struct {
 
 // Table is the relay's routing table. Thread-safe.
 type Table struct {
-	mu                 sync.RWMutex
-	coordinators       map[string]*CoordinatorRoute // source_plugin → coordinator
-	defaultCoordinator *CoordinatorRoute            // fallback when no per-plugin mapping
-	workspaces         map[routeKey]*WorkspaceRoute // {source, channel} → workspace
-	aliases            *alias.AliasMap
+	mu         sync.RWMutex
+	workspaces map[routeKey]*WorkspaceRoute // {source, channel} → workspace
+	aliases    *alias.AliasMap
 }
 
 // NewTable creates an empty routing table.
 func NewTable() *Table {
 	return &Table{
-		coordinators: make(map[string]*CoordinatorRoute),
-		workspaces:   make(map[routeKey]*WorkspaceRoute),
+		workspaces: make(map[routeKey]*WorkspaceRoute),
 	}
-}
-
-// SetCoordinator sets the coordinator agent for a source plugin.
-func (t *Table) SetCoordinator(sourcePlugin, pluginID, model string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.coordinators[sourcePlugin] = &CoordinatorRoute{PluginID: pluginID, Model: model}
-}
-
-// GetCoordinator returns the coordinator for a source plugin, or nil.
-func (t *Table) GetCoordinator(sourcePlugin string) *CoordinatorRoute {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.coordinators[sourcePlugin]
-}
-
-// SetDefaultCoordinator sets the fallback coordinator used when no per-plugin mapping exists.
-func (t *Table) SetDefaultCoordinator(pluginID, model string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.defaultCoordinator = &CoordinatorRoute{PluginID: pluginID, Model: model}
-}
-
-// GetDefaultCoordinator returns the fallback coordinator, or nil.
-func (t *Table) GetDefaultCoordinator() *CoordinatorRoute {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.defaultCoordinator
 }
 
 // MapWorkspace maps a {source, channel} to a workspace bridge.
@@ -105,17 +68,6 @@ func (t *Table) Aliases() *alias.AliasMap {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.aliases
-}
-
-// ListCoordinators returns a snapshot of coordinator mappings.
-func (t *Table) ListCoordinators() map[string]*CoordinatorRoute {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	out := make(map[string]*CoordinatorRoute, len(t.coordinators))
-	for k, v := range t.coordinators {
-		out[k] = v
-	}
-	return out
 }
 
 // ListWorkspaces returns a snapshot of workspace mappings.

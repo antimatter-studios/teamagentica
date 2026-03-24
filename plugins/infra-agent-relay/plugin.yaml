@@ -2,19 +2,13 @@ id: infra-agent-relay
 name: "Agent Relay"
 description: "Routes messages between messaging plugins and agent-bridge instances running in workspace containers"
 group: infrastructure
-version: "0.2.17"
+version: "0.2.47"
 image: "teamagentica-infra-agent-relay:latest"
 author: teamagentica
 tags: [infrastructure]
 capabilities: ["infra:agent-relay"]
 dependencies: ["tool:memory", "tool:aliases"]
 config_schema:
-  DEFAULT_COORDINATOR:
-    type: select
-    label: "Default Coordinator"
-    dynamic: true
-    help_text: "Fallback coordinator alias for any messaging plugin without a specific coordinator set. The first coordinator registered will be used as the default if this is unset."
-    order: 1
   MAX_ORCHESTRATION_TASKS:
     type: number
     label: "Max Orchestration Tasks"

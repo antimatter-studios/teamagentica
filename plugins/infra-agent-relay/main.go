@@ -13,32 +13,46 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/bridge"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/daglog"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/debugtrace"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/router"
 	"github.com/gin-gonic/gin"
 )
 
 // relay is the central message routing and orchestration service.
-// Messaging plugins send messages here; the relay routes to a coordinator,
-// which returns a JSON DAG plan; the relay executes the plan and returns
-// the final result.
+// Messaging plugins send messages here; the relay resolves the coordinator
+// persona at request time, which returns a JSON DAG plan; the relay
+// executes the plan and returns the final result.
 type relay struct {
 	mu                    sync.RWMutex
 	conns                 map[string]*bridge.Client // workspaceID → TCP connection
 	routes                *router.Table
 	sdk                   *pluginsdk.Client
-	allowFirstAsDefault   bool // true when DEFAULT_COORDINATOR is unset at startup
 	maxOrchestrationTasks int
 	taskTimeoutSeconds    int
 	debug                 bool
 	tracer                *debugtrace.Recorder
+	dags                  *daglog.Log
 	personas              *personaCache
 	memoryPluginID        string // cached plugin ID for infra-agent-memory (empty = not available)
 	memoryMu              sync.RWMutex
 	memoryCheckedAt       time.Time
+
+	// Last active session for progress forwarding (single-request assumption).
+	// TODO: Replace with correlation ID scheme for multi-user support.
+	lastSessionMu     sync.RWMutex
+	lastSourcePlugin  string
+	lastChannelID     string
+
+	// Pending async tasks — maps plugin task ID → waiter info.
+	// Used by the DAG executor to wait for async plugin completion.
+	asyncMu      sync.Mutex
+	asyncWaiters map[string]*asyncWaiter
 }
 
 // personaInfo holds a cached persona definition from infra-alias-registry.
@@ -65,8 +79,64 @@ func newRelay(sdk *pluginsdk.Client) *relay {
 		sdk:                   sdk,
 		maxOrchestrationTasks: 20,
 		taskTimeoutSeconds:    120,
+		dags:                  daglog.New(),
 		personas:              &personaCache{ttl: 60 * time.Second},
+		asyncWaiters:          make(map[string]*asyncWaiter),
 	}
+}
+
+// asyncWaiter tracks a pending async task with its session context so that
+// incoming progress events can be forwarded with the correct task_group_id.
+type asyncWaiter struct {
+	ch           chan *agentChatResponse
+	taskGroupID  string
+	sourcePlugin string
+	channelID    string
+}
+
+// registerAsyncWaiter creates a channel that will receive the result when an
+// async plugin completes. Returns the channel. Caller must call removeAsyncWaiter.
+func (r *relay) registerAsyncWaiter(taskID, taskGroupID, sourcePlugin, channelID string) chan *agentChatResponse {
+	w := &asyncWaiter{
+		ch:           make(chan *agentChatResponse, 1),
+		taskGroupID:  taskGroupID,
+		sourcePlugin: sourcePlugin,
+		channelID:    channelID,
+	}
+	r.asyncMu.Lock()
+	r.asyncWaiters[taskID] = w
+	r.asyncMu.Unlock()
+	return w.ch
+}
+
+func (r *relay) removeAsyncWaiter(taskID string) {
+	r.asyncMu.Lock()
+	delete(r.asyncWaiters, taskID)
+	r.asyncMu.Unlock()
+}
+
+// lookupAsyncWaiter returns the session context for a pending async task.
+func (r *relay) lookupAsyncWaiter(taskID string) (taskGroupID, sourcePlugin, channelID string, ok bool) {
+	r.asyncMu.Lock()
+	w, exists := r.asyncWaiters[taskID]
+	r.asyncMu.Unlock()
+	if !exists {
+		return "", "", "", false
+	}
+	return w.taskGroupID, w.sourcePlugin, w.channelID, true
+}
+
+// resolveAsyncWaiter delivers a result to a waiting DAG task.
+// Returns true if a waiter was found and notified.
+func (r *relay) resolveAsyncWaiter(taskID string, resp *agentChatResponse) bool {
+	r.asyncMu.Lock()
+	w, ok := r.asyncWaiters[taskID]
+	r.asyncMu.Unlock()
+	if ok {
+		w.ch <- resp
+		return true
+	}
+	return false
 }
 
 // fetchPersonas returns all personas from infra-alias-registry, using a TTL cache.
@@ -133,93 +203,6 @@ func (r *relay) fetchPersonas() map[string]personaInfo {
 	return personas
 }
 
-// mergedAliases returns an AliasMap that overlays persona aliases on top of
-// kernel aliases. Personas with a backend_alias become routable without a
-// corresponding kernel alias entry. Personas without a backend_alias are still
-// cached for system prompt injection but are not added as routing entries.
-func (r *relay) mergedAliases(kernelAliases *alias.AliasMap) *alias.AliasMap {
-	personas := r.fetchPersonas()
-	if len(personas) == 0 {
-		return kernelAliases
-	}
-
-	merged := kernelAliases
-	for _, p := range personas {
-		if p.BackendAlias == "" {
-			continue
-		}
-		backendTarget := kernelAliases.Resolve(p.BackendAlias)
-		if backendTarget == nil {
-			continue
-		}
-		model := p.Model
-		if model == "" {
-			model = backendTarget.Model
-		}
-		merged = merged.With(p.Alias, alias.Target{
-			PluginID: backendTarget.PluginID,
-			Model:    model,
-			Type:     alias.TargetAgent,
-		})
-	}
-	return merged
-}
-
-// fetchDefaultCoordinator fetches the "default-coordinator" persona from
-// infra-agent-persona and sets the default coordinator on the routing table.
-func (r *relay) fetchDefaultCoordinator() {
-	plugins, err := r.sdk.SearchPlugins("tool:personas")
-	if err != nil || len(plugins) == 0 {
-		log.Printf("relay: persona plugin not found, cannot resolve default-coordinator")
-		return
-	}
-	pluginID := plugins[0].ID
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET", "/personas/default-coordinator", nil)
-	if err != nil {
-		log.Printf("relay: default-coordinator persona not configured — task dispatch may fail")
-		return
-	}
-
-	var persona struct {
-		Alias        string `json:"alias"`
-		BackendAlias string `json:"backend_alias"`
-		Model        string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &persona); err != nil {
-		log.Printf("relay: failed to parse default-coordinator persona: %v", err)
-		return
-	}
-
-	if persona.BackendAlias == "" {
-		log.Printf("relay: default-coordinator persona has no backend_alias")
-		return
-	}
-
-	aliases := r.routes.Aliases()
-	if aliases == nil {
-		log.Printf("relay: aliases not loaded yet, cannot resolve default-coordinator backend")
-		return
-	}
-	target := aliases.Resolve(persona.BackendAlias)
-	if target == nil || target.Type != alias.TargetAgent {
-		log.Printf("relay: default-coordinator backend @%s not found in aliases", persona.BackendAlias)
-		return
-	}
-
-	model := persona.Model
-	if model == "" {
-		model = target.Model
-	}
-	r.routes.SetDefaultCoordinator(target.PluginID, model)
-	r.mu.Lock()
-	r.allowFirstAsDefault = false
-	r.mu.Unlock()
-	log.Printf("relay: default coordinator set from persona: @default-coordinator → @%s (%s)", persona.BackendAlias, target.PluginID)
-}
-
 // lookupPersona returns the persona for agentAlias, or nil if not found.
 func (r *relay) lookupPersona(agentAlias string) *personaInfo {
 	if agentAlias == "" || r.sdk == nil {
@@ -230,6 +213,64 @@ func (r *relay) lookupPersona(agentAlias string) *personaInfo {
 		return &p
 	}
 	return nil
+}
+
+// resolvedTarget holds the result of persona-first, alias-fallback resolution.
+type resolvedTarget struct {
+	PluginID     string
+	Model        string
+	SystemPrompt string // from persona; empty for raw alias calls
+	Alias        string // the name that was resolved
+}
+
+// resolvePersonaOrAlias looks up a name as a persona first (using its
+// backend_alias to find the plugin), falling back to a raw alias lookup.
+func (r *relay) resolvePersonaOrAlias(name string, aliases *alias.AliasMap) *resolvedTarget {
+	// 1. Persona lookup.
+	if p := r.lookupPersona(name); p != nil && p.BackendAlias != "" {
+		target := aliases.Resolve(p.BackendAlias)
+		if target != nil {
+			model := p.Model
+			if model == "" {
+				model = target.Model
+			}
+			return &resolvedTarget{
+				PluginID:     target.PluginID,
+				Model:        model,
+				SystemPrompt: p.SystemPrompt,
+				Alias:        name,
+			}
+		}
+	}
+	// 2. Raw alias fallback — allow agent and direct-callable tool types
+	//    (TargetImage/TargetVideo have /chat endpoints).
+	if aliases != nil {
+		target := aliases.Resolve(name)
+		if target != nil && (target.Type == alias.TargetAgent ||
+			target.Type == alias.TargetImage ||
+			target.Type == alias.TargetVideo) {
+			return &resolvedTarget{
+				PluginID: target.PluginID,
+				Model:    target.Model,
+				Alias:    name,
+			}
+		}
+	}
+	return nil
+}
+
+// parseAtPrefix extracts an @name prefix from a message.
+// Returns (name, remainder, true) if found, ("", "", false) otherwise.
+func parseAtPrefix(text string) (string, string, bool) {
+	if !strings.HasPrefix(text, "@") {
+		return "", "", false
+	}
+	rest := text[1:]
+	spaceIdx := strings.IndexAny(rest, " \t\n")
+	if spaceIdx < 0 {
+		return strings.ToLower(rest), "", true
+	}
+	return strings.ToLower(rest[:spaceIdx]), strings.TrimSpace(rest[spaceIdx+1:]), true
 }
 
 // --- Memory integration ---
@@ -316,6 +357,12 @@ func (r *relay) memoryStore(sessionID, role, content, responder string) {
 	}
 }
 
+// resolveCoordinator fetches the "coordinator" persona at request time and
+// resolves its backend alias to a concrete plugin + model.
+func (r *relay) resolveCoordinator(aliases *alias.AliasMap) *resolvedTarget {
+	return r.resolvePersonaOrAlias("coordinator", aliases)
+}
+
 // --- Chat endpoint: the main entry point for all messaging plugins ---
 
 // relayRequest is the envelope from messaging plugins.
@@ -334,10 +381,47 @@ type relayResponse struct {
 	Backend     string            `json:"backend,omitempty"`     // agent backend (e.g. "api_key", "cli")
 	Usage       *agentUsage       `json:"usage,omitempty"`       // token usage from the agent
 	CostUSD     float64           `json:"cost_usd,omitempty"`    // cost in USD (if reported)
+	DurationMs  int64             `json:"duration_ms,omitempty"` // end-to-end processing time in ms
 	Attachments []agentAttachment `json:"attachments,omitempty"` // media attachments from the agent
 }
 
+// emitProgress sends a progress event to the source messaging plugin via addressed event.
+func (r *relay) emitProgress(sourcePlugin, channelID, taskGroupID, status, message string, response *relayResponse) {
+	payload := map[string]interface{}{
+		"task_group_id": taskGroupID,
+		"channel_id":    channelID,
+		"status":        status,
+		"message":       message,
+	}
+	if response != nil {
+		payload["response"] = response.Response
+		payload["responder"] = response.Responder
+		payload["model"] = response.Model
+		payload["backend"] = response.Backend
+		payload["attachments"] = response.Attachments
+		if response.Usage != nil {
+			payload["usage"] = response.Usage
+		}
+		if response.CostUSD > 0 {
+			payload["cost_usd"] = response.CostUSD
+		}
+		if response.DurationMs > 0 {
+			payload["duration_ms"] = response.DurationMs
+		}
+	}
+	// Normalize @@alias → @alias — LLMs sometimes echo the @ prefix from the
+	// system prompt into alias fields, causing double-@ in progress messages.
+	if message != "" {
+		message = strings.ReplaceAll(message, "@@", "@")
+	}
+	payload["message"] = message
+
+	data, _ := json.Marshal(payload)
+	r.sdk.ReportAddressedEvent("relay:progress", string(data), sourcePlugin)
+}
+
 // handleChat is the single entry point for all messages from messaging plugins.
+// Returns a task_group_id immediately; all results delivered via relay:progress events.
 func (r *relay) handleChat(c *gin.Context) {
 	var req relayRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -350,11 +434,39 @@ func (r *relay) handleChat(c *gin.Context) {
 		return
 	}
 
-	// Session ID is unique per source plugin + channel.
+	// 1. Check if this channel is mapped to a workspace bridge.
+	// Workspace routing is synchronous — it has its own TCP protocol.
+	if ws := r.routes.GetWorkspace(req.SourcePlugin, req.ChannelID); ws != nil {
+		r.routeToWorkspace(c, ws, req)
+		return
+	}
+
+	// Generate task group ID and return immediately.
+	taskGroupID := "tg-" + uuid.New().String()[:8]
+
+	// Track session for progress forwarding from external plugins.
+	r.lastSessionMu.Lock()
+	r.lastSourcePlugin = req.SourcePlugin
+	r.lastChannelID = req.ChannelID
+	r.lastSessionMu.Unlock()
+
+	c.JSON(http.StatusAccepted, gin.H{"task_group_id": taskGroupID})
+
+	// Process in background — all results delivered via events.
+	go r.processChat(req, taskGroupID)
+}
+
+// processChat runs the actual chat processing in the background.
+func (r *relay) processChat(req relayRequest, taskGroupID string) {
+	processStart := time.Now()
+	ctx := context.Background()
 	sessionID := req.SourcePlugin + ":" + req.ChannelID
 
+	// Emit "thinking" status immediately.
+	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", "Thinking...", nil)
+
 	// Fetch conversation history from memory plugin (if available).
-	history := r.memoryGetHistory(c.Request.Context(), sessionID)
+	history := r.memoryGetHistory(ctx, sessionID)
 
 	// Store the incoming user message.
 	go r.memoryStore(sessionID, "user", req.Message, "")
@@ -367,71 +479,103 @@ func (r *relay) handleChat(c *gin.Context) {
 			nil, "", 0, "")
 	}
 
-	// 1. Check if this channel is mapped to a workspace bridge.
-	if ws := r.routes.GetWorkspace(req.SourcePlugin, req.ChannelID); ws != nil {
-		r.routeToWorkspace(c, ws, req)
-		return
-	}
+	// 2. Check for @name prefix — persona-first, alias-fallback direct routing.
+	aliases := r.routes.Aliases()
+	if name, remainder, ok := parseAtPrefix(req.Message); ok {
+		resolved := r.resolvePersonaOrAlias(name, aliases)
+		if resolved != nil {
+			if remainder == "" {
+				rr := &relayResponse{
+					Response:  fmt.Sprintf("Usage: @%s <message>", resolved.Alias),
+					Responder: resolved.Alias,
+				}
+				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
+				return
+			}
 
-	// 2. Check for @alias prefix in message — direct routing, bypasses orchestration.
-	aliases := r.mergedAliases(r.routes.Aliases())
-	if aliases != nil && !aliases.IsEmpty() {
-		result := aliases.Parse(req.Message)
-		if result.Target != nil && result.Target.Type == alias.TargetAgent {
-			if result.Remainder == "" {
-				c.JSON(http.StatusOK, relayResponse{
-					Response:  fmt.Sprintf("Usage: @%s <message>", result.Alias),
-					Responder: result.Alias,
-				})
-				return
-			}
+			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
+				fmt.Sprintf("Asking @%s...", resolved.Alias), nil)
+
+			// Log direct call as a single-node DAG for visibility.
+			dagEntry := r.dags.Start(taskGroupID, remainder, resolved.Alias,
+				[]daglog.TaskDef{{ID: "direct", Alias: resolved.Alias}})
+			r.dags.NodeStarted(dagEntry, "direct", remainder)
+
 			callStart := time.Now()
-			agentResp, responder, err := r.routeToAgent(c.Request.Context(), result.Target.PluginID, result.Target.Model,
-				result.Remainder, req.ImageURLs, history, result.Alias)
+			enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
+			agentResp, err := r.callAgent(ctx, resolved.PluginID, resolved.Model,
+				remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt)
 			if err != nil {
-				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("agent: %v", err)})
+				r.dags.NodeFailed(dagEntry, "direct", err.Error())
+				r.dags.Fail(dagEntry)
+				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+					fmt.Sprintf("Agent error: %v", err), nil)
 				return
 			}
+
+			// Handle async tool response (e.g. video generation).
+			if agentResp.Status == "processing" && agentResp.TaskID != "" {
+				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
+					fmt.Sprintf("@%s started async task %s...", resolved.Alias, agentResp.TaskID), nil)
+				asyncResp, asyncErr := r.waitForAsync(agentResp.TaskID, taskGroupID, req.SourcePlugin, req.ChannelID)
+				if asyncErr != nil {
+					r.dags.NodeFailed(dagEntry, "direct", asyncErr.Error())
+					r.dags.Fail(dagEntry)
+					r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+						fmt.Sprintf("Agent error: %v", asyncErr), nil)
+					return
+				}
+				agentResp = asyncResp
+			}
+
 			if r.debug {
-				r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, responder, result.Target.PluginID, "",
+				r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, resolved.Alias, resolved.PluginID, "",
 					agentResp.Response, toTraceAttachments(agentResp.Attachments), agentResp.Model,
 					time.Since(callStart).Milliseconds(), "")
 			}
-			go r.memoryStore(sessionID, "assistant", agentResp.Response, responder)
-			c.JSON(http.StatusOK, relayResponse{
+			r.dags.NodeCompleted(dagEntry, "direct")
+			r.dags.Complete(dagEntry)
+			go r.memoryStore(sessionID, "assistant", agentResp.Response, resolved.Alias)
+
+			rr := &relayResponse{
 				Response:    agentResp.Response,
-				Responder:   responder,
+				Responder:   resolved.Alias,
 				Model:       agentResp.Model,
 				Backend:     agentResp.Backend,
 				Usage:       agentResp.Usage,
 				CostUSD:     agentResp.CostUSD,
+				DurationMs:  time.Since(processStart).Milliseconds(),
 				Attachments: agentResp.Attachments,
-			})
+			}
+			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
 			return
 		}
 	}
 
 	// 3. Route through coordinator with DAG orchestration.
-	coordinator := r.routes.GetCoordinator(req.SourcePlugin)
-	if coordinator == nil {
-		coordinator = r.routes.GetDefaultCoordinator()
-	}
-	if coordinator == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no coordinator configured for " + req.SourcePlugin})
+	coord := r.resolveCoordinator(aliases)
+	if coord == nil {
+		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+			"coordinator persona is missing a backend_alias — set one via the persona manager", nil)
 		return
 	}
 
-	coordAlias := ""
-	if aliases != nil {
-		coordAlias = aliases.FindAliasByPluginID(coordinator.PluginID)
-	}
-	if coordAlias == "" {
-		coordAlias = coordinator.PluginID
+	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "planning", "Planning tasks...", nil)
+
+	coordPrompt := r.enrichSystemPrompt(coord.SystemPrompt, aliases)
+	// Worker prompt for "self" tasks — a dedicated prompt that prevents JSON plan output.
+	selfWorkerPrompt := strings.TrimSpace(workerSelfPrompt)
+
+	// Progress callback for the orchestration loop.
+	emitOrchProgress := func(status, message string) {
+		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, status, message, nil)
 	}
 
-	response, responder, orchResp, err := r.orchestrate(c.Request.Context(), coordinator, coordAlias, req.Message, req.ImageURLs, aliases, reqTraceID)
+	sess := sessionCtx{taskGroupID: taskGroupID, sourcePlugin: req.SourcePlugin, channelID: req.ChannelID}
+	response, responder, orchResp, err := r.orchestrate(ctx, coord.PluginID, coord.Model, coord.Alias, coordPrompt, selfWorkerPrompt, req.Message, req.ImageURLs, aliases, reqTraceID, sess, emitOrchProgress)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+			fmt.Sprintf("Orchestration error: %v", err), nil)
 		return
 	}
 
@@ -444,9 +588,10 @@ func (r *relay) handleChat(c *gin.Context) {
 			response, finalAttach, "", 0, "")
 	}
 
-	rr := relayResponse{
-		Response:  response,
-		Responder: responder,
+	rr := &relayResponse{
+		Response:   response,
+		Responder:  responder,
+		DurationMs: time.Since(processStart).Milliseconds(),
 	}
 	if orchResp != nil {
 		rr.Model = orchResp.Model
@@ -455,7 +600,7 @@ func (r *relay) handleChat(c *gin.Context) {
 		rr.CostUSD = orchResp.CostUSD
 		rr.Attachments = orchResp.Attachments
 	}
-	c.JSON(http.StatusOK, rr)
+	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
 }
 
 // --- DAG Orchestration ---
@@ -467,14 +612,16 @@ type taskPlan struct {
 
 // dagTask is a single task in the coordinator's plan.
 type dagTask struct {
-	ID        string   `json:"id"`
-	Alias     string   `json:"alias"`
-	Prompt    string   `json:"prompt"`
-	DependsOn []string `json:"depends_on"`
+	ID         string                 `json:"id"`
+	Alias      string                 `json:"alias"`
+	Prompt     string                 `json:"prompt"`
+	Tool       string                 `json:"tool,omitempty"`       // specific tool name (skips /chat, calls tool endpoint)
+	Parameters map[string]interface{} `json:"parameters,omitempty"` // parameters for the tool call
+	DependsOn  []string               `json:"depends_on"`
 }
 
 // parseCoordinatorPlan extracts a taskPlan from a coordinator response.
-// Handles raw JSON or ```json ... ``` fenced blocks.
+// Handles raw JSON, ```json fenced blocks, or JSON embedded in surrounding text.
 // Returns (nil, false) if the response is a plain text answer with no plan.
 func parseCoordinatorPlan(response string) (*taskPlan, bool) {
 	s := strings.TrimSpace(response)
@@ -488,10 +635,19 @@ func parseCoordinatorPlan(response string) (*taskPlan, bool) {
 		}
 	}
 
-	// Must look like a JSON object.
-	if !strings.HasPrefix(s, "{") {
+	// Find the first '{' — the coordinator may prefix the JSON with text.
+	braceIdx := strings.Index(s, "{")
+	if braceIdx < 0 {
 		return nil, false
 	}
+	s = s[braceIdx:]
+
+	// Find the matching closing '}' by scanning from the end.
+	lastBrace := strings.LastIndex(s, "}")
+	if lastBrace < 0 {
+		return nil, false
+	}
+	s = s[:lastBrace+1]
 
 	var plan taskPlan
 	if err := json.Unmarshal([]byte(s), &plan); err != nil {
@@ -509,6 +665,22 @@ func interpolate(prompt string, results map[string]string) string {
 		prompt = strings.ReplaceAll(prompt, "{"+id+"}", result)
 	}
 	return prompt
+}
+
+// interpolateParams substitutes {taskID} placeholders in tool parameter values.
+func interpolateParams(params map[string]interface{}, results map[string]string) map[string]interface{} {
+	if len(params) == 0 || len(results) == 0 {
+		return params
+	}
+	out := make(map[string]interface{}, len(params))
+	for k, v := range params {
+		if s, ok := v.(string); ok {
+			out[k] = interpolate(s, results)
+		} else {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // detectCycle returns true if the task DAG contains a circular dependency.
@@ -548,32 +720,49 @@ func detectCycle(tasks []dagTask) bool {
 	return false
 }
 
+// progressFn is a callback to emit progress updates during orchestration.
+type progressFn func(status, message string)
+
+// sessionCtx carries the messaging session identity through the orchestration
+// pipeline so async waiters can be associated with the correct task group.
+type sessionCtx struct {
+	taskGroupID  string
+	sourcePlugin string
+	channelID    string
+}
+
 // orchestrate calls the coordinator, parses its JSON DAG plan, executes tasks
 // in topological order (parallel where possible), and returns the final result.
 func (r *relay) orchestrate(
 	ctx context.Context,
-	coordinator *router.CoordinatorRoute,
+	coordPluginID string,
+	coordModel string,
 	coordAlias string,
+	coordPrompt string,
+	selfWorkerPrompt string,
 	message string,
 	imageURLs []string,
 	aliases *alias.AliasMap,
 	reqTraceID string,
+	session sessionCtx,
+	progress progressFn,
 ) (string, string, *agentChatResponse, error) {
 
 	// Call coordinator in orchestration mode.
+	progress("planning", "Analyzing request...")
 	coordStart := time.Now()
 	if r.debug {
-		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorCall, coordAlias, coordinator.PluginID, "",
-			message, nil, coordinator.Model, 0, "")
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorCall, coordAlias, coordPluginID, "",
+			message, nil, coordModel, 0, "")
 	}
-	coordResp, err := r.callAgent(ctx, coordinator.PluginID, coordinator.Model,
-		message, imageURLs, nil, coordAlias)
+	coordResp, err := r.callAgent(ctx, coordPluginID, coordModel,
+		message, imageURLs, nil, coordAlias, coordPrompt)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("coordinator: %w", err)
 	}
 
 	if r.debug {
-		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorResponse, coordAlias, coordinator.PluginID, "",
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorResponse, coordAlias, coordPluginID, "",
 			coordResp.Response, toTraceAttachments(coordResp.Attachments), coordResp.Model,
 			time.Since(coordStart).Milliseconds(), "")
 	}
@@ -581,20 +770,40 @@ func (r *relay) orchestrate(
 	// Parse plan — if no JSON DAG, coordinator answered directly.
 	plan, isDag := parseCoordinatorPlan(coordResp.Response)
 	if !isDag {
+		if r.debug {
+			log.Printf("relay: coordinator answered directly (no DAG), response length=%d", len(coordResp.Response))
+		}
 		return coordResp.Response, coordAlias, coordResp, nil
 	}
 
+	// Emit plan summary.
+	var taskNames []string
+	for _, t := range plan.Tasks {
+		taskNames = append(taskNames, "@"+t.Alias)
+	}
+	progress("running", fmt.Sprintf("Executing %d tasks: %s", len(plan.Tasks), strings.Join(taskNames, ", ")))
+
 	if r.debug {
-		planJSON, _ := json.Marshal(plan)
+		planJSON, _ := json.MarshalIndent(plan, "", "  ")
+		log.Printf("relay: coordinator DAG plan (%d tasks):\n%s", len(plan.Tasks), planJSON)
 		r.tracer.Record(reqTraceID, "", debugtrace.TypeDAGPlan, coordAlias, "", "",
 			string(planJSON), nil, "", 0, "")
 	}
 
+	// Record DAG in the live log.
+	dagTasks := make([]daglog.TaskDef, len(plan.Tasks))
+	for i, t := range plan.Tasks {
+		dagTasks[i] = daglog.TaskDef{ID: t.ID, Alias: t.Alias, Tool: t.Tool}
+	}
+	dagEntry := r.dags.Start(session.taskGroupID, message, coordAlias, dagTasks)
+
 	// Validate plan.
 	if len(plan.Tasks) > r.maxOrchestrationTasks {
+		r.dags.Fail(dagEntry)
 		return "", "", nil, fmt.Errorf("plan has %d tasks, exceeds maximum of %d", len(plan.Tasks), r.maxOrchestrationTasks)
 	}
 	if detectCycle(plan.Tasks) {
+		r.dags.Fail(dagEntry)
 		return "", "", nil, fmt.Errorf("circular dependency detected in task plan")
 	}
 
@@ -603,9 +812,31 @@ func (r *relay) orchestrate(
 	results := make(map[string]string, len(plan.Tasks))
 	agentResps := make(map[string]*agentChatResponse, len(plan.Tasks))
 	completed := make(map[string]bool, len(plan.Tasks))
+	failed := make(map[string]string) // taskID → error message
 	var mu sync.Mutex
 
 	for len(completed) < len(plan.Tasks) {
+		// Check if remaining tasks depend on a failed task — abort early.
+		mu.Lock()
+		if len(failed) > 0 {
+			for _, t := range plan.Tasks {
+				if completed[t.ID] {
+					continue
+				}
+				for _, dep := range t.DependsOn {
+					if errMsg, ok := failed[dep]; ok {
+						mu.Unlock()
+						if r.debug {
+							log.Printf("relay: DAG aborted — task %s depends on failed task %s", t.ID, dep)
+						}
+						r.dags.Fail(dagEntry)
+						return fmt.Sprintf("Task @%s failed: %s", dep, errMsg), dep, nil, nil
+					}
+				}
+			}
+		}
+		mu.Unlock()
+
 		// Find tasks whose dependencies are all satisfied.
 		var ready []dagTask
 		for _, t := range plan.Tasks {
@@ -625,6 +856,7 @@ func (r *relay) orchestrate(
 		}
 
 		if len(ready) == 0 {
+			r.dags.Fail(dagEntry)
 			return "", "", nil, fmt.Errorf("no tasks ready but %d incomplete — possible cycle missed", len(plan.Tasks)-len(completed))
 		}
 
@@ -643,6 +875,21 @@ func (r *relay) orchestrate(
 				defer wg.Done()
 
 				prompt := interpolate(t.Prompt, snapshot)
+				t.Parameters = interpolateParams(t.Parameters, snapshot)
+
+				// Build the full instruction text for DAG visibility.
+				nodePrompt := prompt
+				if len(t.Parameters) > 0 {
+					if pj, err := json.Marshal(t.Parameters); err == nil {
+						if nodePrompt != "" {
+							nodePrompt += "\n\nparameters: " + string(pj)
+						} else {
+							nodePrompt = string(pj)
+						}
+					}
+				}
+				r.dags.NodeStarted(dagEntry, t.ID, nodePrompt)
+				progress("running", fmt.Sprintf("Running @%s...", t.Alias))
 
 				var callTraceID string
 				taskStart := time.Now()
@@ -656,38 +903,78 @@ func (r *relay) orchestrate(
 				taskCtx, cancel := context.WithTimeout(ctx, time.Duration(r.taskTimeoutSeconds)*time.Second)
 				defer cancel()
 
+				var taskErr error
 				var result string
 				var resp *agentChatResponse
 				if t.Alias == "self" {
-					targetPluginID = coordinator.PluginID
-					// Call coordinator back in worker mode for synthesis.
-					resp, err = r.callAgent(taskCtx, coordinator.PluginID, coordinator.Model,
-						prompt, nil, nil, coordAlias)
-					if err != nil {
-						result = fmt.Sprintf("[error from self: %v]", err)
+					targetPluginID = coordPluginID
+					// Call coordinator back in worker mode — use the persona's base
+					// prompt without routing instructions (which would produce another JSON plan).
+					resp, taskErr = r.callAgent(taskCtx, coordPluginID, coordModel,
+						prompt, nil, nil, coordAlias, selfWorkerPrompt)
+					if taskErr != nil {
+						result = fmt.Sprintf("[error from self: %v]", taskErr)
 					} else {
 						result = resp.Response
 					}
-				} else {
-					target := aliases.Resolve(t.Alias)
-					if target == nil || target.Type != alias.TargetAgent {
-						result = fmt.Sprintf("[error: alias @%s not found or not an agent]", t.Alias)
+				} else if t.Tool != "" {
+					// Direct tool call — route to the tool endpoint on the plugin.
+					resolved := r.resolvePersonaOrAlias(t.Alias, aliases)
+					if resolved == nil {
+						taskErr = fmt.Errorf("@%s not found as persona or alias", t.Alias)
+						result = fmt.Sprintf("[error: %v]", taskErr)
 					} else {
-						targetPluginID = target.PluginID
-						resp, err = r.callAgent(taskCtx, target.PluginID, target.Model,
-							prompt, nil, nil, t.Alias)
-						if err != nil {
-							result = fmt.Sprintf("[error from @%s: %v]", t.Alias, err)
+						targetPluginID = resolved.PluginID
+						toolResult, toolErr := r.callTool(taskCtx, resolved.PluginID, t.Tool, t.Parameters)
+						if toolErr != nil {
+							taskErr = toolErr
+							result = fmt.Sprintf("[error from @%s tool %s: %v]", t.Alias, t.Tool, toolErr)
+						} else {
+							// Parse as agentChatResponse if possible, fall back to raw JSON.
+							if err := json.Unmarshal(toolResult, &resp); err != nil || resp.Response == "" {
+								resp = &agentChatResponse{Response: string(toolResult)}
+							}
+							result = resp.Response
+						}
+					}
+				} else {
+					// Persona-first, alias-fallback resolution.
+					resolved := r.resolvePersonaOrAlias(t.Alias, aliases)
+					if resolved == nil {
+						taskErr = fmt.Errorf("@%s not found as persona or alias", t.Alias)
+						result = fmt.Sprintf("[error: %v]", taskErr)
+					} else {
+						targetPluginID = resolved.PluginID
+						agentPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
+						resp, taskErr = r.callAgent(taskCtx, resolved.PluginID, resolved.Model,
+							prompt, nil, nil, resolved.Alias, agentPrompt)
+						if taskErr != nil {
+							result = fmt.Sprintf("[error from @%s: %v]", t.Alias, taskErr)
 						} else {
 							result = resp.Response
 						}
 					}
 				}
 
+				// If the tool returned an async response, emit a started event
+				// and block until the async task completes via event bus.
+				if resp != nil && resp.Status == "processing" && resp.TaskID != "" {
+					progress("running", fmt.Sprintf("@%s started async task %s...", t.Alias, resp.TaskID))
+					asyncResp, asyncErr := r.waitForAsync(resp.TaskID, session.taskGroupID, session.sourcePlugin, session.channelID)
+					if asyncErr != nil {
+						taskErr = asyncErr
+						result = fmt.Sprintf("[error from @%s: %v]", t.Alias, asyncErr)
+						resp = nil
+					} else {
+						resp = asyncResp
+						result = asyncResp.Response
+					}
+				}
+
 				if r.debug {
 					var traceErr string
-					if err != nil {
-						traceErr = err.Error()
+					if taskErr != nil {
+						traceErr = taskErr.Error()
 					}
 					var respAttach []debugtrace.Attachment
 					respModel := ""
@@ -705,25 +992,19 @@ func (r *relay) orchestrate(
 					agentResps[t.ID] = resp
 				}
 				completed[t.ID] = true
+				if taskErr != nil {
+					failed[t.ID] = taskErr.Error()
+					r.dags.NodeFailed(dagEntry, t.ID, taskErr.Error())
+					progress("running", fmt.Sprintf("@%s failed: %v", t.Alias, taskErr))
+				} else {
+					r.dags.NodeCompleted(dagEntry, t.ID)
+					elapsed := time.Since(taskStart)
+					progress("running", fmt.Sprintf("@%s completed (%.1fs)", t.Alias, elapsed.Seconds()))
+				}
 				mu.Unlock()
 			}(task)
 		}
 		wg.Wait()
-	}
-
-	// Find terminal tasks (nothing depends on them) — these are the outputs.
-	dependedOn := make(map[string]bool, len(plan.Tasks))
-	for _, t := range plan.Tasks {
-		for _, dep := range t.DependsOn {
-			dependedOn[dep] = true
-		}
-	}
-
-	var terminals []dagTask
-	for _, t := range plan.Tasks {
-		if !dependedOn[t.ID] {
-			terminals = append(terminals, t)
-		}
 	}
 
 	// Collect all attachments from every task in the DAG.
@@ -734,38 +1015,42 @@ func (r *relay) orchestrate(
 		}
 	}
 
-	if len(terminals) == 1 {
-		t := terminals[0]
-		resp := results[t.ID]
-		a := t.Alias
-		if a == "self" {
-			a = coordAlias
-		}
-		termResp := agentResps[t.ID]
-		// If the terminal task itself has no attachments but other tasks do,
-		// carry forward all collected attachments.
-		if termResp != nil && len(termResp.Attachments) == 0 && len(allAttachments) > 0 {
-			termResp.Attachments = allAttachments
-		}
-		return resp, a, termResp, nil
+	// Build a summary of all task results for synthesis.
+	var summaryParts strings.Builder
+	for _, t := range plan.Tasks {
+		fmt.Fprintf(&summaryParts, "[%s @%s]: %s\n\n", t.ID, t.Alias, results[t.ID])
 	}
 
-	// Multiple terminal tasks — coordinator should have included a self synthesis task.
-	// Concatenate as fallback.
-	var sb strings.Builder
-	for _, t := range terminals {
-		a := t.Alias
-		if a == "self" {
-			a = coordAlias
-		}
-		fmt.Fprintf(&sb, "[@%s]: %s\n\n", a, results[t.ID])
+	progress("synthesizing", "Combining results...")
+
+	// Call the coordinator one final time to synthesize a user-friendly summary.
+	synthesisPrompt := fmt.Sprintf(
+		"The user asked: %s\n\nThe following tasks were executed and produced these results:\n\n%s"+
+			"Summarize the outcome for the user in natural, conversational language. "+
+			"Be concise. Do not mention task IDs, aliases, or internal details. "+
+			"If a task produced an image or file, mention it naturally.",
+		message, summaryParts.String())
+
+	synthCtx, synthCancel := context.WithTimeout(ctx, time.Duration(r.taskTimeoutSeconds)*time.Second)
+	defer synthCancel()
+
+	synthResp, synthErr := r.callAgent(synthCtx, coordPluginID, coordModel,
+		synthesisPrompt, nil, nil, coordAlias, selfWorkerPrompt)
+	if synthErr != nil {
+		// Fallback: return raw concatenation if synthesis fails.
+		log.Printf("relay: synthesis call failed: %v, using raw results", synthErr)
+		r.dags.Complete(dagEntry)
+		fallback := &agentChatResponse{Attachments: allAttachments}
+		return strings.TrimSpace(summaryParts.String()), coordAlias, fallback, nil
 	}
-	// Build a synthetic response that carries forward all attachments.
-	var synthResp *agentChatResponse
+
+	// Carry forward all attachments from the DAG into the synthesis response.
 	if len(allAttachments) > 0 {
-		synthResp = &agentChatResponse{Attachments: allAttachments}
+		synthResp.Attachments = append(synthResp.Attachments, allAttachments...)
 	}
-	return strings.TrimSpace(sb.String()), "relay", synthResp, nil
+
+	r.dags.Complete(dagEntry)
+	return synthResp.Response, coordAlias, synthResp, nil
 }
 
 // toTraceAttachments converts agent attachments to trace attachment format.
@@ -775,7 +1060,7 @@ func toTraceAttachments(attachments []agentAttachment) []debugtrace.Attachment {
 	}
 	out := make([]debugtrace.Attachment, len(attachments))
 	for i, a := range attachments {
-		out[i] = debugtrace.Attachment{MimeType: a.MimeType, ImageData: a.ImageData}
+		out[i] = debugtrace.Attachment{MimeType: a.MimeType, ImageData: a.ImageData, Type: a.Type, URL: a.URL, Filename: a.Filename}
 	}
 	return out
 }
@@ -810,15 +1095,6 @@ func (r *relay) routeToWorkspace(c *gin.Context, ws *router.WorkspaceRoute, req 
 	})
 }
 
-// routeToAgent calls an agent plugin and returns the full response with responder alias set.
-func (r *relay) routeToAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias string) (*agentChatResponse, string, error) {
-	resp, err := r.callAgent(ctx, pluginID, model, message, imageURLs, history, agentAlias)
-	if err != nil {
-		return nil, "", err
-	}
-	return resp, agentAlias, nil
-}
-
 // agentChatRequest is the standard chat format used by all agent plugins.
 type agentChatRequest struct {
 	Message       string            `json:"message"`
@@ -841,6 +1117,9 @@ type agentChatResponse struct {
 	Usage       *agentUsage         `json:"usage,omitempty"`
 	CostUSD     float64             `json:"cost_usd,omitempty"`
 	Attachments []agentAttachment   `json:"attachments,omitempty"`
+	// Async fields — present when plugin returns immediately with a task ID.
+	Status      string              `json:"status,omitempty"`  // "processing" for async
+	TaskID      string              `json:"task_id,omitempty"` // plugin's internal task ID
 }
 
 type agentUsage struct {
@@ -851,22 +1130,16 @@ type agentUsage struct {
 
 type agentAttachment struct {
 	MimeType  string `json:"mime_type"`
-	ImageData string `json:"image_data"`
+	ImageData string `json:"image_data,omitempty"`
+	Type      string `json:"type,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
 // callAgent sends a chat request to an agent plugin via the kernel route.
-func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias string) (*agentChatResponse, error) {
-	// Inject persona system prompt.
-	systemPrompt := ""
-	if agentAlias != "" {
-		if p := r.lookupPersona(agentAlias); p != nil {
-			systemPrompt = p.SystemPrompt
-			if p.Model != "" && model == "" {
-				model = p.Model
-			}
-		}
-	}
-
+// The caller is responsible for resolving the persona/alias and passing the
+// system prompt; callAgent no longer does its own persona lookup.
+func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string) (*agentChatResponse, error) {
 	conversation := append(history, conversationMsg{Role: "user", Content: message})
 
 	reqBody := agentChatRequest{
@@ -894,6 +1167,98 @@ func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, 
 	}
 
 	return &chatResp, nil
+}
+
+// callTool invokes a specific tool endpoint on a plugin. It resolves the tool
+// by name from the discovery cache, substitutes path parameters, and calls
+// the endpoint via the SDK route.
+func (r *relay) callTool(ctx context.Context, pluginID, toolName string, params map[string]interface{}) ([]byte, error) {
+	tools := discoverTools(r.sdk)
+	var toolInfo *alias.ToolInfo
+	for i := range tools {
+		if tools[i].PluginID == pluginID && tools[i].Name == toolName {
+			toolInfo = &tools[i]
+			break
+		}
+	}
+	if toolInfo == nil {
+		return nil, fmt.Errorf("tool %q not found on plugin %s", toolName, pluginID)
+	}
+
+	endpoint := toolInfo.Endpoint
+	if endpoint == "" {
+		return nil, fmt.Errorf("tool %q on plugin %s has no endpoint", toolName, pluginID)
+	}
+
+	// Substitute :param placeholders in the endpoint path.
+	// Convention: path param ":taskId" matches request param "task_id" (snake_case → camelCase).
+	for key, val := range params {
+		strVal := fmt.Sprintf("%v", val)
+		// Try exact match first (e.g. :task_id), then camelCase (e.g. :taskId).
+		placeholder := ":" + key
+		if strings.Contains(endpoint, placeholder) {
+			endpoint = strings.Replace(endpoint, placeholder, strVal, 1)
+			continue
+		}
+		camel := snakeToCamel(key)
+		placeholder = ":" + camel
+		if strings.Contains(endpoint, placeholder) {
+			endpoint = strings.Replace(endpoint, placeholder, strVal, 1)
+		}
+	}
+
+	// Determine HTTP method: GET if no remaining body params, POST otherwise.
+	method := "GET"
+	bodyParams := make(map[string]interface{})
+	for key, val := range params {
+		placeholder := ":" + key
+		camel := ":" + snakeToCamel(key)
+		if !strings.Contains(toolInfo.Endpoint, placeholder) && !strings.Contains(toolInfo.Endpoint, camel) {
+			bodyParams[key] = val
+		}
+	}
+
+	var bodyReader *bytes.Reader
+	if len(bodyParams) > 0 {
+		method = "POST"
+		body, err := json.Marshal(bodyParams)
+		if err != nil {
+			return nil, fmt.Errorf("marshal tool params: %w", err)
+		}
+		bodyReader = bytes.NewReader(body)
+	}
+
+	log.Printf("relay: calling tool %s on %s: %s %s", toolName, pluginID, method, endpoint)
+	if bodyReader != nil {
+		return r.sdk.RouteToPlugin(ctx, pluginID, method, endpoint, bodyReader)
+	}
+	return r.sdk.RouteToPlugin(ctx, pluginID, method, endpoint, nil)
+}
+
+// snakeToCamel converts snake_case to camelCase (e.g. "task_id" → "taskId").
+func snakeToCamel(s string) string {
+	parts := strings.Split(s, "_")
+	for i := 1; i < len(parts); i++ {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// waitForAsync blocks until an async task completes. There is no fixed timeout —
+// the background poll loop in the tool plugin drives liveness. As long as the
+// remote API says "processing", we keep waiting.
+func (r *relay) waitForAsync(taskID, taskGroupID, sourcePlugin, channelID string) (*agentChatResponse, error) {
+	log.Printf("relay: async task %s (group=%s) — waiting for completion", taskID, taskGroupID)
+	ch := r.registerAsyncWaiter(taskID, taskGroupID, sourcePlugin, channelID)
+	defer r.removeAsyncWaiter(taskID)
+
+	result := <-ch
+	if result == nil {
+		return nil, fmt.Errorf("async task %s: waiter closed without result", taskID)
+	}
+	return result, nil
 }
 
 // --- Workspace connection management ---
@@ -929,54 +1294,6 @@ func (r *relay) disconnect(workspaceID string) {
 }
 
 // --- Config & routing management endpoints ---
-
-// handleSetCoordinator sets the coordinator agent for a source plugin.
-func (r *relay) handleSetCoordinator(c *gin.Context) {
-	var req struct {
-		SourcePlugin string `json:"source_plugin"`
-		PluginID     string `json:"plugin_id,omitempty"`
-		Alias        string `json:"alias,omitempty"`
-		Model        string `json:"model,omitempty"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if req.SourcePlugin == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "source_plugin required"})
-		return
-	}
-
-	pluginID := req.PluginID
-	model := req.Model
-
-	if req.Alias != "" && pluginID == "" {
-		aliases := r.routes.Aliases()
-		if aliases == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "aliases not loaded yet"})
-			return
-		}
-		target := aliases.Resolve(req.Alias)
-		if target == nil || target.Type != alias.TargetAgent {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias @%s not found or not an agent", req.Alias)})
-			return
-		}
-		pluginID = target.PluginID
-		if model == "" {
-			model = target.Model
-		}
-	}
-
-	if pluginID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "plugin_id or alias required"})
-		return
-	}
-
-	r.routes.SetCoordinator(req.SourcePlugin, pluginID, model)
-	log.Printf("coordinator set: %s → %s (model=%s, alias=%s)", req.SourcePlugin, pluginID, model, req.Alias)
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "plugin_id": pluginID, "alias": req.Alias})
-}
 
 // handleMapWorkspace maps a channel to a workspace bridge.
 func (r *relay) handleMapWorkspace(c *gin.Context) {
@@ -1023,40 +1340,24 @@ func (r *relay) handleStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"active_connections": len(workspaces),
 		"workspaces":         workspaces,
-		"coordinators":       r.routes.ListCoordinators(),
 		"workspace_mappings": r.routes.ListWorkspaces(),
 	})
 }
 
-// coordinatorMapSchema returns a snapshot of current coordinator assignments for display.
-func (r *relay) coordinatorMapSchema() map[string]string {
-	coordinators := r.routes.ListCoordinators()
-	defaultCoord := r.routes.GetDefaultCoordinator()
-	aliases := r.routes.Aliases()
+// routeMapSchema returns a read-only snapshot of the relay's routing state.
+func (r *relay) routeMapSchema() map[string]interface{} {
+	r.mu.RLock()
+	activeConns := make([]string, 0, len(r.conns))
+	for id := range r.conns {
+		activeConns = append(activeConns, id)
+	}
+	r.mu.RUnlock()
 
-	coordMap := make(map[string]string)
-	for sourcePlugin, coord := range coordinators {
-		name := coord.PluginID
-		if aliases != nil {
-			if a := aliases.FindAliasByPluginID(coord.PluginID); a != "" {
-				name = "@" + a
-			}
-		}
-		coordMap[sourcePlugin] = name
+	return map[string]interface{}{
+		"active_connections": len(activeConns),
+		"workspace_bridges":  activeConns,
+		"workspace_mappings": r.routes.ListWorkspaces(),
 	}
-	if defaultCoord != nil {
-		name := defaultCoord.PluginID
-		if aliases != nil {
-			if a := aliases.FindAliasByPluginID(defaultCoord.PluginID); a != "" {
-				name = "@" + a
-			}
-		}
-		coordMap["(default)"] = name
-	}
-	if len(coordMap) == 0 {
-		coordMap["(none)"] = "no coordinators assigned"
-	}
-	return coordMap
 }
 
 func main() {
@@ -1074,118 +1375,92 @@ func main() {
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		SchemaFunc: func() map[string]interface{} {
-			coordMap := map[string]string{"(none)": "no coordinators assigned"}
+			schema := map[string]interface{}{
+				"config": manifest.ConfigSchema,
+			}
 			if relayRef != nil {
-				coordMap = relayRef.coordinatorMapSchema()
+				schema["route_map"] = relayRef.routeMapSchema()
+				schema["agent_dag_list"] = relayRef.dags.AllDags()
 			}
-			return map[string]interface{}{
-				"config":          manifest.ConfigSchema,
-				"coordinator_map": coordMap,
-			}
+			return schema
 		},
 	})
 	r := newRelay(sdkClient)
 	relayRef = r
 
-	// Subscribe to alias updates from infra-alias-registry.
-	// Converts registry entries to AliasInfo and replaces the alias map.
-	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Refresh all aliases from the registry (used for ready + initial fetch).
+	refreshAliases := func() {
+		entries, err := sdkClient.FetchAliases()
+		if err != nil {
+			log.Printf("alias refresh failed: %v", err)
+			return
+		}
+		r.routes.SetAliases(alias.NewAliasMap(entries))
+		log.Printf("Aliases refreshed: %d entries", len(entries))
+
+		r.personas.mu.Lock()
+		r.personas.fetchedAt = time.Time{}
+		r.personas.mu.Unlock()
+	}
+
+	// Patch a single alias on create/update/delete events.
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
 		var detail struct {
-			Aliases []struct {
-				Name        string `json:"name"`
-				Type        string `json:"type"`
-				Plugin      string `json:"plugin"`
-				Provider    string `json:"provider"`
-				Model       string `json:"model"`
-				SystemPrompt string `json:"system_prompt"`
-			} `json:"aliases"`
+			Action string `json:"action"`
+			Alias  struct {
+				Name     string `json:"name"`
+				Type     string `json:"type"`
+				Plugin   string `json:"plugin"`
+				Model    string `json:"model"`
+			} `json:"alias"`
 		}
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("alias:update parse error: %v", err)
+			log.Printf("alias-registry:update parse error: %v", err)
 			return
 		}
 
-		infos := make([]alias.AliasInfo, 0, len(detail.Aliases))
-		for _, a := range detail.Aliases {
-			target := a.Plugin
-			if a.Model != "" {
-				target = a.Plugin + ":" + a.Model
+		am := r.routes.Aliases()
+		if am == nil {
+			refreshAliases()
+			return
+		}
+
+		if detail.Action == "deleted" {
+			am.Remove(detail.Alias.Name)
+			log.Printf("Alias removed: %s", detail.Alias.Name)
+		} else {
+			target := detail.Alias.Plugin
+			if detail.Alias.Model != "" {
+				target += ":" + detail.Alias.Model
 			}
-			// Map registry type to SDK capabilities for correct TargetType resolution.
 			var caps []string
-			switch a.Type {
+			switch detail.Alias.Type {
 			case "agent":
 				caps = []string{"agent:chat"}
 			case "tool_agent":
-				// Preserve the specific agent:tool sub-capability if present in the plugin.
-				// Fall back to generic agent:tool for SDK routing.
 				caps = []string{"agent:tool"}
 			default:
 				caps = []string{"tool:mcp"}
 			}
-			infos = append(infos, alias.AliasInfo{
-				Name:         a.Name,
-				Target:       target,
-				Capabilities: caps,
-			})
+			am.Set(detail.Alias.Name, alias.TargetFromInfo(target, caps))
+			log.Printf("Alias %s: %s → %s", detail.Action, detail.Alias.Name, target)
 		}
 
-		r.routes.SetAliases(alias.NewAliasMap(infos))
-		log.Printf("Aliases updated from registry: %d entries", len(infos))
-
-		// Invalidate persona cache so mergedAliases picks up fresh data.
 		r.personas.mu.Lock()
 		r.personas.fetchedAt = time.Time{}
 		r.personas.mu.Unlock()
-
-		// Re-resolve default coordinator in case aliases changed.
-		r.fetchDefaultCoordinator()
 	}))
 
-	sdkClient.OnEvent("relay:coordinator", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			SourcePlugin string `json:"source_plugin"`
-			Alias        string `json:"alias"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("relay:coordinator parse error: %v", err)
-			return
-		}
-		aliases := r.routes.Aliases()
-		if aliases == nil {
-			log.Printf("relay:coordinator: aliases not loaded yet, skipping %s → @%s", detail.SourcePlugin, detail.Alias)
-			return
-		}
-		target := aliases.Resolve(detail.Alias)
-		if target == nil || target.Type != alias.TargetAgent {
-			log.Printf("relay:coordinator: alias @%s not found or not an agent", detail.Alias)
-			return
-		}
-		r.routes.SetCoordinator(detail.SourcePlugin, target.PluginID, target.Model)
-		log.Printf("coordinator set via event: %s → @%s (%s)", detail.SourcePlugin, detail.Alias, target.PluginID)
-
-		r.mu.Lock()
-		setDefault := r.allowFirstAsDefault
-		if setDefault {
-			r.allowFirstAsDefault = false
-		}
-		r.mu.Unlock()
-
-		if setDefault {
-			r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
-			log.Printf("first coordinator also set as default: @%s (%s)", detail.Alias, target.PluginID)
-		}
+	// Re-fetch aliases when the registry signals it's ready (handles startup ordering).
+	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
+		refreshAliases()
 	}))
-
-	// Assume first coordinator should become default; overridden below if
-	// DEFAULT_COORDINATOR is explicitly configured.
-	r.allowFirstAsDefault = true
 
 	sdkClient.Start(context.Background())
 
 	entries, err := sdkClient.FetchAliases()
 	if err != nil {
-		log.Printf("Initial alias fetch failed: %v (will update via events)", err)
+		log.Printf("Initial alias fetch failed: %v (will update via alias-registry:ready event)", err)
 	} else {
 		r.routes.SetAliases(alias.NewAliasMap(entries))
 		log.Printf("Loaded %d aliases", len(entries))
@@ -1195,27 +1470,6 @@ func main() {
 	if err != nil {
 		log.Printf("Failed to fetch relay config: %v (using defaults)", err)
 	}
-
-	if v := pluginConfig["DEFAULT_COORDINATOR"]; v != "" {
-		aliases := r.routes.Aliases()
-		if aliases != nil {
-			if target := aliases.Resolve(v); target != nil && target.Type == alias.TargetAgent {
-				r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
-				r.mu.Lock()
-				r.allowFirstAsDefault = false // explicit config resolved, don't override
-				r.mu.Unlock()
-				log.Printf("Default coordinator set from config: @%s (%s)", v, target.PluginID)
-			} else {
-				log.Printf("DEFAULT_COORDINATOR alias @%s not found, will use first registered coordinator", v)
-			}
-		}
-	} else {
-		log.Printf("DEFAULT_COORDINATOR not set — first relay:coordinator event will become the default")
-	}
-
-	// Try to resolve default coordinator from the persona plugin.
-	// This takes precedence over config and first-registration fallbacks.
-	r.fetchDefaultCoordinator()
 
 	if v := pluginConfig["MAX_ORCHESTRATION_TASKS"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -1245,25 +1499,6 @@ func main() {
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
 			log.Printf("config:update parse error: %v", err)
 			return
-		}
-
-		if v, ok := detail.Config["DEFAULT_COORDINATOR"]; ok {
-			aliases := r.routes.Aliases()
-			if aliases == nil {
-				log.Printf("config:update DEFAULT_COORDINATOR: aliases not loaded yet")
-				return
-			}
-			if v == "" {
-				log.Printf("DEFAULT_COORDINATOR cleared")
-				return
-			}
-			target := aliases.Resolve(v)
-			if target == nil || target.Type != alias.TargetAgent {
-				log.Printf("config:update DEFAULT_COORDINATOR: alias @%s not found", v)
-				return
-			}
-			r.routes.SetDefaultCoordinator(target.PluginID, target.Model)
-			log.Printf("Default coordinator updated: @%s (%s)", v, target.PluginID)
 		}
 
 		if v, ok := detail.Config["MAX_ORCHESTRATION_TASKS"]; ok {
@@ -1304,6 +1539,87 @@ func main() {
 		}
 	}))
 
+	// Handle progress updates from async plugins (e.g. seedance webhook callbacks).
+	// Forward to the source messaging plugin and resolve any waiting DAG tasks.
+	sdkClient.OnEvent("relay:task:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		var update struct {
+			TaskID      string `json:"task_id"`
+			Status      string `json:"status"`
+			Message     string `json:"message"`
+			VideoURL    string `json:"video_url,omitempty"`
+			Attachments []struct {
+				Type     string `json:"type,omitempty"`
+				MimeType string `json:"mime_type,omitempty"`
+				URL      string `json:"url,omitempty"`
+				Filename string `json:"filename,omitempty"`
+			} `json:"attachments,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(event.Detail), &update); err != nil {
+			log.Printf("relay: failed to parse relay:task:progress: %v", err)
+			return
+		}
+
+		log.Printf("relay: progress update task=%s status=%s message=%s", update.TaskID, update.Status, update.Message)
+
+		// If a DAG task is waiting for this async result, deliver it.
+		if update.Status == "completed" || update.Status == "failed" {
+			resp := &agentChatResponse{
+				Response: update.Message,
+			}
+			if update.Status == "completed" {
+				for _, att := range update.Attachments {
+					resp.Attachments = append(resp.Attachments, agentAttachment{
+						Type:     att.Type,
+						MimeType: att.MimeType,
+						URL:      att.URL,
+						Filename: att.Filename,
+					})
+				}
+			}
+			if r.resolveAsyncWaiter(update.TaskID, resp) {
+				log.Printf("relay: resolved async waiter for task %s (status=%s)", update.TaskID, update.Status)
+			}
+		}
+
+		// Forward progress to the messaging plugin that initiated this task.
+		// Look up session context from the async waiter first; fall back to
+		// the global last-session if no waiter is registered.
+		taskGroupID, sourcePlugin, channelID, found := r.lookupAsyncWaiter(update.TaskID)
+		if !found {
+			r.lastSessionMu.RLock()
+			sourcePlugin = r.lastSourcePlugin
+			channelID = r.lastChannelID
+			r.lastSessionMu.RUnlock()
+		}
+
+		if sourcePlugin == "" {
+			log.Printf("relay: no active session to forward progress to")
+			return
+		}
+
+		// Forward as a "running" progress update so the UI shows it as an
+		// intermediate status — not "completed"/"failed", which would cause
+		// the messaging plugin to store a final message prematurely.
+		// The real final response comes from the DAG synthesis step.
+		forwardStatus := "running"
+		forwardMessage := update.Message
+		if update.Status == "completed" {
+			forwardMessage = fmt.Sprintf("Task completed: %s", update.Message)
+		} else if update.Status == "failed" {
+			forwardMessage = fmt.Sprintf("Task failed: %s", update.Message)
+		}
+
+		payload, _ := json.Marshal(map[string]interface{}{
+			"task_group_id": taskGroupID,
+			"channel_id":    channelID,
+			"task_id":       update.TaskID,
+			"status":        forwardStatus,
+			"message":       forwardMessage,
+		})
+		sdkClient.ReportAddressedEvent("relay:progress", string(payload), sourcePlugin)
+		log.Printf("relay: forwarded progress to %s channel=%s group=%s", sourcePlugin, channelID, taskGroupID)
+	}))
+
 	ginRouter := gin.Default()
 
 	ginRouter.GET("/health", func(c *gin.Context) {
@@ -1312,7 +1628,6 @@ func main() {
 
 	ginRouter.POST("/chat", r.handleChat)
 
-	ginRouter.POST("/config/coordinator", r.handleSetCoordinator)
 	ginRouter.POST("/config/workspace/map", r.handleMapWorkspace)
 	ginRouter.POST("/config/workspace/unmap", r.handleUnmapWorkspace)
 
@@ -1357,7 +1672,7 @@ func main() {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		sdkClient.ReportEvent("relay:ready", "accepting coordinator and chat requests")
+		sdkClient.ReportEvent("relay:ready", "accepting chat requests")
 	}()
 
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
