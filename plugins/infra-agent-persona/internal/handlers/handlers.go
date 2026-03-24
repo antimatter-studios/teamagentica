@@ -11,13 +11,13 @@ import (
 // Handler serves persona API endpoints.
 type Handler struct {
 	db                       *storage.DB
-	defaultWorkerPrompt      string
-	defaultCoordinatorPrompt string
+	workerPrompt      string
+	coordinatorPrompt string
 }
 
 // New creates a new Handler.
-func New(db *storage.DB, defaultWorkerPrompt, defaultCoordinatorPrompt string) *Handler {
-	return &Handler{db: db, defaultWorkerPrompt: defaultWorkerPrompt, defaultCoordinatorPrompt: defaultCoordinatorPrompt}
+func New(db *storage.DB, workerPrompt, coordinatorPrompt string) *Handler {
+	return &Handler{db: db, workerPrompt: workerPrompt, coordinatorPrompt: coordinatorPrompt}
 }
 
 // Health handles GET /health.
@@ -106,15 +106,15 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 
 // defaultPromptForAlias returns the appropriate default prompt based on the persona alias.
 func (h *Handler) defaultPromptForAlias(alias string) string {
-	if alias == "default-coordinator" {
-		return h.defaultCoordinatorPrompt
+	if alias == "coordinator" || alias == "default-coordinator" {
+		return h.coordinatorPrompt
 	}
-	return h.defaultWorkerPrompt
+	return h.workerPrompt
 }
 
 // DefaultPrompt returns the default worker system prompt for pre-filling new persona forms.
 func (h *Handler) DefaultPrompt(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"system_prompt": h.defaultWorkerPrompt})
+	c.JSON(http.StatusOK, gin.H{"system_prompt": h.workerPrompt})
 }
 
 // DeletePersona handles DELETE /personas/:alias.

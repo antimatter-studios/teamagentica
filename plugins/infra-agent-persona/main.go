@@ -16,11 +16,11 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-persona/internal/storage"
 )
 
-//go:embed default-coordinator-system-prompt.md
-var defaultCoordinatorPrompt string
+//go:embed prompts/coordinator-system-prompt.md
+var coordinatorPrompt string
 
-//go:embed default-worker-system-prompt.md
-var defaultWorkerPrompt string
+//go:embed prompts/worker-system-prompt.md
+var workerPrompt string
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -64,21 +64,21 @@ func main() {
 		log.Fatalf("failed to open database: %v", err)
 	}
 
-	// Seed default-coordinator persona if it doesn't exist yet.
-	if _, err := db.Get("default-coordinator"); err != nil {
-		prompt := strings.TrimSpace(defaultCoordinatorPrompt)
+	// Seed coordinator persona if it doesn't exist yet.
+	if _, err := db.Get("coordinator"); err != nil {
+		prompt := strings.TrimSpace(coordinatorPrompt)
 		if seedErr := db.Create(&storage.Persona{
-			Alias:        "default-coordinator",
+			Alias:        "coordinator",
 			SystemPrompt: prompt,
 		}); seedErr != nil {
-			log.Printf("failed to seed default-coordinator persona: %v", seedErr)
+			log.Printf("failed to seed coordinator persona: %v", seedErr)
 		} else {
-			log.Println("seeded default-coordinator persona from embedded prompt")
+			log.Println("seeded coordinator persona from embedded prompt")
 		}
 	}
 
 	router := gin.Default()
-	h := handlers.New(db, strings.TrimSpace(defaultWorkerPrompt), strings.TrimSpace(defaultCoordinatorPrompt))
+	h := handlers.New(db, strings.TrimSpace(workerPrompt), strings.TrimSpace(coordinatorPrompt))
 
 	// Health
 	router.GET("/health", h.Health)

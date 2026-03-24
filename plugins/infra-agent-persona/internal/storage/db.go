@@ -9,12 +9,13 @@ import (
 
 // Persona represents an agent personality with a system prompt and routing info.
 type Persona struct {
-	Alias        string    `json:"alias" gorm:"primaryKey"`
-	SystemPrompt string    `json:"system_prompt" gorm:"not null"`
-	Model        string    `json:"model" gorm:"default:''"`
-	BackendAlias string    `json:"backend_alias" gorm:"default:''"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Alias        string         `json:"alias" gorm:"primaryKey"`
+	SystemPrompt string         `json:"system_prompt" gorm:"not null"`
+	Model        string         `json:"model" gorm:"default:''"`
+	BackendAlias string         `json:"backend_alias" gorm:"default:''"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // DB wraps the GORM database for persona storage.
