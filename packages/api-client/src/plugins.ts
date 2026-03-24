@@ -7,7 +7,7 @@ export interface ConfigSchemaField {
   secret?: boolean;
   readonly?: boolean;
   default?: string;
-  options?: string[];
+  options?: (string | { label: string; value: string })[];
   dynamic?: boolean;
   help_text?: string;
   visible_when?: { field: string; value: string };
@@ -155,7 +155,7 @@ export class PluginsAPI {
   async getFieldOptions(
     pluginId: string,
     field: string
-  ): Promise<{ options: string[]; error?: string; fallback?: boolean }> {
+  ): Promise<{ options: (string | { label: string; value: string })[]; error?: string; fallback?: boolean }> {
     return this.http.get(
       `/api/route/${pluginId}/config/options/${field}`
     );

@@ -4,19 +4,19 @@
 
 ## Overview
 
-The Volume Storage plugin provides file storage backed by a local filesystem path (typically a Docker volume mount). It exposes an S3-compatible object API for other plugins and a tool interface that allows AI agents to discover and use file operations. Supports browsing, reading, writing, and deleting files with automatic MIME type detection and directory traversal protection.
+The Disk Storage plugin provides file storage backed by a local filesystem path (typically a Docker volume mount). It exposes an S3-compatible object API for other plugins and a tool interface that allows AI agents to discover and use file operations. Supports browsing, reading, writing, and deleting files with automatic MIME type detection and directory traversal protection.
 
 ## Capabilities
 
 - `storage:api` — S3-compatible storage API
-- `storage:volume` — Volume-backed storage
+- `storage:disk` — Disk-backed storage
 - `tool:storage` — File operation tools for AI agents
 
 ## Configuration
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `STORAGE_DATA_PATH` | string | no | `/data` | Local filesystem path for volume storage |
+| `STORAGE_DATA_PATH` | string | no | `/data` | Local filesystem path for disk storage |
 | `STORAGE_VOLUME_PORT` | string | no | `8090` | HTTP port for the storage plugin |
 | `PLUGIN_ALIASES` | aliases | no | — | Alias configuration |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Log detailed operations |

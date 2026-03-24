@@ -17,7 +17,7 @@ use (
 	./plugins/infra-agent-relay
 	./plugins/infra-builder
 	./plugins/infra-cost-tracking
-	./plugins/infra-cron-scheduler
+	./plugins/infra-task-scheduler
 	./plugins/infra-redis
 	./plugins/infra-mcp-server
 	./plugins/infra-workspace-manager
@@ -25,8 +25,8 @@ use (
 	./plugins/messaging-discord
 	./plugins/messaging-telegram
 	./plugins/messaging-whatsapp
-	./plugins/network-ngrok
-	./plugins/network-webhook-ingress
+	./plugins/network-ngrok-ingress
+	./plugins/network-webhook
 	./plugins/storage-sss3
 	./plugins/system-user-manager
 	./plugins/storage-volume

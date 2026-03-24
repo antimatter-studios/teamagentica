@@ -86,6 +86,30 @@ export class FilesAPI {
     );
     return res.text();
   }
+
+  async browseTrash(pluginId: string, prefix: string): Promise<BrowseResult> {
+    return this.http.get<BrowseResult>(
+      `/api/route/${pluginId}/trash/browse?prefix=${encodeURIComponent(prefix)}`
+    );
+  }
+
+  async restoreFromTrash(pluginId: string, key: string): Promise<void> {
+    await this.http.post(
+      `/api/route/${pluginId}/trash/restore`,
+      { key }
+    );
+  }
+
+  async emptyTrash(pluginId: string, key?: string): Promise<void> {
+    await this.http.post(
+      `/api/route/${pluginId}/trash/empty`,
+      key ? { key } : {}
+    );
+  }
+
+  async refreshIndex(pluginId: string): Promise<void> {
+    await this.http.post(`/api/route/${pluginId}/refresh`, {});
+  }
 }
 
 export function formatBytes(bytes: number): string {

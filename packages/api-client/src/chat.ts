@@ -6,10 +6,16 @@ export interface Agent {
   model: string;
 }
 
+export interface ThreadState {
+  last_read_at?: string | null;
+}
+
 export interface Conversation {
   id: number;
   user_id: number;
   title: string;
+  state: ThreadState;
+  unread_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -17,7 +23,7 @@ export interface Conversation {
 export interface ChatMessage {
   id: number;
   conversation_id: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "progress";
   content: string;
   agent_alias?: string;
   agent_plugin?: string;
@@ -25,6 +31,8 @@ export interface ChatMessage {
   provider?: string;
   input_tokens?: number;
   output_tokens?: number;
+  cached_tokens?: number;
+  cost_usd?: number;
   duration_ms?: number;
   attachments?: string;
   created_at: string;
@@ -63,12 +71,8 @@ export class ChatAPI {
     return resp.conversations || [];
   }
 
-  async createConversation(
-    agentAlias: string,
-    title?: string
-  ): Promise<Conversation> {
+  async createConversation(title?: string): Promise<Conversation> {
     const body: Record<string, unknown> = {};
-    if (agentAlias && agentAlias !== "auto") body.agent_alias = agentAlias;
     if (title) body.title = title;
     return this.http.post<Conversation>(`${ROUTE}/conversations`, body);
   }
@@ -89,14 +93,16 @@ export class ChatAPI {
     return this.http.delete(`${ROUTE}/conversations/${id}`);
   }
 
+  async markRead(id: number): Promise<void> {
+    await this.http.post(`${ROUTE}/conversations/${id}/read`, {});
+  }
+
   async sendMessage(
     conversationId: number,
     content: string,
-    agentAlias: string,
     attachmentIds?: string[]
-  ): Promise<{ user_message: ChatMessage; assistant_message: ChatMessage }> {
+  ): Promise<{ user_message: ChatMessage; task_group_id?: string; assistant_message?: ChatMessage }> {
     const body: Record<string, unknown> = { content };
-    if (agentAlias && agentAlias !== "auto") body.agent_alias = agentAlias;
     if (attachmentIds && attachmentIds.length > 0)
       body.attachment_ids = attachmentIds;
     return this.http.post(

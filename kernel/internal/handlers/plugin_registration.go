@@ -441,7 +441,7 @@ func (h *PluginHandler) handleAddressedEvent(sourceID, eventType, detail, destID
 				PluginID: destID,
 				Detail:   fmt.Sprintf("event=%s from=%s callback=%s addressed=true", eventType, sourceID, callbackPath),
 			})
-			h.logEvent(eventType, sourceID, destID, "delivered", fmt.Sprintf("callback=%s addressed=true", callbackPath))
+			h.logEvent(eventType, sourceID, destID, "delivered", detail)
 			return
 		}
 		// Dispatch failed — increment attempts, leave in queue.

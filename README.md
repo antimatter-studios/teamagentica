@@ -78,7 +78,7 @@ First visit: register at the web UI — first user becomes admin.
 |--------|---------|-------------|
 | infra-workspace-manager | Cloud IDE management | workspace:manager |
 | infra-cost-explorer | Usage analytics | system:cost-explorer |
-| infra-cron-scheduler | Scheduled tasks | system:cron |
+| infra-task-scheduler | Scheduled tasks | infra:scheduler |
 | infra-mcp-server | MCP protocol | system:mcp |
 | network-ngrok | Tunnel | network:tunnel |
 | network-webhook-ingress | Webhooks | network:webhook |

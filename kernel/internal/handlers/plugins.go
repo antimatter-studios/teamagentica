@@ -559,7 +559,9 @@ func (h *PluginHandler) GetUILogs(c *gin.Context) {
 }
 
 // GetSelfConfig handles GET /api/plugins/:id/self-config — called by plugins
-// via the SDK to fetch their own configuration. Secret values are masked.
+// via the SDK to fetch their own configuration. Secret values are returned
+// unmasked because the plugin needs the actual values (e.g. API keys).
+// This endpoint is behind PluginTokenAuth so only authenticated plugins can call it.
 func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 	id := c.Param("id")
 
@@ -574,11 +576,7 @@ func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 
 	result := make(map[string]string, len(configs))
 	for _, cfg := range configs {
-		if cfg.IsSecret {
-			result[cfg.Key] = "********"
-		} else {
-			result[cfg.Key] = cfg.Value
-		}
+		result[cfg.Key] = cfg.Value
 	}
 
 	// Config defaults are handled by the plugin itself — it knows its own schema.
@@ -661,12 +659,13 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 			val := ""
 			isSecret := field.Secret
 			if cfg, ok := stored[key]; ok {
-				val = cfg.Value
 				if cfg.IsSecret || isSecret {
-					val = "********"
+					if cfg.Value != "" {
+						val = "********"
+					}
+				} else {
+					val = cfg.Value
 				}
-			} else if isSecret {
-				val = "********"
 			}
 			items = append(items, configItem{
 				Key:      key,
@@ -780,11 +779,7 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		// Build the new config values for the event detail.
 		configValues := make(map[string]string, len(req.Config))
 		for k, v := range req.Config {
-			if v.IsSecret {
-				configValues[k] = "********"
-			} else {
-				configValues[k] = v.Value
-			}
+			configValues[k] = v.Value
 		}
 
 		detail, _ := json.Marshal(map[string]interface{}{

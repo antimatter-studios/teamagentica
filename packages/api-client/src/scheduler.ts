@@ -1,6 +1,6 @@
 import type { HttpTransport } from "./client.js";
 
-const ROUTE = "/api/route/infra-cron-scheduler";
+const ROUTE = "/api/route/infra-task-scheduler";
 
 export interface ScheduledEvent {
   id: string;

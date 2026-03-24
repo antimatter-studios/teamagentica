@@ -52,9 +52,9 @@ includes:
   infra-cost-tracking:
     taskfile: ./plugins/infra-cost-tracking/Taskfile.yml
     dir: ./plugins/infra-cost-tracking
-  infra-cron-scheduler:
-    taskfile: ./plugins/infra-cron-scheduler/Taskfile.yml
-    dir: ./plugins/infra-cron-scheduler
+  infra-task-scheduler:
+    taskfile: ./plugins/infra-task-scheduler/Taskfile.yml
+    dir: ./plugins/infra-task-scheduler
   infra-redis:
     taskfile: ./plugins/infra-redis/Taskfile.yml
     dir: ./plugins/infra-redis
@@ -76,12 +76,12 @@ includes:
   messaging-whatsapp:
     taskfile: ./plugins/messaging-whatsapp/Taskfile.yml
     dir: ./plugins/messaging-whatsapp
-  network-ngrok:
-    taskfile: ./plugins/network-ngrok/Taskfile.yml
-    dir: ./plugins/network-ngrok
-  network-webhook-ingress:
-    taskfile: ./plugins/network-webhook-ingress/Taskfile.yml
-    dir: ./plugins/network-webhook-ingress
+  network-ngrok-ingress:
+    taskfile: ./plugins/network-ngrok-ingress/Taskfile.yml
+    dir: ./plugins/network-ngrok-ingress
+  network-webhook:
+    taskfile: ./plugins/network-webhook/Taskfile.yml
+    dir: ./plugins/network-webhook
   storage-sss3:
     taskfile: ./plugins/storage-sss3/Taskfile.yml
     dir: ./plugins/storage-sss3
@@ -131,7 +131,7 @@ tasks:
       - docker builder prune -f
 
   plugin:build:
-    desc: "Build a single plugin (prod): task plugin:build -- network-ngrok [--version 1.0.3]"
+    desc: "Build a single plugin (prod): task plugin:build -- network-ngrok-ingress [--version 1.0.3]"
     vars:
       PLUGIN_NAME:
         sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
@@ -157,7 +157,7 @@ tasks:
         silent: true
 
   plugin:build:dev:
-    desc: "Build a single plugin (dev): task plugin:build:dev -- network-ngrok [--version 1.0.3]"
+    desc: "Build a single plugin (dev): task plugin:build:dev -- network-ngrok-ingress [--version 1.0.3]"
     vars:
       PLUGIN_NAME:
         sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
@@ -183,7 +183,7 @@ tasks:
         silent: true
 
   plugin:test:
-    desc: "Test a single plugin: task plugin:test -- network-ngrok"
+    desc: "Test a single plugin: task plugin:test -- network-ngrok-ingress"
     cmds:
       - task: "{{.CLI_ARGS}}:test"
 
@@ -201,15 +201,15 @@ tasks:
       - task: infra-agent-relay:build
       - task: infra-builder:build
       - task: infra-cost-tracking:build
-      - task: infra-cron-scheduler:build
+      - task: infra-task-scheduler:build
       - task: infra-mcp-server:build
       - task: infra-workspace-manager:build
       - task: messaging-chat:build
       - task: messaging-discord:build
       - task: messaging-telegram:build
       - task: messaging-whatsapp:build
-      - task: network-ngrok:build
-      - task: network-webhook-ingress:build
+      - task: network-ngrok-ingress:build
+      - task: network-webhook:build
       - task: storage-sss3:build
       - task: storage-volume:build
       - task: tool-nanobanana:build
@@ -238,15 +238,15 @@ tasks:
       - task: infra-agent-relay:build:dev
       - task: infra-builder:build:dev
       - task: infra-cost-tracking:build:dev
-      - task: infra-cron-scheduler:build:dev
+      - task: infra-task-scheduler:build:dev
       - task: infra-mcp-server:build:dev
       - task: infra-workspace-manager:build:dev
       - task: messaging-chat:build:dev
       - task: messaging-discord:build:dev
       - task: messaging-telegram:build:dev
       - task: messaging-whatsapp:build:dev
-      - task: network-ngrok:build:dev
-      - task: network-webhook-ingress:build:dev
+      - task: network-ngrok-ingress:build:dev
+      - task: network-webhook:build:dev
       - task: storage-sss3:build:dev
       - task: storage-volume:build:dev
       - task: tool-nanobanana:build:dev
