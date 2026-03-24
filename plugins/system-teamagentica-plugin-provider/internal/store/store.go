@@ -15,11 +15,12 @@ import (
 
 // Manifest stores a versioned plugin manifest in the catalog database.
 type Manifest struct {
-	ID        uint      `gorm:"primaryKey" json:"-"`
-	PluginID  string    `gorm:"not null;index:idx_plugin_version,unique" json:"plugin_id"`
-	Version   string    `gorm:"not null;index:idx_plugin_version,unique" json:"version"`
-	Data      string    `gorm:"type:text;not null" json:"-"` // full plugin.yaml as JSON
-	CreatedAt time.Time `json:"created_at"`
+	ID        uint           `gorm:"primaryKey" json:"-"`
+	PluginID  string         `gorm:"not null;index:idx_plugin_version,unique" json:"plugin_id"`
+	Version   string         `gorm:"not null;index:idx_plugin_version,unique" json:"version"`
+	Data      string         `gorm:"type:text;not null" json:"-"` // full plugin.yaml as JSON
+	CreatedAt time.Time      `json:"created_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // Entry is a browsing summary derived from a manifest.

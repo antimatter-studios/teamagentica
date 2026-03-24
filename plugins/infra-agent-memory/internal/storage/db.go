@@ -10,12 +10,13 @@ import (
 
 // Message is a single turn in a conversation session.
 type Message struct {
-	ID        uint      `json:"id" gorm:"primaryKey;autoIncrement"`
-	SessionID string    `json:"session_id" gorm:"not null;index:idx_session_created"`
-	Role      string    `json:"role" gorm:"not null"` // "user" | "assistant"
-	Content   string    `json:"content" gorm:"not null"`
-	Responder string    `json:"responder" gorm:"default:''"`
-	CreatedAt time.Time `json:"created_at" gorm:"index:idx_session_created"`
+	ID        uint           `json:"id" gorm:"primaryKey;autoIncrement"`
+	SessionID string         `json:"session_id" gorm:"not null;index:idx_session_created"`
+	Role      string         `json:"role" gorm:"not null"` // "user" | "assistant"
+	Content   string         `json:"content" gorm:"not null"`
+	Responder string         `json:"responder" gorm:"default:''"`
+	CreatedAt time.Time      `json:"created_at" gorm:"index:idx_session_created"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // SessionSummary is a lightweight view of a session for listing.

@@ -9,24 +9,25 @@ import (
 
 // UsageRecord is a single API call's usage data reported by any plugin.
 type UsageRecord struct {
-	ID              uint      `json:"id" gorm:"primaryKey"`
-	PluginID        string    `json:"plugin_id" gorm:"index;not null"`
-	Provider        string    `json:"provider" gorm:"index;not null"`
-	Model           string    `json:"model" gorm:"index;not null"`
-	RecordType      string    `json:"record_type" gorm:"default:'token'"` // "token" or "request"
-	InputTokens     int       `json:"input_tokens"`
-	OutputTokens    int       `json:"output_tokens"`
-	TotalTokens     int       `json:"total_tokens"`
-	CachedTokens    int       `json:"cached_tokens"`
-	ReasoningTokens int       `json:"reasoning_tokens"`
-	DurationMs      int64     `json:"duration_ms"`
-	UserID          string    `json:"user_id" gorm:"index"`
-	Backend         string    `json:"backend"`
-	Status          string    `json:"status"`  // for request-type: "submitted", "completed", "failed"
-	Prompt          string    `json:"prompt"`  // for video tools
-	TaskID          string    `json:"task_id"` // for video tools
-	Timestamp       time.Time `json:"ts" gorm:"index;not null"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              uint           `json:"id" gorm:"primaryKey"`
+	PluginID        string         `json:"plugin_id" gorm:"index;not null"`
+	Provider        string         `json:"provider" gorm:"index;not null"`
+	Model           string         `json:"model" gorm:"index;not null"`
+	RecordType      string         `json:"record_type" gorm:"default:'token'"` // "token" or "request"
+	InputTokens     int            `json:"input_tokens"`
+	OutputTokens    int            `json:"output_tokens"`
+	TotalTokens     int            `json:"total_tokens"`
+	CachedTokens    int            `json:"cached_tokens"`
+	ReasoningTokens int            `json:"reasoning_tokens"`
+	DurationMs      int64          `json:"duration_ms"`
+	UserID          string         `json:"user_id" gorm:"index"`
+	Backend         string         `json:"backend"`
+	Status          string         `json:"status"`  // for request-type: "submitted", "completed", "failed"
+	Prompt          string         `json:"prompt"`  // for video tools
+	TaskID          string         `json:"task_id"` // for video tools
+	Timestamp       time.Time      `json:"ts" gorm:"index;not null"`
+	CreatedAt       time.Time      `json:"created_at"`
+	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // DB wraps the GORM connection for usage storage.

@@ -10,10 +10,11 @@ import (
 // WorkspaceRecord tracks workspace-manager-level metadata for each workspace.
 // The kernel only knows about containers; this table adds workspace semantics.
 type WorkspaceRecord struct {
-	ContainerID   string    `json:"container_id" gorm:"primaryKey"`
-	EnvironmentID string    `json:"environment_id" gorm:"not null;index"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ContainerID   string         `json:"container_id" gorm:"primaryKey"`
+	EnvironmentID string         `json:"environment_id" gorm:"not null;index"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // DB wraps the GORM connection for workspace storage.

@@ -29,14 +29,13 @@ func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// broadcastAliasUpdate emits an alias:update event with the full alias list.
-func (h *Handler) broadcastAliasUpdate() {
-	aliases, err := h.db.List()
-	if err != nil {
-		return
-	}
-	detail, _ := json.Marshal(map[string]interface{}{"aliases": aliases})
-	h.sdk.ReportEvent("alias:update", string(detail))
+// broadcastAliasChange emits an alias-registry:update event for a single alias change.
+func (h *Handler) broadcastAliasChange(action string, a *storage.Alias) {
+	detail, _ := json.Marshal(map[string]interface{}{
+		"action": action,
+		"alias":  a,
+	})
+	h.sdk.ReportEvent("alias-registry:update", string(detail))
 }
 
 // ── Alias REST API ───────────────────────────────────────────────────────────
@@ -102,7 +101,7 @@ func (h *Handler) CreateAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasUpdate()
+	h.broadcastAliasChange("created", a)
 	c.JSON(http.StatusCreated, a)
 }
 
@@ -151,7 +150,7 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasUpdate()
+	h.broadcastAliasChange("updated", a)
 	c.JSON(http.StatusOK, a)
 }
 
@@ -166,7 +165,7 @@ func (h *Handler) DeleteAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasUpdate()
+	h.broadcastAliasChange("deleted", &storage.Alias{Name: c.Param("name")})
 	c.Status(http.StatusNoContent)
 }
 
@@ -326,7 +325,7 @@ func (h *Handler) MCPCreateAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasUpdate()
+	h.broadcastAliasChange("created", a)
 	c.JSON(http.StatusOK, gin.H{"alias": a, "message": "alias created"})
 }
 
@@ -366,7 +365,7 @@ func (h *Handler) MCPUpdateAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasUpdate()
+	h.broadcastAliasChange("updated", a)
 	c.JSON(http.StatusOK, gin.H{"alias": a, "message": "alias updated"})
 }
 
@@ -385,7 +384,7 @@ func (h *Handler) MCPDeleteAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasUpdate()
+	h.broadcastAliasChange("deleted", &storage.Alias{Name: req.Name})
 	c.JSON(http.StatusOK, gin.H{"message": "alias deleted"})
 }
 
@@ -441,11 +440,8 @@ func (h *Handler) MigrateFromKernel(c *gin.Context) {
 			return
 		} else {
 			migrated++
+			h.broadcastAliasChange("created", a)
 		}
-	}
-
-	if migrated > 0 {
-		h.broadcastAliasUpdate()
 	}
 	c.JSON(http.StatusOK, gin.H{"migrated": migrated, "skipped": skipped, "total": len(infos)})
 }

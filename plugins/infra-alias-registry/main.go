@@ -90,6 +90,9 @@ func main() {
 	// Migration
 	router.POST("/migrate-from-kernel", h.MigrateFromKernel)
 
+	// Signal that the registry is ready so plugins that started before us can re-fetch.
+	sdkClient.ReportEvent("alias-registry:ready", "")
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,

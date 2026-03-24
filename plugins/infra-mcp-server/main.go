@@ -74,18 +74,22 @@ func main() {
 
 	h.SetSDK(sdkClient)
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	// Handler for alias registry events (update + ready).
+	handleAliasEvent := func(event pluginsdk.EventCallback) {
 		infos := convertRegistryAliases(event.Detail)
 		if infos == nil {
-			log.Printf("mcp-server: failed to parse alias:update detail")
+			log.Printf("mcp-server: failed to parse alias registry event detail")
 			return
 		}
 		if mcpSrv := h.MCPServer(); mcpSrv != nil {
 			mcpSrv.UpdateAliases(infos)
 			log.Printf("mcp-server: hot-swapped %d aliases from registry", len(infos))
 		}
-	}))
+	}
+
+	// Subscribe to alias updates from infra-alias-registry.
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	endpoint := fmt.Sprintf("http://%s:%d/mcp", hostname, port)
 

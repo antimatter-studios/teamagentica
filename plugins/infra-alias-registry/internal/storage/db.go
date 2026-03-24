@@ -18,14 +18,15 @@ const (
 
 // Alias defines an addressable name in the platform.
 type Alias struct {
-	Name         string    `json:"name" gorm:"primaryKey"`
-	Type         string    `json:"type" gorm:"default:'tool'"`
-	Plugin       string    `json:"plugin" gorm:"not null"`
-	Provider     string    `json:"provider,omitempty" gorm:"default:''"`
-	Model        string    `json:"model,omitempty" gorm:"default:''"`
-	SystemPrompt string    `json:"system_prompt,omitempty" gorm:"default:''"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Name         string         `json:"name" gorm:"primaryKey"`
+	Type         string         `json:"type" gorm:"default:'tool'"`
+	Plugin       string         `json:"plugin" gorm:"not null"`
+	Provider     string         `json:"provider,omitempty" gorm:"default:''"`
+	Model        string         `json:"model,omitempty" gorm:"default:''"`
+	SystemPrompt string         `json:"system_prompt,omitempty" gorm:"default:''"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // DB wraps the GORM connection for alias storage.

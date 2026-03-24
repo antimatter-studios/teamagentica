@@ -12,7 +12,7 @@ Provides a Docker build service that agents and the platform can use to build co
 
 ## Dependencies
 
-- `storage:block` — volumes containing source code to build
+- `storage:disk` — volumes containing source code to build
 
 ## Configuration
 
