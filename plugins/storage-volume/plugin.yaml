@@ -1,18 +1,18 @@
 id: storage-volume
-name: "Block Storage"
-description: "Namespace-isolated block storage volumes. Provides persistent, mountable volumes with metadata and type labels (auth, storage). Other plugins discover it via the storage:block capability."
+name: "Disk Storage"
+description: "Namespace-isolated disk storage volumes. Provides persistent, mountable volumes with metadata and type labels (auth, storage). Other plugins discover it via the storage:disk capability."
 group: storage
-version: "1.2.4"
+version: "1.2.6"
 image: "teamagentica-storage-volume:latest"
 author: teamagentica
 tags: [storage, volume, block, disk, infrastructure, tool]
-capabilities: ["storage:api", "storage:block", "tool:storage:api", "tool:storage:block"]
+capabilities: ["storage:api", "storage:disk", "tool:storage:api", "tool:storage:disk"]
 config_schema:
   STORAGE_VOLUMES_PATH:
     type: string
     label: "Volumes Path"
     default: "/data/volumes"
-    help_text: "Path for namespace-isolated block storage volumes. Each volume is a subdirectory."
+    help_text: "Path for namespace-isolated disk storage volumes. Each volume is a subdirectory."
     order: 1
   PLUGIN_DEBUG:
     type: boolean

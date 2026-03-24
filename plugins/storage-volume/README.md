@@ -1,6 +1,6 @@
 # storage-volume
 
-Namespace-isolated block storage volumes with metadata and type labels.
+Namespace-isolated disk storage volumes with metadata and type labels.
 
 ## Overview
 
@@ -9,7 +9,7 @@ Manages persistent filesystem volumes under a configurable path. Each volume is 
 ## Capabilities
 
 - `storage:api`
-- `storage:block`
+- `storage:disk`
 
 ## Dependencies
 
@@ -35,7 +35,7 @@ None.
 | DELETE | `/objects/*key` | Delete a file |
 | HEAD | `/objects/*key` | File metadata headers |
 
-### storage:block (volume management)
+### storage:disk (volume management)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -84,5 +84,5 @@ None.
 
 - `storage:api` file operations operate on `dataPath` (the general data directory), not on individual volumes
 - Volume listing returns `size_bytes` computed by walking the directory tree -- can be slow for large volumes
-- The `storage:block` capability is how other plugins (like workspace-manager) discover this plugin
+- The `storage:disk` capability is how other plugins (like workspace-manager) discover this plugin
 - Discord commands register via the SDK `DiscordCommands` field at startup

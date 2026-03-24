@@ -103,7 +103,7 @@ func (h *Handler) GetObject(c *gin.Context) {
 	}
 }
 
-// DeleteObject handles DELETE /objects/*key — delete an object or folder prefix.
+// DeleteObject handles DELETE /objects/*key — move object to trash.
 func (h *Handler) DeleteObject(c *gin.Context) {
 	key := strings.TrimPrefix(c.Param("key"), "/")
 	if key == "" {
@@ -111,35 +111,17 @@ func (h *Handler) DeleteObject(c *gin.Context) {
 		return
 	}
 
-	// Folder delete: remove all objects with this prefix.
-	if strings.HasSuffix(key, "/") {
-		objects, err := h.client.ListObjects(c.Request.Context(), key)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		for _, obj := range objects {
-			if err := h.client.DeleteObject(c.Request.Context(), obj.Key); err != nil {
-				log.Printf("[handlers] delete %s error: %v", obj.Key, err)
-			}
-			h.index.Delete(obj.Key)
-		}
-		// Also delete the folder marker itself.
-		_ = h.client.DeleteObject(c.Request.Context(), key)
-		h.index.Delete(key)
-		h.emitEvent("folder_deleted", key)
-		c.JSON(http.StatusOK, gin.H{"key": key, "status": "deleted"})
-		return
-	}
-
-	if err := h.client.DeleteObject(c.Request.Context(), key); err != nil {
-		log.Printf("[handlers] delete error: %v", err)
+	if err := h.moveToTrash(c, key); err != nil {
+		log.Printf("[handlers] trash error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.index.Delete(key)
-	h.emitEvent("object_deleted", key)
+	if strings.HasSuffix(key, "/") {
+		h.emitEvent("folder_deleted", key)
+	} else {
+		h.emitEvent("object_deleted", key)
+	}
 	c.JSON(http.StatusOK, gin.H{"key": key, "status": "deleted"})
 }
 
@@ -352,8 +334,7 @@ func formatInt64(n int64) string {
 
 // Tools returns the tool definitions for agent discovery via GET /tools.
 func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
+	tools := []gin.H{
 			{
 				"name":        "list_files",
 				"description": "List files and folders at a given path prefix in storage. Returns folder names and file metadata (key, size, content_type, last_modified). Use prefix '' or '/' to list root.",
@@ -395,7 +376,7 @@ func (h *Handler) Tools(c *gin.Context) {
 			},
 			{
 				"name":        "delete_file",
-				"description": "Delete a file from storage permanently.",
+				"description": "Delete a file from storage. The file is moved to trash and can be recovered.",
 				"endpoint":    "/tool/delete_file",
 				"parameters": gin.H{
 					"type": "object",
@@ -429,8 +410,44 @@ func (h *Handler) Tools(c *gin.Context) {
 					"required": []string{"path"},
 				},
 			},
+		}
+
+	tools = append(tools, gin.H{
+		"name":        "browse_trash",
+		"description": "Browse deleted files in the trash. Returns folder names and file metadata.",
+		"endpoint":    "/tool/browse_trash",
+		"parameters": gin.H{
+			"type": "object",
+			"properties": gin.H{
+				"prefix": gin.H{"type": "string", "description": "Path prefix within trash to browse. Use empty string for trash root."},
+			},
+			"required": []string{},
+		},
+	}, gin.H{
+		"name":        "restore_from_trash",
+		"description": "Restore a deleted file or folder from trash back to its original location.",
+		"endpoint":    "/tool/restore_from_trash",
+		"parameters": gin.H{
+			"type": "object",
+			"properties": gin.H{
+				"key": gin.H{"type": "string", "description": "Path/key of the file in trash to restore"},
+			},
+			"required": []string{"key"},
+		},
+	}, gin.H{
+		"name":        "empty_trash",
+		"description": "Permanently delete files from trash. Specify a key to delete one item, or omit to empty all trash.",
+		"endpoint":    "/tool/empty_trash",
+		"parameters": gin.H{
+			"type": "object",
+			"properties": gin.H{
+				"key": gin.H{"type": "string", "description": "Optional: specific path/key to permanently delete. Omit to empty all."},
+			},
+			"required": []string{},
 		},
 	})
+
+	c.JSON(http.StatusOK, gin.H{"tools": tools})
 }
 
 // ToolListFiles handles POST /tool/list_files — list files and folders at a prefix.
@@ -540,7 +557,7 @@ func (h *Handler) ToolWriteFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "written", "content_type": contentType})
 }
 
-// ToolDeleteFile handles POST /tool/delete_file — delete a file.
+// ToolDeleteFile handles POST /tool/delete_file — move a file to trash.
 func (h *Handler) ToolDeleteFile(c *gin.Context) {
 	var req struct {
 		Key string `json:"key"`
@@ -550,13 +567,12 @@ func (h *Handler) ToolDeleteFile(c *gin.Context) {
 		return
 	}
 
-	if err := h.client.DeleteObject(c.Request.Context(), req.Key); err != nil {
-		log.Printf("[tool] delete error: %v", err)
+	if err := h.moveToTrash(c, req.Key); err != nil {
+		log.Printf("[tool] trash error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.index.Delete(req.Key)
 	h.emitEvent("tool_delete_file", req.Key)
 	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "deleted"})
 }
@@ -616,6 +632,206 @@ func (h *Handler) ToolCreateFolder(c *gin.Context) {
 
 	h.emitEvent("tool_create_folder", path)
 	c.JSON(http.StatusOK, gin.H{"path": path, "status": "created"})
+}
+
+// --- Trash endpoints ---
+
+const trashPrefix = ".trash/"
+
+// moveToTrash copies an object to .trash/<key> then deletes the original.
+// For folders, all objects under the prefix are trashed.
+func (h *Handler) moveToTrash(c *gin.Context, key string) error {
+	ctx := c.Request.Context()
+
+	// Folder: trash all objects under this prefix.
+	if strings.HasSuffix(key, "/") {
+		objects, err := h.client.ListObjects(ctx, key)
+		if err != nil {
+			return err
+		}
+		for _, obj := range objects {
+			trashKey := trashPrefix + obj.Key
+			if err := h.client.CopyObject(ctx, obj.Key, trashKey); err != nil {
+				log.Printf("[trash] copy %s error: %v", obj.Key, err)
+				continue
+			}
+			if meta, err := h.client.HeadObject(ctx, trashKey); err == nil {
+				h.index.Put(trashKey, *meta)
+			}
+			if err := h.client.DeleteObject(ctx, obj.Key); err != nil {
+				log.Printf("[trash] delete original %s error: %v", obj.Key, err)
+				continue
+			}
+			h.index.Delete(obj.Key)
+		}
+		// Also trash the folder marker.
+		_ = h.client.CopyObject(ctx, key, trashPrefix+key)
+		_ = h.client.DeleteObject(ctx, key)
+		h.index.Delete(key)
+		return nil
+	}
+
+	// Single file: copy to trash, verify, then delete.
+	trashKey := trashPrefix + key
+	if err := h.client.CopyObject(ctx, key, trashKey); err != nil {
+		return fmt.Errorf("copy to trash: %w", err)
+	}
+	if meta, err := h.client.HeadObject(ctx, trashKey); err == nil {
+		h.index.Put(trashKey, *meta)
+	}
+	if err := h.client.DeleteObject(ctx, key); err != nil {
+		return fmt.Errorf("delete original after trash: %w", err)
+	}
+	h.index.Delete(key)
+	log.Printf("[trash] trashed %s", key)
+	return nil
+}
+
+// BrowseTrash handles GET /trash/browse?prefix= — browse trashed objects.
+func (h *Handler) BrowseTrash(c *gin.Context) {
+	prefix := c.Query("prefix")
+	result := h.index.Browse(trashPrefix + prefix)
+
+	// Strip the .trash/ prefix from keys so the UI sees original paths.
+	stripped := index.BrowseResult{Prefix: prefix}
+	for _, f := range result.Folders {
+		stripped.Folders = append(stripped.Folders, strings.TrimPrefix(f, trashPrefix))
+	}
+	for _, f := range result.Files {
+		f.Key = strings.TrimPrefix(f.Key, trashPrefix)
+		stripped.Files = append(stripped.Files, f)
+	}
+	c.JSON(http.StatusOK, stripped)
+}
+
+// RestoreTrash handles POST /trash/restore — restore a trashed object.
+func (h *Handler) RestoreTrash(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	trashKey := trashPrefix + req.Key
+
+	// Check if it's a folder (has objects under .trash/<key>/).
+	if strings.HasSuffix(req.Key, "/") {
+		objects, err := h.client.ListObjects(ctx, trashKey)
+		if err != nil || len(objects) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Key)})
+			return
+		}
+		for _, obj := range objects {
+			origKey := strings.TrimPrefix(obj.Key, trashPrefix)
+			if err := h.client.CopyObject(ctx, obj.Key, origKey); err != nil {
+				log.Printf("[trash] restore copy %s error: %v", obj.Key, err)
+				continue
+			}
+			if meta, err := h.client.HeadObject(ctx, origKey); err == nil {
+				h.index.Put(origKey, *meta)
+			}
+			_ = h.client.DeleteObject(ctx, obj.Key)
+			h.index.Delete(obj.Key)
+		}
+		log.Printf("[trash] restored folder %s", req.Key)
+		c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "restored"})
+		return
+	}
+
+	// Single file restore.
+	if _, err := h.client.HeadObject(ctx, trashKey); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Key)})
+		return
+	}
+
+	if err := h.client.CopyObject(ctx, trashKey, req.Key); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if meta, err := h.client.HeadObject(ctx, req.Key); err == nil {
+		h.index.Put(req.Key, *meta)
+	}
+	if err := h.client.DeleteObject(ctx, trashKey); err != nil {
+		log.Printf("[trash] delete trash copy error: %v", err)
+	}
+	h.index.Delete(trashKey)
+
+	log.Printf("[trash] restored %s", req.Key)
+	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "restored"})
+}
+
+// EmptyTrash handles POST /trash/empty — permanently delete trashed objects.
+func (h *Handler) EmptyTrash(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	c.ShouldBindJSON(&req)
+
+	ctx := c.Request.Context()
+	prefix := trashPrefix
+	if req.Key != "" {
+		prefix = trashPrefix + req.Key
+	}
+
+	objects, err := h.client.ListObjects(ctx, prefix)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Key != "" && len(objects) == 0 {
+		// Single file, not a folder prefix.
+		trashKey := trashPrefix + req.Key
+		if err := h.client.DeleteObject(ctx, trashKey); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Key)})
+			return
+		}
+		h.index.Delete(trashKey)
+		log.Printf("[trash] permanently deleted %s", req.Key)
+		c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "permanently_deleted"})
+		return
+	}
+
+	for _, obj := range objects {
+		if err := h.client.DeleteObject(ctx, obj.Key); err != nil {
+			log.Printf("[trash] empty delete %s error: %v", obj.Key, err)
+			continue
+		}
+		h.index.Delete(obj.Key)
+	}
+
+	if req.Key != "" {
+		log.Printf("[trash] permanently deleted %s", req.Key)
+		c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "permanently_deleted"})
+	} else {
+		log.Printf("[trash] emptied trash (%d objects)", len(objects))
+		c.JSON(http.StatusOK, gin.H{"status": "trash_emptied"})
+	}
+}
+
+// ToolBrowseTrash handles POST /tool/browse_trash.
+func (h *Handler) ToolBrowseTrash(c *gin.Context) {
+	var req struct {
+		Prefix string `json:"prefix"`
+	}
+	c.ShouldBindJSON(&req)
+	if req.Prefix != "" {
+		c.Request.URL.RawQuery = "prefix=" + req.Prefix
+	}
+	h.BrowseTrash(c)
+}
+
+// ToolRestoreFromTrash handles POST /tool/restore_from_trash.
+func (h *Handler) ToolRestoreFromTrash(c *gin.Context) {
+	h.RestoreTrash(c)
+}
+
+// ToolEmptyTrash handles POST /tool/empty_trash.
+func (h *Handler) ToolEmptyTrash(c *gin.Context) {
+	h.EmptyTrash(c)
 }
 
 // isTextContentType returns true if the MIME type suggests text content.

@@ -29,7 +29,7 @@ func main() {
 
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
-		Name:         "Volume Storage",
+		Name:         "Disk Storage",
 		Host:         getHostname(),
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
@@ -112,7 +112,12 @@ func main() {
 	router.POST("/objects/move", h.MoveObject)
 	router.GET("/download/zip", h.DownloadZip)
 
-	// storage:block — volume management endpoints.
+	// Trash endpoints.
+	router.GET("/trash/browse", h.BrowseTrash)
+	router.POST("/trash/restore", h.RestoreTrash)
+	router.POST("/trash/empty", h.EmptyTrash)
+
+	// storage:disk — volume management endpoints.
 	router.POST("/volumes", h.CreateVolume)
 	router.GET("/volumes", h.ListVolumes)
 	router.GET("/volumes/:name", h.GetVolume)
@@ -133,6 +138,9 @@ func main() {
 	router.POST("/tool/read_file", h.ToolReadFile)
 	router.POST("/tool/write_file", h.ToolWriteFile)
 	router.POST("/tool/delete_file", h.ToolDeleteFile)
+	router.POST("/tool/browse_trash", h.ToolBrowseTrash)
+	router.POST("/tool/restore_from_trash", h.ToolRestoreFromTrash)
+	router.POST("/tool/empty_trash", h.ToolEmptyTrash)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

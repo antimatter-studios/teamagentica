@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Volume represents a namespace-isolated block storage volume.
+// Volume represents a namespace-isolated disk storage volume.
 type Volume struct {
 	Name      string            `json:"name"`
 	Type      string            `json:"type"`       // "auth" or "storage"
@@ -279,14 +279,17 @@ func (h *Handler) DeleteVolume(c *gin.Context) {
 		return
 	}
 
-	// Remove data directory.
-	if err := os.RemoveAll(h.volumeDataPath(name)); err != nil {
-		log.Printf("[volumes] delete data error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete volume data"})
-		return
+	// Move volume data to trash before deleting.
+	volDataPath := h.volumeDataPath(name)
+	if _, err := os.Stat(volDataPath); err == nil {
+		if err := h.moveToTrash(h.volumesPath, volDataPath); err != nil {
+			log.Printf("[volumes] trash data error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to trash volume data"})
+			return
+		}
 	}
 
-	// Remove metadata.
+	// Remove metadata (not trashed — it's just a small JSON pointer).
 	if err := os.Remove(h.metaPath(name)); err != nil && !os.IsNotExist(err) {
 		log.Printf("[volumes] delete meta error: %v", err)
 	}
@@ -350,7 +353,7 @@ func VolumeToolDefs() []gin.H {
 	return []gin.H{
 		{
 			"name":        "create_volume",
-			"description": "Create a new namespace-isolated block storage volume. Use type 'auth' for credential storage (read-only by default) or 'storage' for general purpose.",
+			"description": "Create a new namespace-isolated disk storage volume. Use type 'auth' for credential storage (read-only by default) or 'storage' for general purpose.",
 			"endpoint":    "/tool/create_volume",
 			"parameters": gin.H{
 				"type": "object",
@@ -364,7 +367,7 @@ func VolumeToolDefs() []gin.H {
 		},
 		{
 			"name":        "list_volumes",
-			"description": "List all block storage volumes with their metadata, size, and filesystem path. Optionally filter by type.",
+			"description": "List all disk storage volumes with their metadata, size, and filesystem path. Optionally filter by type.",
 			"endpoint":    "/tool/list_volumes",
 			"parameters": gin.H{
 				"type": "object",
@@ -376,7 +379,7 @@ func VolumeToolDefs() []gin.H {
 		},
 		{
 			"name":        "delete_volume",
-			"description": "Delete a block storage volume and all its contents permanently.",
+			"description": "Delete a disk storage volume. Contents are moved to .Trash before removal and can be recovered.",
 			"endpoint":    "/tool/delete_volume",
 			"parameters": gin.H{
 				"type": "object",

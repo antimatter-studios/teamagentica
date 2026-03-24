@@ -95,6 +95,10 @@ func (idx *Index) Browse(prefix string) BrowseResult {
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
+		// Hide .trash/ from normal browse (only visible via BrowseTrash).
+		if prefix == "" && strings.HasPrefix(key, ".trash/") {
+			continue
+		}
 		// Get the part after the prefix
 		rest := key[len(prefix):]
 		if rest == "" {

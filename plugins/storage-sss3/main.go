@@ -126,6 +126,14 @@ func main() {
 	router.POST("/tool/delete_file", h.ToolDeleteFile)
 	router.POST("/tool/file_info", h.ToolFileInfo)
 	router.POST("/tool/create_folder", h.ToolCreateFolder)
+	router.POST("/tool/browse_trash", h.ToolBrowseTrash)
+	router.POST("/tool/restore_from_trash", h.ToolRestoreFromTrash)
+	router.POST("/tool/empty_trash", h.ToolEmptyTrash)
+
+	// Trash REST endpoints.
+	router.GET("/trash/browse", h.BrowseTrash)
+	router.POST("/trash/restore", h.RestoreTrash)
+	router.POST("/trash/empty", h.EmptyTrash)
 
 	// Proxy unmatched routes to sss3 S3 API.
 	sss3URL, _ := url.Parse(fmt.Sprintf("http://localhost:%d", s3Port))
