@@ -12,7 +12,7 @@ The arguments can be:
 Resolve the task tracker API:
 ```
 TRACKER="http://api.teamagentica.localhost/api/route/tool-task-tracker"
-TOKEN from ~/.tacli/config.json profiles[0].token
+TOKEN from ~/.config/teamagentica/tacli.json profiles[0].token
 ```
 
 ## Board Column Convention
