@@ -24,6 +24,8 @@ func main() {
 
 	const defaultPort = 8090
 
+	var h *handlers.Handler
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
@@ -34,6 +36,12 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			if h != nil {
+				return h.ToolDefs()
+			}
+			return nil
 		},
 	})
 
@@ -59,11 +67,11 @@ func main() {
 
 	router := gin.Default()
 
-	h := handlers.NewHandler(sdkClient, debug)
+	h = handlers.NewHandler(sdkClient, debug)
 
 	router.GET("/health", h.Health)
-	router.GET("/tools", h.Tools)
-	router.POST("/tool/build", h.ToolBuild)
+	router.GET("/mcp", h.Tools)
+	router.POST("/mcp/build", h.ToolBuild)
 	router.POST("/build", h.Build)
 	router.GET("/builds", h.ListBuilds)
 	router.GET("/builds/:id/logs", h.GetBuildLogs)

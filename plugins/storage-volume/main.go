@@ -27,6 +27,8 @@ func main() {
 
 	const defaultPort = 8090
 
+	var h *handlers.Handler
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Name:         "Disk Storage",
@@ -70,6 +72,12 @@ func main() {
 				"config": manifest.ConfigSchema,
 			}
 		},
+		ToolsFunc: func() interface{} {
+			if h != nil {
+				return h.ToolDefs()
+			}
+			return nil
+		},
 	})
 	sdkClient.Start(ctx)
 
@@ -98,7 +106,7 @@ func main() {
 	}
 
 	router := gin.Default()
-	h := handlers.NewHandler(dataPath, volumesPath, debug)
+	h = handlers.NewHandler(dataPath, volumesPath, debug)
 
 	router.GET("/health", h.Health)
 
@@ -130,17 +138,17 @@ func main() {
 	router.POST("/discord-command/volume/rename", h.DiscordCommandVolumeRename)
 
 	// Tool interface for AI agents.
-	router.GET("/tools", h.Tools)
-	router.POST("/tool/create_volume", h.ToolCreateVolume)
-	router.POST("/tool/list_volumes", h.ToolListVolumes)
-	router.POST("/tool/delete_volume", h.ToolDeleteVolume)
-	router.POST("/tool/list_files", h.ToolListFiles)
-	router.POST("/tool/read_file", h.ToolReadFile)
-	router.POST("/tool/write_file", h.ToolWriteFile)
-	router.POST("/tool/delete_file", h.ToolDeleteFile)
-	router.POST("/tool/browse_trash", h.ToolBrowseTrash)
-	router.POST("/tool/restore_from_trash", h.ToolRestoreFromTrash)
-	router.POST("/tool/empty_trash", h.ToolEmptyTrash)
+	router.GET("/mcp", h.Tools)
+	router.POST("/mcp/create_volume", h.ToolCreateVolume)
+	router.POST("/mcp/list_volumes", h.ToolListVolumes)
+	router.POST("/mcp/delete_volume", h.ToolDeleteVolume)
+	router.POST("/mcp/list_files", h.ToolListFiles)
+	router.POST("/mcp/read_file", h.ToolReadFile)
+	router.POST("/mcp/write_file", h.ToolWriteFile)
+	router.POST("/mcp/delete_file", h.ToolDeleteFile)
+	router.POST("/mcp/browse_trash", h.ToolBrowseTrash)
+	router.POST("/mcp/restore_from_trash", h.ToolRestoreFromTrash)
+	router.POST("/mcp/empty_trash", h.ToolEmptyTrash)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

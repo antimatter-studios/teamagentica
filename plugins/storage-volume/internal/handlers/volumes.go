@@ -303,7 +303,7 @@ func (h *Handler) DeleteVolume(c *gin.Context) {
 
 // --- Volume tool endpoints for AI agents ---
 
-// ToolCreateVolume handles POST /tool/create_volume.
+// ToolCreateVolume handles POST /mcp/create_volume.
 func (h *Handler) ToolCreateVolume(c *gin.Context) {
 	var req struct {
 		Name   string            `json:"name"`
@@ -321,7 +321,7 @@ func (h *Handler) ToolCreateVolume(c *gin.Context) {
 	h.CreateVolume(c)
 }
 
-// ToolListVolumes handles POST /tool/list_volumes.
+// ToolListVolumes handles POST /mcp/list_volumes.
 func (h *Handler) ToolListVolumes(c *gin.Context) {
 	var req struct {
 		Type string `json:"type"`
@@ -334,7 +334,7 @@ func (h *Handler) ToolListVolumes(c *gin.Context) {
 	h.ListVolumes(c)
 }
 
-// ToolDeleteVolume handles POST /tool/delete_volume.
+// ToolDeleteVolume handles POST /mcp/delete_volume.
 func (h *Handler) ToolDeleteVolume(c *gin.Context) {
 	var req struct {
 		Name string `json:"name"`
@@ -354,7 +354,7 @@ func VolumeToolDefs() []gin.H {
 		{
 			"name":        "create_volume",
 			"description": "Create a new namespace-isolated disk storage volume. Use type 'auth' for credential storage (read-only by default) or 'storage' for general purpose.",
-			"endpoint":    "/tool/create_volume",
+			"endpoint":    "/mcp/create_volume",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -368,7 +368,7 @@ func VolumeToolDefs() []gin.H {
 		{
 			"name":        "list_volumes",
 			"description": "List all disk storage volumes with their metadata, size, and filesystem path. Optionally filter by type.",
-			"endpoint":    "/tool/list_volumes",
+			"endpoint":    "/mcp/list_volumes",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -380,7 +380,7 @@ func VolumeToolDefs() []gin.H {
 		{
 			"name":        "delete_volume",
 			"description": "Delete a disk storage volume. Contents are moved to .Trash before removal and can be recovered.",
-			"endpoint":    "/tool/delete_volume",
+			"endpoint":    "/mcp/delete_volume",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{

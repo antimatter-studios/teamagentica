@@ -14,19 +14,19 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
-// Tools returns tool definitions for agent discovery via GET /tools.
-func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"tools": []gin.H{
+// ToolDefs returns the tool definition data for reuse by both the HTTP handler and SDK registration.
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
 		{
 			"name":        "list_environments",
 			"description": "List available workspace environment types. Returns environment IDs, names, and descriptions. Use this to find valid environment_id values for create_workspace.",
-			"endpoint":    "/tool/list_environments",
+			"endpoint":    "/mcp/list_environments",
 			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
 		},
 		{
 			"name":        "create_workspace",
 			"description": "Create a new development workspace. Launches a container with the specified environment type. Optionally clones a git repository. Returns workspace details including access URL.",
-			"endpoint":    "/tool/create_workspace",
+			"endpoint":    "/mcp/create_workspace",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -43,13 +43,13 @@ func (h *Handler) Tools(c *gin.Context) {
 		{
 			"name":        "list_workspaces",
 			"description": "List all workspaces with their current status, URLs, and environment info.",
-			"endpoint":    "/tool/list_workspaces",
+			"endpoint":    "/mcp/list_workspaces",
 			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
 		},
 		{
 			"name":        "start_workspace",
 			"description": "Start a stopped workspace container. Use list_workspaces first to find the workspace ID.",
-			"endpoint":    "/tool/start_workspace",
+			"endpoint":    "/mcp/start_workspace",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -61,7 +61,7 @@ func (h *Handler) Tools(c *gin.Context) {
 		{
 			"name":        "rename_workspace",
 			"description": "Rename an existing workspace. Updates the display name and volume directory slug. Use list_workspaces first to find the workspace ID.",
-			"endpoint":    "/tool/rename_workspace",
+			"endpoint":    "/mcp/rename_workspace",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -74,7 +74,7 @@ func (h *Handler) Tools(c *gin.Context) {
 		{
 			"name":        "build_plugin",
 			"description": "Build a Docker image for a plugin from source in a storage volume. Requires the infra-builder plugin to be installed. Returns build status and image tag.",
-			"endpoint":    "/tool/build_plugin",
+			"endpoint":    "/mcp/build_plugin",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -89,7 +89,7 @@ func (h *Handler) Tools(c *gin.Context) {
 		{
 			"name":        "deploy_plugin",
 			"description": "Deploy a candidate container for a plugin. The candidate runs alongside the primary — traffic routes to the candidate when healthy. Use promote_plugin or rollback_plugin afterwards.",
-			"endpoint":    "/tool/deploy_plugin",
+			"endpoint":    "/mcp/deploy_plugin",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -102,7 +102,7 @@ func (h *Handler) Tools(c *gin.Context) {
 		{
 			"name":        "promote_plugin",
 			"description": "Promote a candidate container to become the new primary. Stops the old primary.",
-			"endpoint":    "/tool/promote_plugin",
+			"endpoint":    "/mcp/promote_plugin",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -114,7 +114,7 @@ func (h *Handler) Tools(c *gin.Context) {
 		{
 			"name":        "rollback_plugin",
 			"description": "Stop a candidate container and revert traffic to the primary.",
-			"endpoint":    "/tool/rollback_plugin",
+			"endpoint":    "/mcp/rollback_plugin",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -123,10 +123,15 @@ func (h *Handler) Tools(c *gin.Context) {
 				"required": []string{"plugin_id"},
 			},
 		},
-	}})
+	}
 }
 
-// ToolListEnvironments handles POST /tool/list_environments.
+// Tools returns tool definitions for agent discovery via GET /tools.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
+}
+
+// ToolListEnvironments handles POST /mcp/list_environments.
 func (h *Handler) ToolListEnvironments(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -158,18 +163,18 @@ func (h *Handler) ToolListEnvironments(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"environments": envs})
 }
 
-// ToolCreateWorkspace handles POST /tool/create_workspace.
+// ToolCreateWorkspace handles POST /mcp/create_workspace.
 // Delegates to the existing CreateWorkspace handler by forwarding the JSON body.
 func (h *Handler) ToolCreateWorkspace(c *gin.Context) {
 	h.CreateWorkspace(c)
 }
 
-// ToolListWorkspaces handles POST /tool/list_workspaces.
+// ToolListWorkspaces handles POST /mcp/list_workspaces.
 func (h *Handler) ToolListWorkspaces(c *gin.Context) {
 	h.ListWorkspaces(c)
 }
 
-// ToolStartWorkspace handles POST /tool/start_workspace.
+// ToolStartWorkspace handles POST /mcp/start_workspace.
 func (h *Handler) ToolStartWorkspace(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -207,7 +212,7 @@ func (h *Handler) ToolStartWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// ToolRenameWorkspace handles POST /tool/rename_workspace.
+// ToolRenameWorkspace handles POST /mcp/rename_workspace.
 func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -297,7 +302,7 @@ func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "renamed", "id": req.WorkspaceID, "name": newDisplayName})
 }
 
-// ToolBuildPlugin handles POST /tool/build_plugin.
+// ToolBuildPlugin handles POST /mcp/build_plugin.
 // Routes the build request to the infra-builder plugin via kernel proxy.
 func (h *Handler) ToolBuildPlugin(c *gin.Context) {
 	if h.sdk == nil {
@@ -337,7 +342,7 @@ func (h *Handler) ToolBuildPlugin(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", resp)
 }
 
-// ToolDeployPlugin handles POST /tool/deploy_plugin.
+// ToolDeployPlugin handles POST /mcp/deploy_plugin.
 func (h *Handler) ToolDeployPlugin(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -361,7 +366,7 @@ func (h *Handler) ToolDeployPlugin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "candidate deployed", "plugin_id": req.PluginID})
 }
 
-// ToolPromotePlugin handles POST /tool/promote_plugin.
+// ToolPromotePlugin handles POST /mcp/promote_plugin.
 func (h *Handler) ToolPromotePlugin(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -384,7 +389,7 @@ func (h *Handler) ToolPromotePlugin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "candidate promoted", "plugin_id": req.PluginID})
 }
 
-// ToolRollbackPlugin handles POST /tool/rollback_plugin.
+// ToolRollbackPlugin handles POST /mcp/rollback_plugin.
 func (h *Handler) ToolRollbackPlugin(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})

@@ -332,125 +332,131 @@ func formatInt64(n int64) string {
 
 // --- Tool interface for AI agents -------------------------------------------
 
-// Tools returns the tool definitions for agent discovery via GET /tools.
-func (h *Handler) Tools(c *gin.Context) {
+// ToolDefs returns the raw tool definition slice for reuse by both the HTTP
+// handler and the SDK ToolsFunc registration.
+func (h *Handler) ToolDefs() interface{} {
 	tools := []gin.H{
-			{
-				"name":        "list_files",
-				"description": "List files and folders at a given path prefix in storage. Returns folder names and file metadata (key, size, content_type, last_modified). Use prefix '' or '/' to list root.",
-				"endpoint":    "/tool/list_files",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"prefix": gin.H{"type": "string", "description": "Path prefix to list, e.g. 'projects/' or 'data/reports/'. Use empty string for root."},
-					},
-					"required": []string{},
+		{
+			"name":        "list_files",
+			"description": "List files and folders at a given path prefix in storage. Returns folder names and file metadata (key, size, content_type, last_modified). Use prefix '' or '/' to list root.",
+			"endpoint":    "/mcp/list_files",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"prefix": gin.H{"type": "string", "description": "Path prefix to list, e.g. 'projects/' or 'data/reports/'. Use empty string for root."},
 				},
+				"required": []string{},
 			},
-			{
-				"name":        "read_file",
-				"description": "Read a file from storage. Returns the file content as text (for text files) or base64-encoded data (for binary files), along with metadata.",
-				"endpoint":    "/tool/read_file",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"key": gin.H{"type": "string", "description": "Full path/key of the file to read, e.g. 'projects/myapp/README.md'"},
-					},
-					"required": []string{"key"},
-				},
-			},
-			{
-				"name":        "write_file",
-				"description": "Write or overwrite a file in storage. Creates parent folders automatically. Use this to save code, data, configs, documents, or any content.",
-				"endpoint":    "/tool/write_file",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"key":          gin.H{"type": "string", "description": "Full path/key for the file, e.g. 'projects/myapp/src/main.go'"},
-						"content":      gin.H{"type": "string", "description": "File content as text (for text files) or base64-encoded string (for binary files)"},
-						"content_type": gin.H{"type": "string", "description": "MIME type, e.g. 'text/plain', 'application/json', 'image/png'. Defaults to 'text/plain' for text content."},
-						"encoding":     gin.H{"type": "string", "description": "Set to 'base64' if content is base64-encoded binary data. Omit for plain text.", "enum": []string{"base64", "text"}},
-					},
-					"required": []string{"key", "content"},
-				},
-			},
-			{
-				"name":        "delete_file",
-				"description": "Delete a file from storage. The file is moved to trash and can be recovered.",
-				"endpoint":    "/tool/delete_file",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"key": gin.H{"type": "string", "description": "Full path/key of the file to delete, e.g. 'projects/myapp/old_file.txt'"},
-					},
-					"required": []string{"key"},
-				},
-			},
-			{
-				"name":        "file_info",
-				"description": "Get metadata about a file without downloading it. Returns size, content type, last modified time, and ETag.",
-				"endpoint":    "/tool/file_info",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"key": gin.H{"type": "string", "description": "Full path/key of the file, e.g. 'projects/myapp/README.md'"},
-					},
-					"required": []string{"key"},
-				},
-			},
-			{
-				"name":        "create_folder",
-				"description": "Create a folder (directory) in storage. Folders are represented as empty marker objects ending with '/'.",
-				"endpoint":    "/tool/create_folder",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"path": gin.H{"type": "string", "description": "Folder path to create, e.g. 'projects/myapp/src/'. A trailing '/' is added if missing."},
-					},
-					"required": []string{"path"},
-				},
-			},
-		}
-
-	tools = append(tools, gin.H{
-		"name":        "browse_trash",
-		"description": "Browse deleted files in the trash. Returns folder names and file metadata.",
-		"endpoint":    "/tool/browse_trash",
-		"parameters": gin.H{
-			"type": "object",
-			"properties": gin.H{
-				"prefix": gin.H{"type": "string", "description": "Path prefix within trash to browse. Use empty string for trash root."},
-			},
-			"required": []string{},
 		},
-	}, gin.H{
-		"name":        "restore_from_trash",
-		"description": "Restore a deleted file or folder from trash back to its original location.",
-		"endpoint":    "/tool/restore_from_trash",
-		"parameters": gin.H{
-			"type": "object",
-			"properties": gin.H{
-				"key": gin.H{"type": "string", "description": "Path/key of the file in trash to restore"},
+		{
+			"name":        "read_file",
+			"description": "Read a file from storage. Returns the file content as text (for text files) or base64-encoded data (for binary files), along with metadata.",
+			"endpoint":    "/mcp/read_file",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"key": gin.H{"type": "string", "description": "Full path/key of the file to read, e.g. 'projects/myapp/README.md'"},
+				},
+				"required": []string{"key"},
 			},
-			"required": []string{"key"},
 		},
-	}, gin.H{
-		"name":        "empty_trash",
-		"description": "Permanently delete files from trash. Specify a key to delete one item, or omit to empty all trash.",
-		"endpoint":    "/tool/empty_trash",
-		"parameters": gin.H{
-			"type": "object",
-			"properties": gin.H{
-				"key": gin.H{"type": "string", "description": "Optional: specific path/key to permanently delete. Omit to empty all."},
+		{
+			"name":        "write_file",
+			"description": "Write or overwrite a file in storage. Creates parent folders automatically. Use this to save code, data, configs, documents, or any content.",
+			"endpoint":    "/mcp/write_file",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"key":          gin.H{"type": "string", "description": "Full path/key for the file, e.g. 'projects/myapp/src/main.go'"},
+					"content":      gin.H{"type": "string", "description": "File content as text (for text files) or base64-encoded string (for binary files)"},
+					"content_type": gin.H{"type": "string", "description": "MIME type, e.g. 'text/plain', 'application/json', 'image/png'. Defaults to 'text/plain' for text content."},
+					"encoding":     gin.H{"type": "string", "description": "Set to 'base64' if content is base64-encoded binary data. Omit for plain text.", "enum": []string{"base64", "text"}},
+				},
+				"required": []string{"key", "content"},
 			},
-			"required": []string{},
 		},
-	})
-
-	c.JSON(http.StatusOK, gin.H{"tools": tools})
+		{
+			"name":        "delete_file",
+			"description": "Delete a file from storage. The file is moved to trash and can be recovered.",
+			"endpoint":    "/mcp/delete_file",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"key": gin.H{"type": "string", "description": "Full path/key of the file to delete, e.g. 'projects/myapp/old_file.txt'"},
+				},
+				"required": []string{"key"},
+			},
+		},
+		{
+			"name":        "file_info",
+			"description": "Get metadata about a file without downloading it. Returns size, content type, last modified time, and ETag.",
+			"endpoint":    "/mcp/file_info",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"key": gin.H{"type": "string", "description": "Full path/key of the file, e.g. 'projects/myapp/README.md'"},
+				},
+				"required": []string{"key"},
+			},
+		},
+		{
+			"name":        "create_folder",
+			"description": "Create a folder (directory) in storage. Folders are represented as empty marker objects ending with '/'.",
+			"endpoint":    "/mcp/create_folder",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"path": gin.H{"type": "string", "description": "Folder path to create, e.g. 'projects/myapp/src/'. A trailing '/' is added if missing."},
+				},
+				"required": []string{"path"},
+			},
+		},
+		{
+			"name":        "browse_trash",
+			"description": "Browse deleted files in the trash. Returns folder names and file metadata.",
+			"endpoint":    "/mcp/browse_trash",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"prefix": gin.H{"type": "string", "description": "Path prefix within trash to browse. Use empty string for trash root."},
+				},
+				"required": []string{},
+			},
+		},
+		{
+			"name":        "restore_from_trash",
+			"description": "Restore a deleted file or folder from trash back to its original location.",
+			"endpoint":    "/mcp/restore_from_trash",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"key": gin.H{"type": "string", "description": "Path/key of the file in trash to restore"},
+				},
+				"required": []string{"key"},
+			},
+		},
+		{
+			"name":        "empty_trash",
+			"description": "Permanently delete files from trash. Specify a key to delete one item, or omit to empty all trash.",
+			"endpoint":    "/mcp/empty_trash",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"key": gin.H{"type": "string", "description": "Optional: specific path/key to permanently delete. Omit to empty all."},
+				},
+				"required": []string{},
+			},
+		},
+	}
+	return tools
 }
 
-// ToolListFiles handles POST /tool/list_files — list files and folders at a prefix.
+// Tools returns the tool definitions for agent discovery via GET /tools.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
+}
+
+// ToolListFiles handles POST /mcp/list_files — list files and folders at a prefix.
 func (h *Handler) ToolListFiles(c *gin.Context) {
 	var req struct {
 		Prefix string `json:"prefix"`
@@ -465,7 +471,7 @@ func (h *Handler) ToolListFiles(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// ToolReadFile handles POST /tool/read_file — read a file and return its content.
+// ToolReadFile handles POST /mcp/read_file — read a file and return its content.
 func (h *Handler) ToolReadFile(c *gin.Context) {
 	var req struct {
 		Key string `json:"key"`
@@ -511,7 +517,7 @@ func (h *Handler) ToolReadFile(c *gin.Context) {
 	}
 }
 
-// ToolWriteFile handles POST /tool/write_file — write content to a file.
+// ToolWriteFile handles POST /mcp/write_file — write content to a file.
 func (h *Handler) ToolWriteFile(c *gin.Context) {
 	var req struct {
 		Key         string `json:"key"`
@@ -557,7 +563,7 @@ func (h *Handler) ToolWriteFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "written", "content_type": contentType})
 }
 
-// ToolDeleteFile handles POST /tool/delete_file — move a file to trash.
+// ToolDeleteFile handles POST /mcp/delete_file — move a file to trash.
 func (h *Handler) ToolDeleteFile(c *gin.Context) {
 	var req struct {
 		Key string `json:"key"`
@@ -577,7 +583,7 @@ func (h *Handler) ToolDeleteFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "deleted"})
 }
 
-// ToolFileInfo handles POST /tool/file_info — get file metadata.
+// ToolFileInfo handles POST /mcp/file_info — get file metadata.
 func (h *Handler) ToolFileInfo(c *gin.Context) {
 	var req struct {
 		Key string `json:"key"`
@@ -603,7 +609,7 @@ func (h *Handler) ToolFileInfo(c *gin.Context) {
 	})
 }
 
-// ToolCreateFolder handles POST /tool/create_folder — create a folder marker.
+// ToolCreateFolder handles POST /mcp/create_folder — create a folder marker.
 func (h *Handler) ToolCreateFolder(c *gin.Context) {
 	var req struct {
 		Path string `json:"path"`
@@ -812,7 +818,7 @@ func (h *Handler) EmptyTrash(c *gin.Context) {
 	}
 }
 
-// ToolBrowseTrash handles POST /tool/browse_trash.
+// ToolBrowseTrash handles POST /mcp/browse_trash.
 func (h *Handler) ToolBrowseTrash(c *gin.Context) {
 	var req struct {
 		Prefix string `json:"prefix"`
@@ -824,12 +830,12 @@ func (h *Handler) ToolBrowseTrash(c *gin.Context) {
 	h.BrowseTrash(c)
 }
 
-// ToolRestoreFromTrash handles POST /tool/restore_from_trash.
+// ToolRestoreFromTrash handles POST /mcp/restore_from_trash.
 func (h *Handler) ToolRestoreFromTrash(c *gin.Context) {
 	h.RestoreTrash(c)
 }
 
-// ToolEmptyTrash handles POST /tool/empty_trash.
+// ToolEmptyTrash handles POST /mcp/empty_trash.
 func (h *Handler) ToolEmptyTrash(c *gin.Context) {
 	h.EmptyTrash(c)
 }

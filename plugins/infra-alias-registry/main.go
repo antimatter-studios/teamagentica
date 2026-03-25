@@ -24,6 +24,8 @@ func main() {
 
 	const defaultPort = 8090
 
+	h := handlers.New(nil, nil) // pre-create for ToolsFunc; reassigned after DB init
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
@@ -34,6 +36,9 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			return h.ToolDefs()
 		},
 	})
 
@@ -63,7 +68,7 @@ func main() {
 	}
 
 	router := gin.Default()
-	h := handlers.New(db, sdkClient)
+	h = handlers.New(db, sdkClient)
 
 	// Health
 	router.GET("/health", h.Health)
@@ -79,7 +84,7 @@ func main() {
 	router.GET("/persona/:alias", h.GetPersona)
 
 	// MCP tool discovery + execution
-	router.GET("/tools", h.GetTools)
+	router.GET("/mcp", h.GetTools)
 	router.POST("/mcp/list_aliases", h.MCPListAliases)
 	router.POST("/mcp/get_alias", h.MCPGetAlias)
 	router.POST("/mcp/create_alias", h.MCPCreateAlias)

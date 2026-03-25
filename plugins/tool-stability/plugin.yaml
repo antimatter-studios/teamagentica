@@ -2,7 +2,7 @@ id: tool-stability
 name: "Stability AI Image"
 description: "AI image generation powered by Stable Diffusion 3.5"
 group: tools
-version: "1.0.10"
+version: "1.0.12"
 image: "teamagentica-tool-stability:latest"
 author: teamagentica
 tags: [image, ai, tool, stability, stable-diffusion]

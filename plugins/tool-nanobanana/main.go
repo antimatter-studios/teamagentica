@@ -20,6 +20,8 @@ func main() {
 
 	const defaultPort = 8081
 
+	var h *handlers.Handler
+
 	sdkCfg := pluginsdk.LoadConfig()
 	manifest := pluginsdk.LoadManifest()
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
@@ -32,6 +34,12 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			if h != nil {
+				return h.ToolDefs()
+			}
+			return nil
 		},
 	})
 	sdkClient.Start(context.Background())
@@ -61,14 +69,14 @@ func main() {
 
 	router := gin.Default()
 
-	h := handlers.NewHandler(apiKey, model, dataPath, debug)
+	h = handlers.NewHandler(apiKey, model, dataPath, debug)
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
 	router.GET("/models", h.Models)
 	router.POST("/generate", h.Generate)
 	router.POST("/chat", h.Chat)
-	router.GET("/tools", h.Tools)
+	router.GET("/mcp", h.Tools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)

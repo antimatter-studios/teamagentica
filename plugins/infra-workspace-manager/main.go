@@ -25,6 +25,8 @@ func main() {
 
 	const defaultPort = 8091
 
+	var h *handlers.Handler
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
@@ -67,6 +69,9 @@ func main() {
 				"config": manifest.ConfigSchema,
 			}
 		},
+		ToolsFunc: func() interface{} {
+			return h.ToolDefs()
+		},
 	})
 
 	ctx := context.Background()
@@ -107,7 +112,7 @@ func main() {
 	}
 
 	router := gin.Default()
-	h := handlers.NewHandler(workspaceDir, baseDomain, debug, db)
+	h = handlers.NewHandler(workspaceDir, baseDomain, debug, db)
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
@@ -136,16 +141,16 @@ func main() {
 	router.POST("/discord-command/workspace/rename", h.DiscordCommandWorkspaceRename)
 
 	// Tool interface for AI agents.
-	router.GET("/tools", h.Tools)
-	router.POST("/tool/list_environments", h.ToolListEnvironments)
-	router.POST("/tool/create_workspace", h.ToolCreateWorkspace)
-	router.POST("/tool/list_workspaces", h.ToolListWorkspaces)
-	router.POST("/tool/start_workspace", h.ToolStartWorkspace)
-	router.POST("/tool/rename_workspace", h.ToolRenameWorkspace)
-	router.POST("/tool/build_plugin", h.ToolBuildPlugin)
-	router.POST("/tool/deploy_plugin", h.ToolDeployPlugin)
-	router.POST("/tool/promote_plugin", h.ToolPromotePlugin)
-	router.POST("/tool/rollback_plugin", h.ToolRollbackPlugin)
+	router.GET("/mcp", h.Tools)
+	router.POST("/mcp/list_environments", h.ToolListEnvironments)
+	router.POST("/mcp/create_workspace", h.ToolCreateWorkspace)
+	router.POST("/mcp/list_workspaces", h.ToolListWorkspaces)
+	router.POST("/mcp/start_workspace", h.ToolStartWorkspace)
+	router.POST("/mcp/rename_workspace", h.ToolRenameWorkspace)
+	router.POST("/mcp/build_plugin", h.ToolBuildPlugin)
+	router.POST("/mcp/deploy_plugin", h.ToolDeployPlugin)
+	router.POST("/mcp/promote_plugin", h.ToolPromotePlugin)
+	router.POST("/mcp/rollback_plugin", h.ToolRollbackPlugin)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

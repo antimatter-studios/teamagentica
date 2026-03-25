@@ -69,7 +69,7 @@ func main() {
 	// Register routes.
 	router.GET("/health", h.Health)
 	router.GET("/info", h.Info)
-	router.GET("/tools", h.Tools)
+	router.GET("/mcp", h.Tools)
 	router.POST("/mcp", h.MCP)
 
 	h.SetSDK(sdkClient)

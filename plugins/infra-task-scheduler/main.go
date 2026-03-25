@@ -27,6 +27,8 @@ func main() {
 
 	hostname, _ := os.Hostname()
 
+	h := handlers.NewHandler(nil, nil) // pre-create for ToolsFunc; re-assigned after DB init
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
@@ -37,6 +39,9 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			return h.ToolDefs()
 		},
 	})
 
@@ -92,7 +97,7 @@ func main() {
 	sched := scheduler.New(db, sdkClient, dispatchCfg)
 	defer sched.Stop()
 
-	h := handlers.NewHandler(sched, db)
+	h = handlers.NewHandler(sched, db)
 
 	router := gin.Default()
 	router.GET("/health", h.Health)
@@ -104,7 +109,7 @@ func main() {
 	router.GET("/log", h.GetLog)
 
 	// MCP tool endpoints.
-	router.GET("/tools", h.GetTools)
+	router.GET("/mcp", h.GetTools)
 	router.POST("/mcp/list_jobs", h.MCPListJobs)
 	router.POST("/mcp/create_job", h.MCPCreateJob)
 	router.POST("/mcp/update_job", h.MCPUpdateJob)

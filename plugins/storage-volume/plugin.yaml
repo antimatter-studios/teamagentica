@@ -2,7 +2,7 @@ id: storage-volume
 name: "Disk Storage"
 description: "Namespace-isolated disk storage volumes. Provides persistent, mountable volumes with metadata and type labels (auth, storage). Other plugins discover it via the storage:disk capability."
 group: storage
-version: "1.2.6"
+version: "1.2.8"
 image: "teamagentica-storage-volume:latest"
 author: teamagentica
 tags: [storage, volume, block, disk, infrastructure, tool]

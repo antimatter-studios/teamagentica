@@ -785,41 +785,44 @@ GUIDELINES:
 - Report any generation failures clearly`
 }
 
-// Tools returns the available tool schemas for this plugin.
-func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
-			{
-				"name":        "generate_video",
-				"description": "Generate a video from a text prompt using Seedance API",
-				"endpoint":    "/generate",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"prompt":         gin.H{"type": "string", "description": "Text prompt describing the video to generate"},
-						"aspect_ratio":   gin.H{"type": "string", "description": "Video aspect ratio (1:1, 16:9, 9:16, 4:3, 3:4, 21:9, 9:21)"},
-						"resolution":     gin.H{"type": "string", "description": "Output resolution: 480p or 720p", "enum": []string{"480p", "720p"}},
-						"duration":       gin.H{"type": "string", "description": "Video duration in seconds: 4, 8, or 12", "enum": []string{"4", "8", "12"}},
-						"generate_audio": gin.H{"type": "boolean", "description": "Whether to generate audio"},
-						"fixed_lens":     gin.H{"type": "boolean", "description": "Use fixed camera lens"},
-					},
-					"required": []string{"prompt"},
+// ToolDefs returns the raw tool definitions for use by both the HTTP handler and the SDK registration.
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
+		{
+			"name":        "generate_video",
+			"description": "Generate a video from a text prompt using Seedance API",
+			"endpoint":    "/generate",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"prompt":         gin.H{"type": "string", "description": "Text prompt describing the video to generate"},
+					"aspect_ratio":   gin.H{"type": "string", "description": "Video aspect ratio (1:1, 16:9, 9:16, 4:3, 3:4, 21:9, 9:21)"},
+					"resolution":     gin.H{"type": "string", "description": "Output resolution: 480p or 720p", "enum": []string{"480p", "720p"}},
+					"duration":       gin.H{"type": "string", "description": "Video duration in seconds: 4, 8, or 12", "enum": []string{"4", "8", "12"}},
+					"generate_audio": gin.H{"type": "boolean", "description": "Whether to generate audio"},
+					"fixed_lens":     gin.H{"type": "boolean", "description": "Use fixed camera lens"},
 				},
-			},
-			{
-				"name":        "check_video_status",
-				"description": "Check the status of a video generation task and get the video URL when complete",
-				"endpoint":    "/status/:taskId",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"task_id": gin.H{"type": "string", "description": "The task ID returned from generate_video"},
-					},
-					"required": []string{"task_id"},
-				},
+				"required": []string{"prompt"},
 			},
 		},
-	})
+		{
+			"name":        "check_video_status",
+			"description": "Check the status of a video generation task and get the video URL when complete",
+			"endpoint":    "/status/:taskId",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"task_id": gin.H{"type": "string", "description": "The task ID returned from generate_video"},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+	}
+}
+
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 func truncateStr(s string, maxLen int) string {

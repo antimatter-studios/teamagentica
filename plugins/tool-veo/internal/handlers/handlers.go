@@ -360,26 +360,29 @@ GUIDELINES:
 - Report any generation failures clearly`, model)
 }
 
-// Tools returns the available tool schemas for this plugin.
-func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
-			{
-				"name":        "generate_video",
-				"description": "Generate a video from a text prompt using Google Gemini Veo",
-				"endpoint":    "/generate",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"prompt":          gin.H{"type": "string", "description": "Text prompt describing the video to generate"},
-						"aspect_ratio":    gin.H{"type": "string", "description": "Video aspect ratio"},
-						"negative_prompt": gin.H{"type": "string", "description": "What to exclude from the video"},
-					},
-					"required": []string{"prompt"},
+// ToolDefs returns the raw tool definitions for this plugin.
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
+		{
+			"name":        "generate_video",
+			"description": "Generate a video from a text prompt using Google Gemini Veo",
+			"endpoint":    "/generate",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"prompt":          gin.H{"type": "string", "description": "Text prompt describing the video to generate"},
+					"aspect_ratio":    gin.H{"type": "string", "description": "Video aspect ratio"},
+					"negative_prompt": gin.H{"type": "string", "description": "What to exclude from the video"},
 				},
+				"required": []string{"prompt"},
 			},
 		},
-	})
+	}
+}
+
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 func defaultModels() []string {

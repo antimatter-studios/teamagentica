@@ -409,7 +409,7 @@ func StorageAPIToolDefs() []gin.H {
 		{
 			"name":        "list_files",
 			"description": "List files and folders at a given path prefix. Returns folder names and file metadata.",
-			"endpoint":    "/tool/list_files",
+			"endpoint":    "/mcp/list_files",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -421,7 +421,7 @@ func StorageAPIToolDefs() []gin.H {
 		{
 			"name":        "read_file",
 			"description": "Read a file from storage. Returns text content or base64-encoded data for binary files.",
-			"endpoint":    "/tool/read_file",
+			"endpoint":    "/mcp/read_file",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -433,7 +433,7 @@ func StorageAPIToolDefs() []gin.H {
 		{
 			"name":        "write_file",
 			"description": "Write or overwrite a file in storage. Creates parent folders automatically.",
-			"endpoint":    "/tool/write_file",
+			"endpoint":    "/mcp/write_file",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -447,7 +447,7 @@ func StorageAPIToolDefs() []gin.H {
 		{
 			"name":        "delete_file",
 			"description": "Delete a file from storage. The file is moved to .Trash before removal and can be recovered.",
-			"endpoint":    "/tool/delete_file",
+			"endpoint":    "/mcp/delete_file",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -459,7 +459,7 @@ func StorageAPIToolDefs() []gin.H {
 	}
 }
 
-// ToolListFiles handles POST /tool/list_files.
+// ToolListFiles handles POST /mcp/list_files.
 func (h *Handler) ToolListFiles(c *gin.Context) {
 	var req struct {
 		Prefix string `json:"prefix"`
@@ -510,7 +510,7 @@ func (h *Handler) ToolListFiles(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// ToolReadFile handles POST /tool/read_file.
+// ToolReadFile handles POST /mcp/read_file.
 func (h *Handler) ToolReadFile(c *gin.Context) {
 	var req struct {
 		Key string `json:"key"`
@@ -556,7 +556,7 @@ func (h *Handler) ToolReadFile(c *gin.Context) {
 	}
 }
 
-// ToolWriteFile handles POST /tool/write_file.
+// ToolWriteFile handles POST /mcp/write_file.
 func (h *Handler) ToolWriteFile(c *gin.Context) {
 	var req struct {
 		Key      string `json:"key"`
@@ -600,7 +600,7 @@ func (h *Handler) ToolWriteFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "written"})
 }
 
-// ToolDeleteFile handles POST /tool/delete_file.
+// ToolDeleteFile handles POST /mcp/delete_file.
 func (h *Handler) ToolDeleteFile(c *gin.Context) {
 	var req struct {
 		Key string `json:"key"`
@@ -823,7 +823,7 @@ func TrashToolDefs() []gin.H {
 		{
 			"name":        "browse_trash",
 			"description": "Browse deleted files in the trash. Returns folder names and file metadata, same format as list_files.",
-			"endpoint":    "/tool/browse_trash",
+			"endpoint":    "/mcp/browse_trash",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -835,7 +835,7 @@ func TrashToolDefs() []gin.H {
 		{
 			"name":        "restore_from_trash",
 			"description": "Restore a deleted file or folder from trash back to its original location.",
-			"endpoint":    "/tool/restore_from_trash",
+			"endpoint":    "/mcp/restore_from_trash",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -847,7 +847,7 @@ func TrashToolDefs() []gin.H {
 		{
 			"name":        "empty_trash",
 			"description": "Permanently delete files from trash. Specify a key to delete one item, or omit to empty all trash.",
-			"endpoint":    "/tool/empty_trash",
+			"endpoint":    "/mcp/empty_trash",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -859,7 +859,7 @@ func TrashToolDefs() []gin.H {
 	}
 }
 
-// ToolBrowseTrash handles POST /tool/browse_trash.
+// ToolBrowseTrash handles POST /mcp/browse_trash.
 func (h *Handler) ToolBrowseTrash(c *gin.Context) {
 	var req struct {
 		Prefix string `json:"prefix"`
@@ -872,12 +872,12 @@ func (h *Handler) ToolBrowseTrash(c *gin.Context) {
 	h.BrowseTrash(c)
 }
 
-// ToolRestoreFromTrash handles POST /tool/restore_from_trash.
+// ToolRestoreFromTrash handles POST /mcp/restore_from_trash.
 func (h *Handler) ToolRestoreFromTrash(c *gin.Context) {
 	h.RestoreTrash(c)
 }
 
-// ToolEmptyTrash handles POST /tool/empty_trash.
+// ToolEmptyTrash handles POST /mcp/empty_trash.
 func (h *Handler) ToolEmptyTrash(c *gin.Context) {
 	h.EmptyTrash(c)
 }

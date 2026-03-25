@@ -511,109 +511,111 @@ func (h *Handler) DeleteComment(c *gin.Context) {
 
 // ── MCP tools ─────────────────────────────────────────────────────────────────
 
-func (h *Handler) GetTools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
-			{
-				"name":        "list_boards",
-				"description": "List all kanban boards with their columns",
-				"endpoint":    "/mcp/list_boards",
-				"parameters": gin.H{
-					"type":       "object",
-					"properties": gin.H{},
-				},
-			},
-			{
-				"name":        "list_tasks",
-				"description": "List all tasks on a board, grouped by status (column)",
-				"endpoint":    "/mcp/list_tasks",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"board_id": gin.H{"type": "string", "description": "ID of the board"},
-					},
-					"required": []string{"board_id"},
-				},
-			},
-			{
-				"name":        "list_tasks_by_status",
-				"description": "List tasks in a specific status (column)",
-				"endpoint":    "/mcp/list_tasks_by_status",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"column_id": gin.H{"type": "string", "description": "ID of the status column"},
-					},
-					"required": []string{"column_id"},
-				},
-			},
-			{
-				"name":        "create_task",
-				"description": "Create a new task (card) in a kanban board column",
-				"endpoint":    "/mcp/create_task",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"board_id":       gin.H{"type": "string", "description": "ID of the board"},
-						"column_id":      gin.H{"type": "string", "description": "ID of the column (state) to place the task in"},
-						"title":          gin.H{"type": "string", "description": "Task title"},
-						"description":    gin.H{"type": "string", "description": "Task description"},
-						"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
-						"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
-						"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
-						"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
-					},
-					"required": []string{"board_id", "column_id", "title"},
-				},
-			},
-			{
-				"name":        "set_task_state",
-				"description": "Move a task to a different column (change its state)",
-				"endpoint":    "/mcp/set_task_state",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"card_id":   gin.H{"type": "string", "description": "ID of the task/card"},
-						"column_id": gin.H{"type": "string", "description": "ID of the target column"},
-					},
-					"required": []string{"card_id", "column_id"},
-				},
-			},
-			{
-				"name":        "update_task",
-				"description": "Update fields on an existing task",
-				"endpoint":    "/mcp/update_task",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"card_id":        gin.H{"type": "string", "description": "ID of the task/card"},
-						"title":          gin.H{"type": "string", "description": "New title"},
-						"description":    gin.H{"type": "string", "description": "New description"},
-						"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
-						"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
-						"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
-						"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
-						"column_id":      gin.H{"type": "string", "description": "Move to this column"},
-					},
-					"required": []string{"card_id"},
-				},
-			},
-			{
-				"name":        "add_comment",
-				"description": "Add a comment to a task",
-				"endpoint":    "/mcp/add_comment",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"card_id":   gin.H{"type": "string", "description": "ID of the task/card"},
-						"body":      gin.H{"type": "string", "description": "Comment text"},
-						"author_id": gin.H{"type": "integer", "description": "User ID of author (defaults to caller)"},
-					},
-					"required": []string{"card_id", "body"},
-				},
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
+		{
+			"name":        "list_boards",
+			"description": "List all kanban boards with their columns",
+			"endpoint":    "/mcp/list_boards",
+			"parameters": gin.H{
+				"type":       "object",
+				"properties": gin.H{},
 			},
 		},
-	})
+		{
+			"name":        "list_tasks",
+			"description": "List all tasks on a board, grouped by status (column)",
+			"endpoint":    "/mcp/list_tasks",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id": gin.H{"type": "string", "description": "ID of the board"},
+				},
+				"required": []string{"board_id"},
+			},
+		},
+		{
+			"name":        "list_tasks_by_status",
+			"description": "List tasks in a specific status (column)",
+			"endpoint":    "/mcp/list_tasks_by_status",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"column_id": gin.H{"type": "string", "description": "ID of the status column"},
+				},
+				"required": []string{"column_id"},
+			},
+		},
+		{
+			"name":        "create_task",
+			"description": "Create a new task (card) in a kanban board column",
+			"endpoint":    "/mcp/create_task",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id":       gin.H{"type": "string", "description": "ID of the board"},
+					"column_id":      gin.H{"type": "string", "description": "ID of the column (state) to place the task in"},
+					"title":          gin.H{"type": "string", "description": "Task title"},
+					"description":    gin.H{"type": "string", "description": "Task description"},
+					"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
+					"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
+					"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
+					"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
+				},
+				"required": []string{"board_id", "column_id", "title"},
+			},
+		},
+		{
+			"name":        "set_task_state",
+			"description": "Move a task to a different column (change its state)",
+			"endpoint":    "/mcp/set_task_state",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"card_id":   gin.H{"type": "string", "description": "ID of the task/card"},
+					"column_id": gin.H{"type": "string", "description": "ID of the target column"},
+				},
+				"required": []string{"card_id", "column_id"},
+			},
+		},
+		{
+			"name":        "update_task",
+			"description": "Update fields on an existing task",
+			"endpoint":    "/mcp/update_task",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"card_id":        gin.H{"type": "string", "description": "ID of the task/card"},
+					"title":          gin.H{"type": "string", "description": "New title"},
+					"description":    gin.H{"type": "string", "description": "New description"},
+					"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
+					"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
+					"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
+					"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
+					"column_id":      gin.H{"type": "string", "description": "Move to this column"},
+				},
+				"required": []string{"card_id"},
+			},
+		},
+		{
+			"name":        "add_comment",
+			"description": "Add a comment to a task",
+			"endpoint":    "/mcp/add_comment",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"card_id":   gin.H{"type": "string", "description": "ID of the task/card"},
+					"body":      gin.H{"type": "string", "description": "Comment text"},
+					"author_id": gin.H{"type": "integer", "description": "User ID of author (defaults to caller)"},
+				},
+				"required": []string{"card_id", "body"},
+			},
+		},
+	}
+}
+
+func (h *Handler) GetTools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 func (h *Handler) MCPListBoards(c *gin.Context) {

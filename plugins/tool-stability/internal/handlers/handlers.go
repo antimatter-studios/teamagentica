@@ -307,30 +307,33 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"records": records})
 }
 
-// Tools returns the available tool schemas for this plugin.
-func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
-			{
-				"name":        "generate_image",
-				"description": "Generate an image from a text prompt using Stability AI (Stable Diffusion 3.5)",
-				"endpoint":    "/generate",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"prompt":          gin.H{"type": "string", "description": "Text prompt describing the image to generate (1-10000 chars)"},
-						"negative_prompt": gin.H{"type": "string", "description": "What to exclude from the image (not supported on turbo/flash models)"},
-						"aspect_ratio":    gin.H{"type": "string", "description": "Aspect ratio for the image", "enum": []string{"1:1", "16:9", "9:16", "21:9", "9:21", "2:3", "3:2", "4:5", "5:4"}},
-						"output_format":   gin.H{"type": "string", "description": "Output image format", "enum": []string{"png", "jpeg", "webp"}},
-						"style_preset":    gin.H{"type": "string", "description": "Guide the image towards a particular style", "enum": []string{"3d-model", "analog-film", "anime", "cinematic", "comic-book", "digital-art", "enhance", "fantasy-art", "isometric", "line-art", "low-poly", "modeling-compound", "neon-punk", "origami", "photographic", "pixel-art", "tile-texture"}},
-						"cfg_scale":       gin.H{"type": "number", "description": "How strictly to follow the prompt (1-10, default varies by model)"},
-						"seed":            gin.H{"type": "integer", "description": "Seed for reproducible generation (0 for random)"},
-					},
-					"required": []string{"prompt"},
+// ToolDefs returns the raw tool definitions for this plugin.
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
+		{
+			"name":        "generate_image",
+			"description": "Generate an image from a text prompt using Stability AI (Stable Diffusion 3.5)",
+			"endpoint":    "/generate",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"prompt":          gin.H{"type": "string", "description": "Text prompt describing the image to generate (1-10000 chars)"},
+					"negative_prompt": gin.H{"type": "string", "description": "What to exclude from the image (not supported on turbo/flash models)"},
+					"aspect_ratio":    gin.H{"type": "string", "description": "Aspect ratio for the image", "enum": []string{"1:1", "16:9", "9:16", "21:9", "9:21", "2:3", "3:2", "4:5", "5:4"}},
+					"output_format":   gin.H{"type": "string", "description": "Output image format", "enum": []string{"png", "jpeg", "webp"}},
+					"style_preset":    gin.H{"type": "string", "description": "Guide the image towards a particular style", "enum": []string{"3d-model", "analog-film", "anime", "cinematic", "comic-book", "digital-art", "enhance", "fantasy-art", "isometric", "line-art", "low-poly", "modeling-compound", "neon-punk", "origami", "photographic", "pixel-art", "tile-texture"}},
+					"cfg_scale":       gin.H{"type": "number", "description": "How strictly to follow the prompt (1-10, default varies by model)"},
+					"seed":            gin.H{"type": "integer", "description": "Seed for reproducible generation (0 for random)"},
 				},
+				"required": []string{"prompt"},
 			},
 		},
-	})
+	}
+}
+
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 // SystemPrompt returns the system prompt this plugin would use when processing requests.

@@ -29,6 +29,8 @@ func main() {
 
 	const httpPort = 8093
 
+	var h *handlers.Handler
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Host:         hostname,
@@ -39,6 +41,9 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			return h.ToolDefs()
 		},
 	})
 
@@ -61,7 +66,7 @@ func main() {
 	}
 
 	uc := usercache.New(sdkClient, 5*time.Minute)
-	h := handlers.New(db, sdkClient, uc)
+	h = handlers.New(db, sdkClient, uc)
 
 	router := gin.Default()
 	router.GET("/health", h.Health)
@@ -94,7 +99,7 @@ func main() {
 	router.DELETE("/cards/:cid/comments/:cmid", h.DeleteComment)
 
 	// MCP tool discovery + execution
-	router.GET("/tools", h.GetTools)
+	router.GET("/mcp", h.GetTools)
 	router.POST("/mcp/list_boards", h.MCPListBoards)
 	router.POST("/mcp/list_tasks", h.MCPListTasks)
 	router.POST("/mcp/list_tasks_by_status", h.MCPListTasksByStatus)

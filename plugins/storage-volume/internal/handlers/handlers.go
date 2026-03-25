@@ -156,10 +156,15 @@ func dirSize(path string) int64 {
 	return size
 }
 
-// Tools returns the tool definitions for agent discovery via GET /tools.
-func (h *Handler) Tools(c *gin.Context) {
+// ToolDefs returns the raw tool definitions for use in SDK schema registration.
+func (h *Handler) ToolDefs() interface{} {
 	tools := VolumeToolDefs()
 	tools = append(tools, StorageAPIToolDefs()...)
 	tools = append(tools, TrashToolDefs()...)
-	c.JSON(http.StatusOK, gin.H{"tools": tools})
+	return tools
+}
+
+// Tools returns the tool definitions for agent discovery via GET /tools.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }

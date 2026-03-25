@@ -50,12 +50,12 @@ func (h *Handler) Health(c *gin.Context) {
 	})
 }
 
-func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"tools": []gin.H{
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
 		{
 			"name":        "build",
 			"description": "Build a Docker image from source in a storage volume. Streams build output as NDJSON. Returns the built image name and tag.",
-			"endpoint":    "/tool/build",
+			"endpoint":    "/mcp/build",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -67,7 +67,11 @@ func (h *Handler) Tools(c *gin.Context) {
 				"required": []string{"volume", "image"},
 			},
 		},
-	}})
+	}
+}
+
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 func (h *Handler) ToolBuild(c *gin.Context) {

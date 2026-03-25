@@ -32,6 +32,8 @@ func main() {
 
 	const defaultPort = 8081
 
+	var h *handlers.Handler
+
 	sdkClient := pluginsdk.NewClient(sdkCfg, pluginsdk.Registration{
 		ID:           manifest.ID,
 		Name:         "Object Storage",
@@ -43,6 +45,12 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			if h != nil {
+				return h.ToolDefs()
+			}
+			return nil
 		},
 	})
 	sdkClient.Start(ctx)
@@ -104,7 +112,7 @@ func main() {
 
 	// Set up routes.
 	router := gin.Default()
-	h := handlers.NewHandler(client, idx)
+	h = handlers.NewHandler(client, idx)
 
 	router.GET("/health", h.Health)
 	router.PUT("/objects/*key", h.PutObject)
@@ -119,16 +127,16 @@ func main() {
 	router.POST("/refresh", h.Refresh)
 
 	// Tool interface — allows AI agents to discover and use storage operations.
-	router.GET("/tools", h.Tools)
-	router.POST("/tool/list_files", h.ToolListFiles)
-	router.POST("/tool/read_file", h.ToolReadFile)
-	router.POST("/tool/write_file", h.ToolWriteFile)
-	router.POST("/tool/delete_file", h.ToolDeleteFile)
-	router.POST("/tool/file_info", h.ToolFileInfo)
-	router.POST("/tool/create_folder", h.ToolCreateFolder)
-	router.POST("/tool/browse_trash", h.ToolBrowseTrash)
-	router.POST("/tool/restore_from_trash", h.ToolRestoreFromTrash)
-	router.POST("/tool/empty_trash", h.ToolEmptyTrash)
+	router.GET("/mcp", h.Tools)
+	router.POST("/mcp/list_files", h.ToolListFiles)
+	router.POST("/mcp/read_file", h.ToolReadFile)
+	router.POST("/mcp/write_file", h.ToolWriteFile)
+	router.POST("/mcp/delete_file", h.ToolDeleteFile)
+	router.POST("/mcp/file_info", h.ToolFileInfo)
+	router.POST("/mcp/create_folder", h.ToolCreateFolder)
+	router.POST("/mcp/browse_trash", h.ToolBrowseTrash)
+	router.POST("/mcp/restore_from_trash", h.ToolRestoreFromTrash)
+	router.POST("/mcp/empty_trash", h.ToolEmptyTrash)
 
 	// Trash REST endpoints.
 	router.GET("/trash/browse", h.BrowseTrash)

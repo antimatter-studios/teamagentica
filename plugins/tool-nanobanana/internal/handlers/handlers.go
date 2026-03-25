@@ -335,25 +335,28 @@ func (h *Handler) Chat(c *gin.Context) {
 	})
 }
 
-// Tools returns the available tool schemas for this plugin.
-func (h *Handler) Tools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
-			{
-				"name":        "generate_image",
-				"description": "Generate an image from a text prompt using Nano Banana (Gemini image model)",
-				"endpoint":    "/generate",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"prompt":       gin.H{"type": "string", "description": "Text prompt describing the image to generate"},
-						"aspect_ratio": gin.H{"type": "string", "description": "Aspect ratio (1:1, 16:9, 9:16)", "enum": []string{"1:1", "16:9", "9:16"}},
-					},
-					"required": []string{"prompt"},
+// ToolDefs returns the raw tool definitions for this plugin.
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
+		{
+			"name":        "generate_image",
+			"description": "Generate an image from a text prompt using Nano Banana (Gemini image model)",
+			"endpoint":    "/generate",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"prompt":       gin.H{"type": "string", "description": "Text prompt describing the image to generate"},
+					"aspect_ratio": gin.H{"type": "string", "description": "Aspect ratio (1:1, 16:9, 9:16)", "enum": []string{"1:1", "16:9", "9:16"}},
 				},
+				"required": []string{"prompt"},
 			},
 		},
-	})
+	}
+}
+
+// Tools returns the available tool schemas for this plugin.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 // SystemPrompt returns the system prompt this plugin would use when processing requests.

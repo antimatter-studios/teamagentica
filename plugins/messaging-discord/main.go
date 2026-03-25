@@ -257,7 +257,7 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]interface{}{"commands": cmds})
 		})
 
-		mux.HandleFunc("GET /tools", chHandler.Tools)
+		mux.HandleFunc("GET /mcp", chHandler.Tools)
 		mux.HandleFunc("POST /channels/create-category", chHandler.CreateCategory)
 		mux.HandleFunc("POST /channels/create", chHandler.CreateChannel)
 		mux.HandleFunc("POST /channels/list", chHandler.ListChannels)

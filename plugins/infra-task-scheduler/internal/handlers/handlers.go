@@ -227,9 +227,8 @@ func (h *Handler) GetLog(c *gin.Context) {
 
 // --- MCP Tools ---
 
-func (h *Handler) GetTools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
 			{
 				"name":        "list_jobs",
 				"description": "List all scheduled jobs (both timer and event triggers)",
@@ -329,8 +328,11 @@ func (h *Handler) GetTools(c *gin.Context) {
 					"required": []string{"entry_id"},
 				},
 			},
-		},
-	})
+	}
+}
+
+func (h *Handler) GetTools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 // MCP endpoint handlers — accept POST with JSON body.

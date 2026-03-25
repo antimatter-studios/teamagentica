@@ -193,77 +193,79 @@ func (h *Handler) GetPersona(c *gin.Context) {
 
 // ── MCP tool discovery ───────────────────────────────────────────────────────
 
-func (h *Handler) GetTools(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"tools": []gin.H{
-			{
-				"name":        "list_aliases",
-				"description": "List all registered aliases (agents, tool agents, tools)",
-				"endpoint":    "/mcp/list_aliases",
-				"parameters":  gin.H{"type": "object", "properties": gin.H{}},
-			},
-			{
-				"name":        "get_alias",
-				"description": "Get a specific alias by name",
-				"endpoint":    "/mcp/get_alias",
-				"parameters": gin.H{
-					"type":       "object",
-					"properties": gin.H{"name": gin.H{"type": "string", "description": "The alias name"}},
-					"required":   []string{"name"},
-				},
-			},
-			{
-				"name":        "create_alias",
-				"description": "Create a new alias (agent, tool_agent, or tool)",
-				"endpoint":    "/mcp/create_alias",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"name":          gin.H{"type": "string", "description": "Unique alias name (e.g. coder, nanobanana, cloud)"},
-						"type":          gin.H{"type": "string", "description": "Type: agent, tool_agent, or tool"},
-						"plugin":        gin.H{"type": "string", "description": "Target plugin ID (e.g. agent-claude, tool-nanobanana, storage-sss3)"},
-						"provider":      gin.H{"type": "string", "description": "For agents: provider plugin ID"},
-						"model":         gin.H{"type": "string", "description": "For agents: model override"},
-						"system_prompt": gin.H{"type": "string", "description": "For agents: system prompt"},
-					},
-					"required": []string{"name", "type", "plugin"},
-				},
-			},
-			{
-				"name":        "update_alias",
-				"description": "Update an existing alias",
-				"endpoint":    "/mcp/update_alias",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"name":          gin.H{"type": "string", "description": "The alias to update"},
-						"type":          gin.H{"type": "string", "description": "New type"},
-						"plugin":        gin.H{"type": "string", "description": "New target plugin"},
-						"provider":      gin.H{"type": "string", "description": "New provider"},
-						"model":         gin.H{"type": "string", "description": "New model"},
-						"system_prompt": gin.H{"type": "string", "description": "New system prompt"},
-					},
-					"required": []string{"name"},
-				},
-			},
-			{
-				"name":        "delete_alias",
-				"description": "Delete an alias",
-				"endpoint":    "/mcp/delete_alias",
-				"parameters": gin.H{
-					"type":       "object",
-					"properties": gin.H{"name": gin.H{"type": "string", "description": "The alias to delete"}},
-					"required":   []string{"name"},
-				},
-			},
-			{
-				"name":        "migrate_from_kernel",
-				"description": "Import all aliases from the kernel into the alias registry (skips existing)",
-				"endpoint":    "/mcp/migrate_from_kernel",
-				"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+func (h *Handler) ToolDefs() interface{} {
+	return []gin.H{
+		{
+			"name":        "list_aliases",
+			"description": "List all registered aliases (agents, tool agents, tools)",
+			"endpoint":    "/mcp/list_aliases",
+			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+		},
+		{
+			"name":        "get_alias",
+			"description": "Get a specific alias by name",
+			"endpoint":    "/mcp/get_alias",
+			"parameters": gin.H{
+				"type":       "object",
+				"properties": gin.H{"name": gin.H{"type": "string", "description": "The alias name"}},
+				"required":   []string{"name"},
 			},
 		},
-	})
+		{
+			"name":        "create_alias",
+			"description": "Create a new alias (agent, tool_agent, or tool)",
+			"endpoint":    "/mcp/create_alias",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"name":          gin.H{"type": "string", "description": "Unique alias name (e.g. coder, nanobanana, cloud)"},
+					"type":          gin.H{"type": "string", "description": "Type: agent, tool_agent, or tool"},
+					"plugin":        gin.H{"type": "string", "description": "Target plugin ID (e.g. agent-claude, tool-nanobanana, storage-sss3)"},
+					"provider":      gin.H{"type": "string", "description": "For agents: provider plugin ID"},
+					"model":         gin.H{"type": "string", "description": "For agents: model override"},
+					"system_prompt": gin.H{"type": "string", "description": "For agents: system prompt"},
+				},
+				"required": []string{"name", "type", "plugin"},
+			},
+		},
+		{
+			"name":        "update_alias",
+			"description": "Update an existing alias",
+			"endpoint":    "/mcp/update_alias",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"name":          gin.H{"type": "string", "description": "The alias to update"},
+					"type":          gin.H{"type": "string", "description": "New type"},
+					"plugin":        gin.H{"type": "string", "description": "New target plugin"},
+					"provider":      gin.H{"type": "string", "description": "New provider"},
+					"model":         gin.H{"type": "string", "description": "New model"},
+					"system_prompt": gin.H{"type": "string", "description": "New system prompt"},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			"name":        "delete_alias",
+			"description": "Delete an alias",
+			"endpoint":    "/mcp/delete_alias",
+			"parameters": gin.H{
+				"type":       "object",
+				"properties": gin.H{"name": gin.H{"type": "string", "description": "The alias to delete"}},
+				"required":   []string{"name"},
+			},
+		},
+		{
+			"name":        "migrate_from_kernel",
+			"description": "Import all aliases from the kernel into the alias registry (skips existing)",
+			"endpoint":    "/mcp/migrate_from_kernel",
+			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+		},
+	}
+}
+
+func (h *Handler) GetTools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
 // ── MCP tool execution ───────────────────────────────────────────────────────
