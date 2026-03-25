@@ -226,6 +226,7 @@ type Registration struct {
 	WorkspaceSchema map[string]interface{}       `json:"workspace_schema,omitempty"`
 	DiscordCommands []DiscordCommand             `json:"discord_commands,omitempty"`
 	SchemaFunc      SchemaFunc                   `json:"-"`
+	ToolsFunc       func() interface{}           `json:"-"` // returns tool definitions for schema display
 }
 
 // EventCallback is the payload delivered by the kernel for subscribed events.
@@ -693,10 +694,17 @@ func (c *Client) startInternalServer() error {
 		// Dynamic schema — call function on each request.
 		mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
 			data := c.registration.SchemaFunc()
+			if c.registration.ToolsFunc != nil {
+				data["tools"] = c.registration.ToolsFunc()
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(data)
 		})
 	} else if schemaData := c.buildSchemaJSON(); schemaData != nil {
+		// Inject tools if available.
+		if c.registration.ToolsFunc != nil {
+			schemaData["tools"] = c.registration.ToolsFunc()
+		}
 		// Static schema — marshal once.
 		schemaBytes, err := json.Marshal(schemaData)
 		if err != nil {
@@ -707,6 +715,14 @@ func (c *Client) startInternalServer() error {
 				w.Write(schemaBytes)
 			})
 		}
+	} else if c.registration.ToolsFunc != nil {
+		// No schema but tools available — serve tools-only schema.
+		schemaData := map[string]interface{}{"tools": c.registration.ToolsFunc()}
+		schemaBytes, _ := json.Marshal(schemaData)
+		mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(schemaBytes)
+		})
 	}
 
 	// Event callback handler.
