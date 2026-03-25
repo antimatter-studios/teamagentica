@@ -4,9 +4,9 @@ includes:
   kernel:
     taskfile: ./kernel/Taskfile.yml
     dir: ./kernel
-  ui:
-    taskfile: ./user-interface/Taskfile.yml
-    dir: ./user-interface
+  dashboard:
+    taskfile: ./web-dashboard/Taskfile.yml
+    dir: ./web-dashboard
   pluginsdk:
     taskfile: ./pkg/pluginsdk/Taskfile.yml
     dir: ./pkg/pluginsdk
