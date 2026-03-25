@@ -119,5 +119,5 @@ export { UsersAPI } from "./users.js";
 export type { ScheduledEvent, EventLogEntry, CreateEventRequest, UpdateEventRequest } from "./scheduler.js";
 export { SchedulerAPI } from "./scheduler.js";
 
-export type { Persona, CreatePersonaRequest, UpdatePersonaRequest } from "./personas.js";
+export type { Persona, PersonaRole, CreatePersonaRequest, UpdatePersonaRequest } from "./personas.js";
 export { PersonaAPI } from "./personas.js";
