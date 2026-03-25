@@ -2,7 +2,7 @@ id: infra-agent-memory
 name: "Agent Memory"
 description: "Persistent conversation memory for agents — stores session history and provides a swappable memory backend"
 group: infrastructure
-version: "0.1.7"
+version: "0.2.7"
 image: "teamagentica-infra-agent-memory:latest"
 author: teamagentica
 tags: [memory, agents, history, sessions]
@@ -31,6 +31,30 @@ configSchema:
     label: "Session TTL (hours)"
     description: "Hours of inactivity before a session is expired and pruned"
     default: "24"
+    required: false
+  EXTRACTION_PERSONA:
+    type: string
+    label: "Extraction Persona (fallback)"
+    description: "Fallback persona alias if no persona has the 'memory' role assigned"
+    default: "brains"
+    required: false
+  COMPACT_AFTER_MESSAGES:
+    type: number
+    label: "Compact After Messages"
+    description: "Number of messages per session before triggering automatic compaction"
+    default: "100"
+    required: false
+  COMPACT_INTERVAL_MINUTES:
+    type: number
+    label: "Compact Interval (minutes)"
+    description: "Maximum minutes between compaction cycles per session"
+    default: "30"
+    required: false
+  ACTIVITY_LOG_SIZE:
+    type: number
+    label: "Activity Log Size"
+    description: "Number of recent memory operations to display in the activity feed (100-1000)"
+    default: "100"
     required: false
   PLUGIN_DEBUG:
     type: boolean
