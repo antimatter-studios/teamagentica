@@ -529,7 +529,7 @@ func (h *PluginHandler) GetKernelLogs(c *gin.Context) {
 }
 
 // GetUILogs handles GET /api/ui/logs.
-// Returns logs from the user-interface container.
+// Returns logs from the web-dashboard container.
 func (h *PluginHandler) GetUILogs(c *gin.Context) {
 	if h.runtime == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})

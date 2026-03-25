@@ -84,8 +84,8 @@ func (d *DockerRuntime) SelfContainerID() string {
 	return d.selfContainerID
 }
 
-// UIContainerID finds the user-interface container by well-known name.
-// Checks for "teamagentica-ui-dev" (dev profile) and "teamagentica-ui" (prod).
+// UIContainerID finds the web-dashboard container by well-known name.
+// Checks for "teamagentica-web-dashboard-dev" (dev) and "teamagentica-web-dashboard" (prod).
 func (d *DockerRuntime) UIContainerID(ctx context.Context) (string, error) {
 	containers, err := d.client.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
@@ -94,12 +94,12 @@ func (d *DockerRuntime) UIContainerID(ctx context.Context) (string, error) {
 	for _, c := range containers {
 		for _, name := range c.Names {
 			name = strings.TrimPrefix(name, "/")
-			if name == "teamagentica-ui-dev" || name == "teamagentica-ui" {
+			if name == "teamagentica-web-dashboard-dev" || name == "teamagentica-web-dashboard" {
 				return c.ID, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("UI container not found (teamagentica-ui / teamagentica-ui-dev)")
+	return "", fmt.Errorf("web-dashboard container not found (teamagentica-web-dashboard / teamagentica-web-dashboard-dev)")
 }
 
 // discoverSelfContainer finds the kernel's own container by matching hostname.
