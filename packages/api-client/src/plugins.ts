@@ -204,7 +204,7 @@ export class PluginsAPI {
   async getTools(
     pluginId: string
   ): Promise<{ tools: unknown[] }> {
-    return this.http.get(`/api/route/${pluginId}/tools`);
+    return this.http.get(`/api/route/${pluginId}/mcp`);
   }
 
   async getSystemPrompt(

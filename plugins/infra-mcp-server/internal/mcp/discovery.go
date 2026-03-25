@@ -79,7 +79,7 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 	pluginTools := make(map[string][]rawTool) // pluginID → tools
 
 	for _, p := range plugins {
-		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/tools", nil)
+		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/mcp", nil)
 		if err != nil {
 			log.Printf("mcp-server: failed to get tools from %s: %v", p.ID, err)
 			continue

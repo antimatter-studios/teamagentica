@@ -66,7 +66,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 
 	var allTools []discoveredTool
 	for _, p := range plugins {
-		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/tools", nil)
+		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/mcp", nil)
 		if err != nil {
 			log.Printf("agent-gemini: failed to get tools from %s: %v", p.ID, err)
 			continue

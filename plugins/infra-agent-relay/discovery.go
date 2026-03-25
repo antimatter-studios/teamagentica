@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"log"
 	"sort"
@@ -16,13 +15,48 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-//go:embed prompts/coordinator-context.md.tmpl
-var coordinatorContextTmpl string
+// workerTemplateData is the data passed when rendering a worker persona's system prompt.
+type workerTemplateData struct {
+	Alias        string
+	IsSelfWorker bool
+}
 
-//go:embed prompts/worker-self.md
-var workerSelfPrompt string
+// getSelfWorkerPrompt looks up the worker role's system prompt from the persona plugin
+// and renders it with IsSelfWorker=true. Falls back to a basic prompt if unavailable.
+func (r *relay) getSelfWorkerPrompt(coordAlias string) string {
+	if r.sdk != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		body, err := r.sdk.RouteToPlugin(ctx, "infra-agent-persona", "GET", "/roles/worker", nil)
+		if err == nil {
+			var role struct {
+				SystemPrompt string `json:"system_prompt"`
+			}
+			if json.Unmarshal(body, &role) == nil && role.SystemPrompt != "" {
+				return renderWorkerPrompt(role.SystemPrompt, workerTemplateData{
+					Alias:        coordAlias,
+					IsSelfWorker: true,
+				})
+			}
+		}
+	}
+	// Fallback if persona plugin is unavailable.
+	return "You have been delegated a task by the coordinator. Respond with your answer in plain text or Markdown. NEVER output a JSON task plan."
+}
 
-var parsedCoordinatorTmpl = template.Must(template.New("coordinator-context").Parse(coordinatorContextTmpl))
+// renderWorkerPrompt renders a worker persona's system prompt as a Go template.
+// If the prompt contains no template syntax, it's returned as-is.
+func renderWorkerPrompt(promptTemplate string, data workerTemplateData) string {
+	tmpl, err := template.New("worker").Parse(promptTemplate)
+	if err != nil {
+		return promptTemplate
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return promptTemplate
+	}
+	return strings.TrimSpace(buf.String())
+}
 
 // toolDiscovery caches discovered tools from tool:* plugins.
 type toolDiscovery struct {
@@ -66,7 +100,7 @@ func discoverTools(sdk *pluginsdk.Client) []alias.ToolInfo {
 
 	var allTools []alias.ToolInfo
 	for _, p := range plugins {
-		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/tools", nil)
+		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/mcp", nil)
 		if err != nil {
 			log.Printf("relay: failed to get tools from %s: %v", p.ID, err)
 			continue
@@ -146,8 +180,7 @@ type tmplAnonTool struct {
 }
 
 type coordinatorContextData struct {
-	PersonaPrompt string // persona system prompt (personality/behavior)
-	Agents        []tmplAgent
+	Agents []tmplAgent
 	AliasedTools  []tmplAliasedTool
 	Storage       []tmplStorage
 	MCPTools      []tmplMCPTool
@@ -159,9 +192,7 @@ type coordinatorContextData struct {
 func buildCoordinatorContext(personaPrompt string, aliases *alias.AliasMap, discoveredTools []alias.ToolInfo) string {
 	entries := aliases.List()
 
-	data := coordinatorContextData{
-		PersonaPrompt: personaPrompt,
-	}
+	data := coordinatorContextData{}
 
 	// Classify aliases.
 	aliasedPlugins := make(map[string]bool)
@@ -224,10 +255,17 @@ func buildCoordinatorContext(personaPrompt string, aliases *alias.AliasMap, disc
 		}
 	}
 
+	// Parse the persona prompt as a Go template — it contains {{.Agents}}, {{.Tools}}, etc.
+	tmpl, err := template.New("coordinator").Parse(personaPrompt)
+	if err != nil {
+		log.Printf("relay: failed to parse coordinator prompt as template: %v", err)
+		return personaPrompt // Fall back to raw prompt if template syntax is invalid.
+	}
+
 	var buf bytes.Buffer
-	if err := parsedCoordinatorTmpl.Execute(&buf, data); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		log.Printf("relay: failed to render coordinator context template: %v", err)
-		return ""
+		return personaPrompt
 	}
 	return strings.TrimSpace(buf.String())
 }
