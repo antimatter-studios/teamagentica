@@ -61,6 +61,7 @@ type personaInfo struct {
 	SystemPrompt string `json:"system_prompt"`
 	BackendAlias string `json:"backend_alias"`
 	Model        string `json:"model"`
+	Role         string `json:"role"`
 }
 
 // personaCache caches all persona definitions with a TTL.
@@ -357,10 +358,25 @@ func (r *relay) memoryStore(sessionID, role, content, responder string) {
 	}
 }
 
-// resolveCoordinator fetches the "coordinator" persona at request time and
+// lookupPersonaByRole returns the first persona matching the given role, or nil.
+func (r *relay) lookupPersonaByRole(role string) *personaInfo {
+	personas := r.fetchPersonas()
+	for _, p := range personas {
+		if p.Role == role {
+			return &p
+		}
+	}
+	return nil
+}
+
+// resolveCoordinator finds the persona with the "coordinator" role and
 // resolves its backend alias to a concrete plugin + model.
 func (r *relay) resolveCoordinator(aliases *alias.AliasMap) *resolvedTarget {
-	return r.resolvePersonaOrAlias("coordinator", aliases)
+	p := r.lookupPersonaByRole("coordinator")
+	if p == nil {
+		return nil
+	}
+	return r.resolvePersonaOrAlias(p.Alias, aliases)
 }
 
 // --- Chat endpoint: the main entry point for all messaging plugins ---
@@ -556,15 +572,15 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	coord := r.resolveCoordinator(aliases)
 	if coord == nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-			"coordinator persona is missing a backend_alias — set one via the persona manager", nil)
+			"no persona with coordinator role found, or it is missing a backend_alias — assign the coordinator role to a persona in the persona manager", nil)
 		return
 	}
 
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "planning", "Planning tasks...", nil)
 
 	coordPrompt := r.enrichSystemPrompt(coord.SystemPrompt, aliases)
-	// Worker prompt for "self" tasks — a dedicated prompt that prevents JSON plan output.
-	selfWorkerPrompt := strings.TrimSpace(workerSelfPrompt)
+	// Worker prompt for "self" tasks — fetched from the worker role and rendered with IsSelfWorker=true.
+	selfWorkerPrompt := r.getSelfWorkerPrompt(coord.Alias)
 
 	// Progress callback for the orchestration loop.
 	emitOrchProgress := func(status, message string) {
@@ -622,6 +638,7 @@ type dagTask struct {
 
 // parseCoordinatorPlan extracts a taskPlan from a coordinator response.
 // Handles raw JSON, ```json fenced blocks, or JSON embedded in surrounding text.
+// Recovers known malformations: bare arrays and unwrapped single task objects.
 // Returns (nil, false) if the response is a plain text answer with no plan.
 func parseCoordinatorPlan(response string) (*taskPlan, bool) {
 	s := strings.TrimSpace(response)
@@ -635,28 +652,80 @@ func parseCoordinatorPlan(response string) (*taskPlan, bool) {
 		}
 	}
 
-	// Find the first '{' — the coordinator may prefix the JSON with text.
-	braceIdx := strings.Index(s, "{")
-	if braceIdx < 0 {
+	jsonStr := extractJSON(s)
+	if jsonStr == "" {
 		return nil, false
 	}
-	s = s[braceIdx:]
 
-	// Find the matching closing '}' by scanning from the end.
-	lastBrace := strings.LastIndex(s, "}")
-	if lastBrace < 0 {
-		return nil, false
-	}
-	s = s[:lastBrace+1]
-
+	// 1. Canonical format: {"tasks": [...]}
 	var plan taskPlan
-	if err := json.Unmarshal([]byte(s), &plan); err != nil {
-		return nil, false
+	if json.Unmarshal([]byte(jsonStr), &plan) == nil && len(plan.Tasks) > 0 {
+		if validateTasks(plan.Tasks) {
+			return &plan, true
+		}
 	}
-	if len(plan.Tasks) == 0 {
-		return nil, false
+
+	// 2. Bare array: [{...}, ...]
+	var tasks []dagTask
+	if json.Unmarshal([]byte(jsonStr), &tasks) == nil && len(tasks) > 0 {
+		if validateTasks(tasks) {
+			return &taskPlan{Tasks: tasks}, true
+		}
 	}
-	return &plan, true
+
+	// 3. Single unwrapped task: {"id": "t1", "alias": "self", ...}
+	var single dagTask
+	if json.Unmarshal([]byte(jsonStr), &single) == nil && single.ID != "" && single.Alias != "" {
+		if validateTasks([]dagTask{single}) {
+			return &taskPlan{Tasks: []dagTask{single}}, true
+		}
+	}
+
+	return nil, false
+}
+
+// extractJSON finds the outermost JSON structure (object or array) in s.
+// Returns the extracted JSON string or "" if none found.
+func extractJSON(s string) string {
+	braceIdx := strings.Index(s, "{")
+	bracketIdx := strings.Index(s, "[")
+
+	// Pick whichever delimiter comes first.
+	var startIdx int
+	var open, close byte
+	switch {
+	case braceIdx >= 0 && (bracketIdx < 0 || braceIdx < bracketIdx):
+		startIdx, open, close = braceIdx, '{', '}'
+	case bracketIdx >= 0:
+		startIdx, open, close = bracketIdx, '[', ']'
+	default:
+		return ""
+	}
+
+	// Find the matching close by scanning from the end.
+	sub := s[startIdx:]
+	lastIdx := strings.LastIndexByte(sub, close)
+	if lastIdx < 0 {
+		return ""
+	}
+
+	candidate := sub[:lastIdx+1]
+
+	// Quick sanity: must start with the expected delimiter.
+	if len(candidate) == 0 || candidate[0] != open {
+		return ""
+	}
+	return candidate
+}
+
+// validateTasks checks that every task has the minimum required fields.
+func validateTasks(tasks []dagTask) bool {
+	for _, t := range tasks {
+		if t.ID == "" || t.Alias == "" || t.Prompt == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // interpolate substitutes {taskID} placeholders with completed task results.
