@@ -34,10 +34,30 @@ type Config struct {
 	Profiles      []Profile `json:"profiles"`
 }
 
-// ConfigPath returns ~/.tacli/config.json.
+// ConfigPath returns the path to tacli.json following the XDG Base Directory spec.
+// Uses $XDG_CONFIG_HOME/teamagentica/tacli.json (defaults to ~/.config/teamagentica/tacli.json).
+// On first call, migrates from the legacy ~/.tacli/config.json if present.
 func ConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".tacli", "config.json")
+	configDir := os.Getenv("XDG_CONFIG_HOME")
+	if configDir == "" {
+		home, _ := os.UserHomeDir()
+		configDir = filepath.Join(home, ".config")
+	}
+	newPath := filepath.Join(configDir, "teamagentica", "tacli.json")
+
+	// Migrate from legacy ~/.tacli/config.json if new path doesn't exist yet.
+	if _, err := os.Stat(newPath); os.IsNotExist(err) {
+		home, _ := os.UserHomeDir()
+		oldPath := filepath.Join(home, ".tacli", "config.json")
+		if _, err := os.Stat(oldPath); err == nil {
+			_ = os.MkdirAll(filepath.Dir(newPath), 0o700)
+			if data, err := os.ReadFile(oldPath); err == nil {
+				_ = os.WriteFile(newPath, data, 0o600)
+			}
+		}
+	}
+
+	return newPath
 }
 
 // Load reads the config file, returning defaults if it doesn't exist.

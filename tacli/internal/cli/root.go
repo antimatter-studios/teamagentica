@@ -36,7 +36,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&flagKernel, "kernel", "k", "", "kernel URL (e.g. http://localhost:8080)")
-	rootCmd.PersistentFlags().StringVarP(&flagProfile, "profile", "p", "", "named profile from ~/.tacli/config.json")
+	rootCmd.PersistentFlags().StringVarP(&flagProfile, "profile", "p", "", "named profile from ~/.config/teamagentica/tacli.json")
 	rootCmd.Flags().BoolVar(&flagConsole, "console", false, "launch interactive TUI dashboard")
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output as JSON")
 }

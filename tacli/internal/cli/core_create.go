@@ -120,8 +120,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	// 6. Build labels.
 	labels := map[string]string{
-		"teamagentica.managed": "true",
-		"teamagentica.role":    "kernel",
+		"teamagentica.managed":        "true",
+		"teamagentica.role":           "kernel",
+		"com.docker.compose.project":  "teamagentica",
+		"com.docker.compose.service":  "kernel",
 	}
 	for k, v := range tc.Kernel.Labels {
 		labels[k] = v

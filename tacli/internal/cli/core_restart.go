@@ -58,8 +58,10 @@ func runCoreRestart(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Starting kernel on port %s...", hostPort)
 
 	labels := map[string]string{
-		"teamagentica.managed": "true",
-		"teamagentica.role":    "kernel",
+		"teamagentica.managed":        "true",
+		"teamagentica.role":           "kernel",
+		"com.docker.compose.project":  "teamagentica",
+		"com.docker.compose.service":  "kernel",
 	}
 	for k, v := range ks.Labels {
 		labels[k] = v

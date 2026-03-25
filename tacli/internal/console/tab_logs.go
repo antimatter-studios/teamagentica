@@ -19,7 +19,7 @@ type logDataMsg struct {
 // kernelEntry is the sentinel ID used for the kernel in the log selector.
 const kernelEntry = "__kernel__"
 
-// uiEntry is the sentinel ID used for the user-interface container.
+// uiEntry is the sentinel ID used for the web-dashboard container.
 const uiEntry = "__ui__"
 
 // ── tab ───────────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ func newLogsTab(c *client.Client) logsTab {
 func (t logsTab) rebuildSources() []logSource {
 	sources := []logSource{
 		{id: kernelEntry, name: "Kernel"},
-		{id: uiEntry, name: "User Interface"},
+		{id: uiEntry, name: "Web Dashboard"},
 	}
 	for _, p := range t.plugins {
 		sources = append(sources, logSource{id: p.ID, name: p.Name})
