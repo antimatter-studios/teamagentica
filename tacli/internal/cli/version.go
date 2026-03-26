@@ -33,20 +33,6 @@ func init() {
 }
 
 func runVersion(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	url, token, err := resolveConnection(cfg)
-	if err != nil {
-		return err
-	}
-
-	if token == "" {
-		return fmt.Errorf("authentication required — run tacli connect with --email/--password first")
-	}
-
-	c := client.New(url, token)
 	r := getRenderer()
 
 	filter := ""
@@ -54,24 +40,37 @@ func runVersion(cmd *cobra.Command, args []string) error {
 		filter = strings.ToLower(args[0])
 	}
 
-	// tacli header.
+	// tacli header — always works, no config needed.
 	if filter == "" || strings.Contains("tacli", filter) {
 		r.Header("tacli", "Team Agentica CLI — inspect and manage the platform", Version)
 	}
 
+	// Everything below requires a kernel connection — degrade gracefully.
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "\nCannot read config: %s\nRun 'tacli connect' to set up a profile.\n", config.ConfigPath())
+		return r.Flush()
+	}
+	url, token, err := resolveConnection(cfg)
+	if err != nil || token == "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "\nNo kernel connection configured.\nConfig: %s\nRun 'tacli connect' to set up a profile.\n", config.ConfigPath())
+		return r.Flush()
+	}
+
+	c := client.New(url, token)
+
 	// Kernel version.
 	if filter == "" || strings.Contains("kernel", filter) {
 		h, err := c.Health()
-		if err != nil {
-			return err
+		if err == nil {
+			r.GroupStart("Kernel")
+			r.Item(render.Fields{"name": h.App, "version": h.Version, "url": url})
 		}
-		r.GroupStart("Kernel")
-		r.Item(render.Fields{"name": h.App, "version": h.Version, "url": url})
 	}
 
 	plugins, err := c.ListPlugins()
 	if err != nil {
-		return err
+		return r.Flush()
 	}
 
 	// Group plugins by ID prefix.
