@@ -204,25 +204,26 @@ func (c *Client) ChatCompletion(model string, messages []Message, tools ...ToolD
 }
 
 // ListModels returns available models from the Kimi API.
-func (c *Client) ListModels() ([]string, bool, error) {
+// On any failure it returns nil and an error — no fallback lists.
+func (c *Client) ListModels() ([]string, error) {
 	url := fmt.Sprintf("%s/models", baseURL)
 
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("list models: %w", err)
+		return nil, fmt.Errorf("list models: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return DefaultModels(), true, fmt.Errorf("list models returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("list models returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -231,7 +232,7 @@ func (c *Client) ListModels() ([]string, bool, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return DefaultModels(), true, fmt.Errorf("parse models: %w", err)
+		return nil, fmt.Errorf("parse models: %w", err)
 	}
 
 	var models []string
@@ -242,24 +243,5 @@ func (c *Client) ListModels() ([]string, bool, error) {
 		}
 	}
 
-	if len(models) == 0 {
-		return DefaultModels(), true, nil
-	}
-
-	return models, false, nil
-}
-
-func DefaultModels() []string {
-	return []string{
-		"kimi-k2-turbo-preview",
-		"kimi-k2.5",
-		"kimi-k2-0905-preview",
-		"kimi-k2-0711-preview",
-		"kimi-k2-thinking-turbo",
-		"kimi-k2-thinking",
-		"moonshot-v1-128k",
-		"moonshot-v1-32k",
-		"moonshot-v1-8k",
-		"moonshot-v1-auto",
-	}
+	return models, nil
 }

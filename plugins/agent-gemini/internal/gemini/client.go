@@ -342,61 +342,68 @@ func (c *Client) downloadImagePart(imageURL string) (*part, error) {
 	}, nil
 }
 
-// ListModels returns available Gemini models that support generateContent.
-func (c *Client) ListModels() ([]string, bool, error) {
-	url := fmt.Sprintf("%s/models?key=%s", baseURL, c.apiKey)
-
-	resp, err := c.httpClient.Get(url)
-	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("list models: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return DefaultModels(), true, fmt.Errorf("list models returned %d: %s", resp.StatusCode, string(body))
+// ListModels returns available Gemini models that support generateContent or embedContent.
+func (c *Client) ListModels() ([]string, error) {
+	var allModels []struct {
+		Name                       string   `json:"name"`
+		SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
 	}
 
-	var result struct {
-		Models []struct {
-			Name                       string   `json:"name"`
-			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return DefaultModels(), true, fmt.Errorf("parse models: %w", err)
+	pageToken := ""
+	for {
+		u := fmt.Sprintf("%s/models?key=%s&pageSize=1000", baseURL, c.apiKey)
+		if pageToken != "" {
+			u += "&pageToken=" + pageToken
+		}
+
+		resp, err := c.httpClient.Get(u)
+		if err != nil {
+			return nil, fmt.Errorf("list models: %w", err)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("list models returned %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result struct {
+			Models []struct {
+				Name                       string   `json:"name"`
+				SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+			} `json:"models"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("parse models: %w", err)
+		}
+
+		allModels = append(allModels, result.Models...)
+
+		if result.NextPageToken == "" {
+			break
+		}
+		pageToken = result.NextPageToken
 	}
 
 	var models []string
-	for _, m := range result.Models {
+	for _, m := range allModels {
+		name := m.Name
+		if idx := strings.LastIndex(name, "/"); idx >= 0 {
+			name = name[idx+1:]
+		}
 		for _, method := range m.SupportedGenerationMethods {
-			if method == "generateContent" {
-				name := m.Name
-				if idx := strings.LastIndex(name, "/"); idx >= 0 {
-					name = name[idx+1:]
-				}
-				// Only include gemini models, skip embedding/vision-only etc.
-				if strings.HasPrefix(name, "gemini-") {
-					models = append(models, name)
-				}
+			if method == "generateContent" && strings.HasPrefix(name, "gemini-") {
+				models = append(models, name)
+				break
+			}
+			if method == "embedContent" && strings.Contains(name, "embedding") {
+				models = append(models, name)
 				break
 			}
 		}
 	}
 
-	if len(models) == 0 {
-		return DefaultModels(), true, nil
-	}
-
-	return models, false, nil
-}
-
-func DefaultModels() []string {
-	return []string{
-		"gemini-2.5-flash",
-		"gemini-2.5-pro",
-		"gemini-2.0-flash",
-		"gemini-2.0-flash-lite",
-	}
+	return models, nil
 }

@@ -134,12 +134,12 @@ func (c *Client) ChatCompletion(model string, messages []Message) (*ChatResponse
 }
 
 // ListModels returns available models from the OpenRouter API.
-func (c *Client) ListModels() ([]string, bool, error) {
+func (c *Client) ListModels() ([]string, error) {
 	url := fmt.Sprintf("%s/models", baseURL)
 
 	httpReq, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("HTTP-Referer", "https://teamagentica.dev")
@@ -147,14 +147,14 @@ func (c *Client) ListModels() ([]string, bool, error) {
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return DefaultModels(), true, fmt.Errorf("list models: %w", err)
+		return nil, fmt.Errorf("list models: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return DefaultModels(), true, fmt.Errorf("list models returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("list models returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -163,7 +163,7 @@ func (c *Client) ListModels() ([]string, bool, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return DefaultModels(), true, fmt.Errorf("parse models: %w", err)
+		return nil, fmt.Errorf("parse models: %w", err)
 	}
 
 	var models []string
@@ -171,19 +171,5 @@ func (c *Client) ListModels() ([]string, bool, error) {
 		models = append(models, m.ID)
 	}
 
-	if len(models) == 0 {
-		return DefaultModels(), true, nil
-	}
-
-	return models, false, nil
-}
-
-func DefaultModels() []string {
-	return []string{
-		"google/gemini-2.5-flash",
-		"openai/gpt-4o",
-		"anthropic/claude-sonnet-4",
-		"google/gemini-2.5-pro",
-		"meta-llama/llama-4-maverick",
-	}
+	return models, nil
 }

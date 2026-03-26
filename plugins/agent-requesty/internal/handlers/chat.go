@@ -175,17 +175,18 @@ func (h *Handler) Chat(c *gin.Context) {
 func (h *Handler) Models(c *gin.Context) {
 	if h.apiKey == "" {
 		c.JSON(http.StatusOK, gin.H{
-			"models":  requesty.DefaultModels(),
+			"models":  []string{},
 			"current": h.model,
+			"error":   "No API key configured.",
 		})
 		return
 	}
 
-	models, _, err := h.client.ListModels()
+	models, err := h.client.ListModels()
 	if err != nil {
 		log.Printf("ListModels error: %v", err)
 		c.JSON(http.StatusOK, gin.H{
-			"models":  requesty.DefaultModels(),
+			"models":  []string{},
 			"current": h.model,
 			"error":   err.Error(),
 		})
@@ -207,13 +208,13 @@ func (h *Handler) ConfigOptions(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "No API key configured."})
 			return
 		}
-		models, fallback, err := h.client.ListModels()
+		models, err := h.client.ListModels()
 		if err != nil {
 			log.Printf("ListModels error: %v", err)
-			c.JSON(http.StatusOK, gin.H{"options": models, "fallback": fallback, "error": "Failed to fetch models: " + err.Error()})
+			c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"options": models, "fallback": fallback})
+		c.JSON(http.StatusOK, gin.H{"options": models})
 	default:
 		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Unknown field"})
 	}

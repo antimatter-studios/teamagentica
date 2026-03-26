@@ -301,7 +301,7 @@ func ListModels(apiKey, endpoint string) ([]string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fallbackModels, nil
+		return nil, fmt.Errorf("Inception API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var models struct {
@@ -310,7 +310,7 @@ func ListModels(apiKey, endpoint string) ([]string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &models); err != nil {
-		return fallbackModels, nil
+		return nil, fmt.Errorf("unmarshal models response: %w", err)
 	}
 
 	var result []string
@@ -318,13 +318,7 @@ func ListModels(apiKey, endpoint string) ([]string, error) {
 		result = append(result, m.ID)
 	}
 	if len(result) == 0 {
-		return fallbackModels, nil
+		return nil, fmt.Errorf("Inception API returned empty model list")
 	}
 	return result, nil
-}
-
-var fallbackModels = []string{
-	"mercury-2",
-	"mercury-coder-small",
-	"mercury-edit",
 }
