@@ -1369,6 +1369,69 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 	return respBody, nil
 }
 
+// RouteToPluginWithHeaders is like RouteToPlugin but allows setting custom headers on the request.
+func (c *Client) RouteToPluginWithHeaders(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
+	url := fmt.Sprintf("%s/api/route/%s%s", c.kernelURL(), pluginID, path)
+
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.routeClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("plugin %s returned status %d: %s", pluginID, resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
+}
+
+// RouteToPluginStream opens a streaming connection to a plugin endpoint and returns
+// the raw HTTP response. The caller owns the response body and must close it.
+// Unlike RouteToPlugin, this uses no timeout — the caller controls lifetime via ctx.
+func (c *Client) RouteToPluginStream(ctx context.Context, pluginID, method, path string, body io.Reader) (*http.Response, error) {
+	url := fmt.Sprintf("%s/api/route/%s%s", c.kernelURL(), pluginID, path)
+
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Use a client without timeout for streaming — context cancellation handles cleanup.
+	streamClient := &http.Client{Transport: c.routeClient.Transport}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("plugin %s returned status %d: %s", pluginID, resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
+}
+
 // DeployCandidate tells the kernel to start a candidate container for the given plugin.
 func (c *Client) DeployCandidate(ctx context.Context, pluginID string, image string) error {
 	payload := map[string]interface{}{"image": image}
