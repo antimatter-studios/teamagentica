@@ -573,17 +573,20 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 				var item itemData
 				if err := json.Unmarshal(event.Item, &item); err == nil {
 					if item.Type == "agent_message" && item.Text != "" {
-						// If we already streamed deltas, only emit remainder.
+						// If we already streamed deltas for this message, only emit remainder.
 						if lastText != "" && strings.HasPrefix(item.Text, lastText) {
 							remainder := item.Text[len(lastText):]
 							if remainder != "" {
 								ch <- StreamEvent{Text: remainder}
 							}
-						} else if lastText == "" {
-							// No deltas were received — emit full text.
+						} else {
+							// No deltas for this message (first message without deltas,
+							// or a subsequent message after internal tool execution).
 							ch <- StreamEvent{Text: item.Text}
 						}
-						lastText = item.Text
+						// Reset for the next agent message so accumulated text from
+						// this turn doesn't break prefix-matching the next turn.
+						lastText = ""
 					}
 				}
 			case "turn.completed":
