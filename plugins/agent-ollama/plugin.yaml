@@ -1,0 +1,36 @@
+id: agent-ollama
+name: "Ollama Agent"
+description: "AI agent powered by local Ollama models — free, private, no API keys required"
+group: agents
+version: "0.1.7"
+image: "teamagentica-agent-ollama:latest"
+author: teamagentica
+tags: [chat, ai, agent, ollama, local]
+capabilities: ["agent:ollama", "agent:chat", "agent:completion", "memory:extraction"]
+dependencies: ["cost:tracking"]
+config_schema:
+  OLLAMA_MODEL:
+    type: select
+    label: Model
+    default: "llama3.2:3b"
+    dynamic: true
+    help_text: "Default model for chat completions"
+    order: 1
+  OLLAMA_MODELS:
+    type: model_list
+    label: "Installed Models"
+    default: '["llama3.2:3b", "nomic-embed-text"]'
+    help_text: "Models to pull and keep available — add new models or remove unused ones"
+    order: 2
+  TOOL_LOOP_LIMIT:
+    type: number
+    label: "Tool Loop Limit"
+    default: "20"
+    help_text: "Maximum tool-use iterations per chat request (0 = unlimited)"
+    order: 3
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console"
+    order: 99
