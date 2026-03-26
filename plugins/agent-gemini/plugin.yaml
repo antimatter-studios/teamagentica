@@ -2,11 +2,11 @@ id: agent-gemini
 name: "Google Gemini Agent"
 description: "AI agent powered by Google Gemini models including Flash and Pro"
 group: agents
-version: "1.0.12"
+version: "1.0.18"
 image: "teamagentica-agent-gemini:latest"
 author: teamagentica
 tags: [chat, ai, agent, gemini, google]
-capabilities: ["agent:chat", "agent:completion"]
+capabilities: ["agent:chat", "agent:completion", "memory:extraction"]
 dependencies: ["cost:tracking"]
 config_schema:
   GEMINI_API_KEY:
