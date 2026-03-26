@@ -4,7 +4,7 @@
 .history/
 *.swp
 *.swo
-.task/checksum/kernel-build
+.task/checksum
 node_modules
 
 # OS
@@ -26,8 +26,5 @@ data/
 # Separate git repos checked out alongside
 agentbridge/
 portpilot/
-packages/api-client/dist
-dist/artifacts.json
-dist/config.yaml
-dist/metadata.json
-dist/tacli_darwin_arm64_v8.0/tacli
+dist/
+.vite

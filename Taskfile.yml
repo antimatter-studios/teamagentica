@@ -22,6 +22,9 @@ includes:
   agent-kimi:
     taskfile: ./plugins/agent-kimi/Taskfile.yml
     dir: ./plugins/agent-kimi
+  agent-ollama:
+    taskfile: ./plugins/agent-ollama/Taskfile.yml
+    dir: ./plugins/agent-ollama
   agent-openai:
     taskfile: ./plugins/agent-openai/Taskfile.yml
     dir: ./plugins/agent-openai

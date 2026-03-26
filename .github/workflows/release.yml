@@ -40,12 +40,25 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: tacli/go.sum
 
+      - name: Generate tacli changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            git log --pretty=format:"* %s (%h)" "$PREV_TAG"..HEAD -- tacli/ .goreleaser.yml \
+              | grep -vE '^(\* (docs|test|ci|chore)[(:])' > /tmp/changelog.md
+          else
+            git log --pretty=format:"* %s (%h)" HEAD -- tacli/ .goreleaser.yml \
+              | grep -vE '^(\* (docs|test|ci|chore)[(:])' > /tmp/changelog.md
+          fi
+          # fallback if empty
+          [ -s /tmp/changelog.md ] || echo "* Maintenance release" > /tmp/changelog.md
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes /tmp/changelog.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
