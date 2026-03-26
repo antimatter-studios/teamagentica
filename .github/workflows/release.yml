@@ -15,7 +15,7 @@ jobs:
     outputs:
       tacli: ${{ steps.check.outputs.tacli }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Diff against previous tag
@@ -36,11 +36,11 @@ jobs:
     if: needs.check-changes.outputs.tacli == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache-dependency-path: tacli/go.sum
@@ -50,10 +50,10 @@ jobs:
           PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
           if [ -n "$PREV_TAG" ]; then
             git log --pretty=format:"* %s (%h)" "$PREV_TAG"..HEAD -- tacli/ .goreleaser.yml \
-              | grep -vE '^(\* (docs|test|ci|chore)[(:])' > /tmp/changelog.md
+              | grep -vE '^(\* (docs|test|ci|chore)[(:])' > /tmp/changelog.md || true
           else
             git log --pretty=format:"* %s (%h)" HEAD -- tacli/ .goreleaser.yml \
-              | grep -vE '^(\* (docs|test|ci|chore)[(:])' > /tmp/changelog.md
+              | grep -vE '^(\* (docs|test|ci|chore)[(:])' > /tmp/changelog.md || true
           fi
           # fallback if empty
           [ -s /tmp/changelog.md ] || echo "* Maintenance release" > /tmp/changelog.md
