@@ -13,17 +13,22 @@ jobs:
     name: check changes
     runs-on: ubuntu-latest
     outputs:
-      tacli: ${{ steps.filter.outputs.tacli }}
+      tacli: ${{ steps.check.outputs.tacli }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          base: ${{ github.event.before }}
-          filters: |
-            tacli: ['tacli/**', '.goreleaser.yml']
+      - name: Diff against previous tag
+        id: check
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            echo "tacli=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$PREV_TAG"..HEAD -- tacli/ .goreleaser.yml | grep -q .; then
+            echo "tacli=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tacli=false" >> "$GITHUB_OUTPUT"
+          fi
 
   tacli-release:
     name: tacli release
