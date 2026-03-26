@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -33,6 +34,7 @@ type relay struct {
 	conns                 map[string]*bridge.Client // workspaceID → TCP connection
 	routes                *router.Table
 	sdk                   *pluginsdk.Client
+	orchestrationMode     string // "direct" (default) or "coordinator"
 	maxOrchestrationTasks int
 	taskTimeoutSeconds    int
 	debug                 bool
@@ -78,6 +80,7 @@ func newRelay(sdk *pluginsdk.Client) *relay {
 		conns:                 make(map[string]*bridge.Client),
 		routes:                router.NewTable(),
 		sdk:                   sdk,
+		orchestrationMode:     "direct",
 		maxOrchestrationTasks: 20,
 		taskTimeoutSeconds:    120,
 		dags:                  daglog.New(),
@@ -478,8 +481,12 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	ctx := context.Background()
 	sessionID := req.SourcePlugin + ":" + req.ChannelID
 
-	// Emit "thinking" status immediately.
-	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", "Thinking...", nil)
+	// Emit "thinking" status immediately — include agent name if @mentioned.
+	thinkingMsg := "Thinking..."
+	if name, _, ok := parseAtPrefix(req.Message); ok && name != "" {
+		thinkingMsg = fmt.Sprintf("@%s is thinking...", name)
+	}
+	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", thinkingMsg, nil)
 
 	// Fetch conversation history from memory plugin (if available).
 	history := r.memoryGetHistory(ctx, sessionID)
@@ -519,8 +526,14 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 
 			callStart := time.Now()
 			enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
-			agentResp, err := r.callAgent(ctx, resolved.PluginID, resolved.Model,
-				remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt)
+			cb := streamCallback{
+				SourcePlugin: req.SourcePlugin,
+				ChannelID:    req.ChannelID,
+				TaskGroupID:  taskGroupID,
+				Responder:    resolved.Alias,
+			}
+			agentResp, err := r.callAgentStream(ctx, resolved.PluginID, resolved.Model,
+				remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt, cb)
 			if err != nil {
 				r.dags.NodeFailed(dagEntry, "direct", err.Error())
 				r.dags.Fail(dagEntry)
@@ -568,7 +581,70 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		}
 	}
 
-	// 3. Route through coordinator with DAG orchestration.
+	// 3. Route based on orchestration mode.
+	r.mu.RLock()
+	orchMode := r.orchestrationMode
+	r.mu.RUnlock()
+
+	if orchMode == "direct" {
+		// Direct mode — route to the default agent with streaming, no coordinator/DAG.
+		// Use the coordinator persona's backend agent as the default target.
+		coord := r.resolveCoordinator(aliases)
+		if coord == nil {
+			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+				"no default agent found — assign the coordinator role to a persona in the persona manager", nil)
+			return
+		}
+
+		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
+			fmt.Sprintf("Asking @%s...", coord.Alias), nil)
+
+		dagEntry := r.dags.Start(taskGroupID, req.Message, coord.Alias,
+			[]daglog.TaskDef{{ID: "direct", Alias: coord.Alias}})
+		r.dags.NodeStarted(dagEntry, "direct", req.Message)
+
+		callStart := time.Now()
+		enrichedPrompt := r.enrichSystemPrompt(coord.SystemPrompt, aliases)
+		cb := streamCallback{
+			SourcePlugin: req.SourcePlugin,
+			ChannelID:    req.ChannelID,
+			TaskGroupID:  taskGroupID,
+			Responder:    coord.Alias,
+		}
+		agentResp, err := r.callAgentStream(ctx, coord.PluginID, coord.Model,
+			req.Message, req.ImageURLs, history, coord.Alias, enrichedPrompt, cb)
+		if err != nil {
+			r.dags.NodeFailed(dagEntry, "direct", err.Error())
+			r.dags.Fail(dagEntry)
+			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+				fmt.Sprintf("Agent error: %v", err), nil)
+			return
+		}
+
+		if r.debug {
+			r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, coord.Alias, coord.PluginID, "",
+				agentResp.Response, toTraceAttachments(agentResp.Attachments), agentResp.Model,
+				time.Since(callStart).Milliseconds(), "")
+		}
+		r.dags.NodeCompleted(dagEntry, "direct")
+		r.dags.Complete(dagEntry)
+		go r.memoryStore(sessionID, "assistant", agentResp.Response, coord.Alias)
+
+		rr := &relayResponse{
+			Response:    agentResp.Response,
+			Responder:   coord.Alias,
+			Model:       agentResp.Model,
+			Backend:     agentResp.Backend,
+			Usage:       agentResp.Usage,
+			CostUSD:     agentResp.CostUSD,
+			DurationMs:  time.Since(processStart).Milliseconds(),
+			Attachments: agentResp.Attachments,
+		}
+		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
+		return
+	}
+
+	// Coordinator mode — DAG orchestration (original path).
 	coord := r.resolveCoordinator(aliases)
 	if coord == nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
@@ -1208,7 +1284,8 @@ type agentAttachment struct {
 // callAgent sends a chat request to an agent plugin via the kernel route.
 // The caller is responsible for resolving the persona/alias and passing the
 // system prompt; callAgent no longer does its own persona lookup.
-func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string) (*agentChatResponse, error) {
+// Optional headers are merged into the outgoing request (e.g. call depth).
+func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string, extraHeaders ...map[string]string) (*agentChatResponse, error) {
 	conversation := append(history, conversationMsg{Role: "user", Content: message})
 
 	reqBody := agentChatRequest{
@@ -1225,7 +1302,12 @@ func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, 
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
 
-	respBody, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST", "/chat", bytes.NewReader(body))
+	var respBody []byte
+	if len(extraHeaders) > 0 && extraHeaders[0] != nil {
+		respBody, err = r.sdk.RouteToPluginWithHeaders(ctx, pluginID, "POST", "/chat", bytes.NewReader(body), extraHeaders[0])
+	} else {
+		respBody, err = r.sdk.RouteToPlugin(ctx, pluginID, "POST", "/chat", bytes.NewReader(body))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1236,6 +1318,144 @@ func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, 
 	}
 
 	return &chatResp, nil
+}
+
+// streamCallback receives streaming events from callAgentStream.
+type streamCallback struct {
+	SourcePlugin string
+	ChannelID    string
+	TaskGroupID  string
+	Responder    string
+}
+
+// callAgentStream sends a chat request to an agent plugin's streaming endpoint
+// and forwards token chunks as relay:progress events. Returns the complete
+// response when the stream finishes.
+func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string, cb streamCallback) (*agentChatResponse, error) {
+	conversation := append(history, conversationMsg{Role: "user", Content: message})
+
+	reqBody := agentChatRequest{
+		Message:      message,
+		Model:        model,
+		ImageURLs:    imageURLs,
+		Conversation: conversation,
+		AgentAlias:   agentAlias,
+		SystemPrompt: systemPrompt,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+
+	resp, err := r.sdk.RouteToPluginStream(ctx, pluginID, "POST", "/chat/stream", bytes.NewReader(body))
+	if err != nil {
+		// Fall back to non-streaming if /chat/stream not available.
+		log.Printf("[stream] streaming failed for %s, falling back to non-streaming: %v", pluginID, err)
+		return r.callAgent(ctx, pluginID, model, message, imageURLs, history, agentAlias, systemPrompt)
+	}
+	defer resp.Body.Close()
+
+	// Parse SSE stream and forward to messaging plugin.
+	var fullText string
+	var lastFlush time.Time
+	flushInterval := 300 * time.Millisecond
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+	var finalResp agentChatResponse
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			// Also check for event type lines to track tool calls.
+			if strings.HasPrefix(line, "event: ") {
+				continue
+			}
+			continue
+		}
+
+		// Parse the event type from the preceding "event:" line.
+		// SSE spec: event line comes before data line. But since we process
+		// line by line, we need to parse the event type from the data content.
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var ev struct {
+			Content  string          `json:"content,omitempty"`
+			Name     string          `json:"name,omitempty"`
+			Error    string          `json:"error,omitempty"`
+			Response string          `json:"response,omitempty"`
+			Model    string          `json:"model,omitempty"`
+			Backend  string          `json:"backend,omitempty"`
+			Result   string          `json:"result,omitempty"`
+			Usage    *agentUsage     `json:"usage,omitempty"`
+			Attachments []agentAttachment `json:"attachments,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			continue
+		}
+
+		// Token event — accumulate and flush periodically.
+		if ev.Content != "" {
+			fullText += ev.Content
+			if time.Since(lastFlush) >= flushInterval {
+				r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "streaming", fullText, nil)
+				lastFlush = time.Now()
+			}
+		}
+
+		// Tool call event — emit status update.
+		if ev.Name != "" && ev.Result == "" && ev.Error == "" && ev.Response == "" {
+			r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "running",
+				fmt.Sprintf("@%s is using %s...", cb.Responder, ev.Name), nil)
+		}
+
+		// Tool result event.
+		if ev.Name != "" && (ev.Result != "" || ev.Error != "") {
+			action := "got result from"
+			if ev.Error != "" {
+				action = "error from"
+			}
+			r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "running",
+				fmt.Sprintf("@%s %s %s", cb.Responder, action, ev.Name), nil)
+		}
+
+		// Done event — final response.
+		if ev.Response != "" {
+			finalResp = agentChatResponse{
+				Response:    ev.Response,
+				Model:       ev.Model,
+				Backend:     ev.Backend,
+				Usage:       ev.Usage,
+				Attachments: ev.Attachments,
+			}
+		}
+
+		// Error event.
+		if ev.Error != "" && ev.Name == "" {
+			return nil, fmt.Errorf("agent stream error: %s", ev.Error)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading stream: %w", err)
+	}
+
+	// Send final streaming flush if there's unsent text.
+	if fullText != "" && time.Since(lastFlush) > 0 {
+		r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "streaming", fullText, nil)
+	}
+
+	// If we got a done event, use that. Otherwise construct from accumulated text.
+	if finalResp.Response == "" {
+		finalResp.Response = fullText
+	}
+
+	return &finalResp, nil
 }
 
 // callTool invokes a specific tool endpoint on a plugin. It resolves the tool
@@ -1360,6 +1580,120 @@ func (r *relay) disconnect(workspaceID string) {
 		client.Close()
 		delete(r.conns, workspaceID)
 	}
+}
+
+// --- MCP tool endpoints ---
+
+// maxAgentCallDepth is the maximum recursion depth for chat_to_agent calls.
+const maxAgentCallDepth = 3
+
+// handleMCP returns the tool definitions exposed by the relay.
+func (r *relay) handleMCP(c *gin.Context) {
+	// Build the list of available agent aliases for the description.
+	aliases := r.routes.Aliases()
+	var agentNames []string
+	if aliases != nil {
+		agentNames = aliases.ListAgentAliases()
+	}
+
+	agentList := "any available agent"
+	if len(agentNames) > 0 {
+		agentList = strings.Join(agentNames, ", ")
+	}
+
+	tools := []gin.H{
+		{
+			"name":        "chat_to_agent",
+			"description": fmt.Sprintf("Delegate a task to another agent by alias. Available agents: %s. Use this when you need a specialist agent to handle part of a request.", agentList),
+			"endpoint":    "/tools/chat_to_agent",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"agent_alias": gin.H{
+						"type":        "string",
+						"description": fmt.Sprintf("The alias of the agent to delegate to. Available: %s", agentList),
+					},
+					"message": gin.H{
+						"type":        "string",
+						"description": "The message or task to send to the agent",
+					},
+				},
+				"required": []string{"agent_alias", "message"},
+			},
+		},
+	}
+
+	c.JSON(http.StatusOK, gin.H{"tools": tools})
+}
+
+// handleChatToAgent executes the chat_to_agent tool — delegates a message to another agent.
+func (r *relay) handleChatToAgent(c *gin.Context) {
+	// Recursion protection via call depth header.
+	depth := 0
+	if v := c.GetHeader("X-Teamagentica-Call-Depth"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			depth = n
+		}
+	}
+	if depth >= maxAgentCallDepth {
+		c.JSON(http.StatusOK, gin.H{
+			"error": fmt.Sprintf("maximum agent delegation depth (%d) exceeded — cannot delegate further", maxAgentCallDepth),
+		})
+		return
+	}
+
+	var req struct {
+		AgentAlias string `json:"agent_alias"`
+		Message    string `json:"message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.AgentAlias == "" || req.Message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "agent_alias and message are required"})
+		return
+	}
+
+	aliases := r.routes.Aliases()
+	resolved := r.resolvePersonaOrAlias(req.AgentAlias, aliases)
+	if resolved == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"error": fmt.Sprintf("agent %q not found — available agents may have changed", req.AgentAlias),
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
+
+	// No conversation history for delegated calls — each delegation is stateless.
+	// Propagate incremented call depth to prevent infinite recursion.
+	depthHeaders := map[string]string{
+		"X-Teamagentica-Call-Depth": strconv.Itoa(depth + 1),
+	}
+	agentResp, err := r.callAgent(ctx, resolved.PluginID, resolved.Model,
+		req.Message, nil, nil, resolved.Alias, enrichedPrompt, depthHeaders)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"error": fmt.Sprintf("agent %s error: %v", req.AgentAlias, err)})
+		return
+	}
+
+	result := gin.H{
+		"response": agentResp.Response,
+		"agent":    req.AgentAlias,
+	}
+	if agentResp.Model != "" {
+		result["model"] = agentResp.Model
+	}
+	if len(agentResp.Attachments) > 0 {
+		result["attachments"] = agentResp.Attachments
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // --- Config & routing management endpoints ---
@@ -1540,6 +1874,10 @@ func main() {
 		log.Printf("Failed to fetch relay config: %v (using defaults)", err)
 	}
 
+	if v := pluginConfig["ORCHESTRATION_MODE"]; v == "coordinator" || v == "direct" {
+		r.orchestrationMode = v
+		log.Printf("Orchestration mode: %s", v)
+	}
 	if v := pluginConfig["MAX_ORCHESTRATION_TASKS"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			r.maxOrchestrationTasks = n
@@ -1568,6 +1906,13 @@ func main() {
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
 			log.Printf("config:update parse error: %v", err)
 			return
+		}
+
+		if v, ok := detail.Config["ORCHESTRATION_MODE"]; ok && (v == "direct" || v == "coordinator") {
+			r.mu.Lock()
+			r.orchestrationMode = v
+			r.mu.Unlock()
+			log.Printf("ORCHESTRATION_MODE updated: %s", v)
 		}
 
 		if v, ok := detail.Config["MAX_ORCHESTRATION_TASKS"]; ok {
@@ -1696,6 +2041,8 @@ func main() {
 	})
 
 	ginRouter.POST("/chat", r.handleChat)
+	ginRouter.GET("/mcp", r.handleMCP)
+	ginRouter.POST("/tools/chat_to_agent", r.handleChatToAgent)
 
 	ginRouter.POST("/config/workspace/map", r.handleMapWorkspace)
 	ginRouter.POST("/config/workspace/unmap", r.handleUnmapWorkspace)

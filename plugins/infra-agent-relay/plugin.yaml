@@ -2,17 +2,25 @@ id: infra-agent-relay
 name: "Agent Relay"
 description: "Routes messages between messaging plugins and agent-bridge instances running in workspace containers"
 group: infrastructure
-version: "0.2.51"
+version: "0.2.53"
 image: "teamagentica-infra-agent-relay:latest"
 author: teamagentica
 tags: [infrastructure]
-capabilities: ["infra:agent-relay"]
+capabilities: ["infra:agent-relay", "tool:agent-delegation"]
 dependencies: ["tool:memory", "tool:aliases"]
 config_schema:
+  ORCHESTRATION_MODE:
+    type: select
+    label: "Orchestration Mode"
+    help_text: "Direct mode sends messages to a single agent with tools (streaming, lower latency). Coordinator mode uses DAG orchestration for multi-agent planning."
+    default: "direct"
+    options: [direct, coordinator]
+    required: false
+    order: 1
   MAX_ORCHESTRATION_TASKS:
     type: number
     label: "Max Orchestration Tasks"
-    help_text: "Maximum number of tasks allowed in a coordinator's DAG plan."
+    help_text: "Maximum number of tasks allowed in a coordinator's DAG plan (coordinator mode only)."
     default: "20"
     required: false
     order: 2
