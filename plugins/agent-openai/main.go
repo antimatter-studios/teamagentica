@@ -128,6 +128,7 @@ func main() {
 	// Register routes.
 	router.GET("/health", h.Health)
 	router.POST("/chat", h.Chat)
+	router.POST("/chat/stream", h.ChatStream)
 	router.GET("/mcp", h.DiscoveredTools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)

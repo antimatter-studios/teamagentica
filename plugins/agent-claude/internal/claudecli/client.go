@@ -258,3 +258,216 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// StreamEvent represents a single event from the Claude CLI stream.
+type StreamEvent struct {
+	// Text contains a content delta (may be empty).
+	Text string
+	// Usage is populated on the result event.
+	Usage *ChatResponseUsage
+	// CostUSD from the result event.
+	CostUSD float64
+	// NumTurns from the result event.
+	NumTurns int
+	// SessionID from the result event.
+	SessionID string
+	// Model from the assistant event.
+	Model string
+	// Done is true when the stream is complete.
+	Done bool
+	// Err is set if an error occurred.
+	Err error
+}
+
+// ChatResponseUsage holds token usage for streaming responses.
+type ChatResponseUsage struct {
+	InputTokens  int
+	OutputTokens int
+	CachedTokens int
+}
+
+// ChatCompletionStream runs the Claude CLI with --include-partial-messages and
+// streams events as they arrive. Returns a channel of StreamEvents.
+func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt string, systemPrompt string, maxTurns int, allowedTools []string, mcpConfig string, opts *ChatOptions) <-chan StreamEvent {
+	ch := make(chan StreamEvent, 32)
+
+	go func() {
+		defer close(ch)
+
+		isResume := opts != nil && (opts.SessionID != "" || opts.Resume)
+
+		var args []string
+		if isResume {
+			if opts.SessionID != "" {
+				args = append(args, "--session-id", opts.SessionID)
+			} else {
+				args = append(args, "--resume")
+			}
+			args = append(args, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages")
+		} else {
+			args = []string{
+				"-p", prompt,
+				"--output-format", "stream-json",
+				"--verbose",
+				"--include-partial-messages",
+			}
+		}
+
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		if systemPrompt != "" {
+			args = append(args, "--append-system-prompt", systemPrompt)
+		}
+		if maxTurns > 0 {
+			args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
+		}
+		for _, tool := range allowedTools {
+			args = append(args, "--allowedTools", tool)
+		}
+		if mcpConfig != "" {
+			args = append(args, "--mcp-config", mcpConfig)
+		}
+		if c.skipPermissions {
+			args = append(args, "--dangerously-skip-permissions")
+		}
+
+		cmd := exec.CommandContext(ctx, c.binary, args...)
+
+		workdir := c.workdir
+		if opts != nil && opts.WorkspaceDir != "" {
+			workdir = opts.WorkspaceDir
+		}
+		cmd.Dir = workdir
+
+		env := c.env()
+		if opts != nil && opts.WorkspaceDir != "" {
+			wsConfigDir := opts.WorkspaceDir + "/.claude-config"
+			os.MkdirAll(wsConfigDir, 0755)
+			for i, e := range env {
+				if strings.HasPrefix(e, "CLAUDE_CONFIG_DIR=") {
+					env[i] = "CLAUDE_CONFIG_DIR=" + wsConfigDir
+					break
+				}
+			}
+		}
+		cmd.Env = env
+
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("stdout pipe: %w", err)}
+			return
+		}
+		cmd.Stderr = nil
+
+		if err := cmd.Start(); err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("start claude: %w", err)}
+			return
+		}
+
+		if c.debug {
+			log.Printf("[claude-cli] streaming: %s %s", c.binary, strings.Join(args, " "))
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+		var lastText string
+
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+
+			var event streamEvent
+			if err := json.Unmarshal([]byte(line), &event); err != nil {
+				continue
+			}
+
+			switch event.Type {
+			case "assistant":
+				// Partial or complete assistant message — extract text content.
+				if event.Message != nil && event.Message.Model != "" {
+					ch <- StreamEvent{Model: event.Message.Model}
+				}
+				// Extract text from message content blocks.
+				var raw struct {
+					Message struct {
+						Content []struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+						} `json:"content"`
+					} `json:"message"`
+				}
+				if err := json.Unmarshal([]byte(line), &raw); err == nil {
+					for _, block := range raw.Message.Content {
+						if block.Type == "text" && block.Text != "" {
+							// Emit delta — text we haven't sent yet.
+							if strings.HasPrefix(block.Text, lastText) && lastText != "" {
+								delta := block.Text[len(lastText):]
+								if delta != "" {
+									ch <- StreamEvent{Text: delta}
+								}
+							} else if lastText == "" || !strings.HasPrefix(block.Text, lastText) {
+								ch <- StreamEvent{Text: block.Text}
+							}
+							lastText = block.Text
+						}
+					}
+				}
+
+			case "result":
+				if event.IsError {
+					ch <- StreamEvent{Err: fmt.Errorf("claude CLI error: %s", event.Result)}
+					return
+				}
+				// Emit any remaining text not yet sent via deltas.
+				if event.Result != "" && event.Result != lastText {
+					if strings.HasPrefix(event.Result, lastText) && lastText != "" {
+						remainder := event.Result[len(lastText):]
+						if remainder != "" {
+							ch <- StreamEvent{Text: remainder}
+						}
+					} else if lastText == "" {
+						ch <- StreamEvent{Text: event.Result}
+					}
+				}
+				// Emit usage/metadata.
+				sev := StreamEvent{
+					CostUSD:   event.TotalCostUSD,
+					NumTurns:  event.NumTurns,
+					SessionID: event.SessionID,
+				}
+				if event.Usage != nil {
+					sev.Usage = &ChatResponseUsage{
+						InputTokens:  event.Usage.InputTokens,
+						OutputTokens: event.Usage.OutputTokens,
+						CachedTokens: event.Usage.CacheRead,
+					}
+				}
+				ch <- sev
+
+			default:
+				if c.debug {
+					log.Printf("[claude-cli] event: %s", event.Type)
+				}
+			}
+		}
+
+		if err := cmd.Wait(); err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				ch <- StreamEvent{Err: fmt.Errorf("claude CLI timed out")}
+				return
+			}
+			if lastText == "" {
+				ch <- StreamEvent{Err: fmt.Errorf("claude CLI: %w", err)}
+				return
+			}
+		}
+
+		ch <- StreamEvent{Done: true}
+	}()
+
+	return ch
+}

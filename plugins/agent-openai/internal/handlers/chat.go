@@ -518,17 +518,27 @@ func (h *Handler) Models(c *gin.Context) {
 	endpoint := h.endpoint
 	model := h.model
 	h.mu.RUnlock()
-	if backend == "api_key" && apiKey != "" {
-		models, _, err := openai.ListModels(apiKey, endpoint)
+
+	if backend == "subscription" && h.codexCLI != nil {
+		models, err := h.codexCLI.ListModels()
 		if err == nil {
 			c.JSON(http.StatusOK, gin.H{"models": models, "current": model})
 			return
 		}
+		log.Printf("ListModels error: %v", err)
+	} else if apiKey != "" {
+		models, err := openai.ListModels(apiKey, endpoint)
+		if err == nil {
+			c.JSON(http.StatusOK, gin.H{"models": models, "current": model})
+			return
+		}
+		log.Printf("ListModels error: %v", err)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"models":  []string{model},
+		"models":  []string{},
 		"current": model,
+		"error":   "Unable to fetch models",
 	})
 }
 
@@ -543,22 +553,30 @@ func (h *Handler) ConfigOptions(c *gin.Context) {
 	backend := h.backend
 	apiKey := h.apiKey
 	endpoint := h.endpoint
-	model := h.model
 	h.mu.RUnlock()
 
 	switch field {
 	case "OPENAI_MODEL":
-		if backend == "api_key" && apiKey != "" {
-			models, fallback, err := openai.ListModels(apiKey, endpoint)
+		if backend == "subscription" && h.codexCLI != nil {
+			models, err := h.codexCLI.ListModels()
 			if err != nil {
 				log.Printf("ListModels error: %v", err)
 				c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"options": models, "fallback": fallback})
+			c.JSON(http.StatusOK, gin.H{"options": models})
+			return
+		} else if apiKey != "" {
+			models, err := openai.ListModels(apiKey, endpoint)
+			if err != nil {
+				log.Printf("ListModels error: %v", err)
+				c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"options": models})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"options": []string{model}})
+		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "No credentials available"})
 
 	default:
 		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Unknown field"})

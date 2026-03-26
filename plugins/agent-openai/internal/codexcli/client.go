@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,29 @@ func (c *Client) IsAuthenticated() bool {
 	cmd := exec.Command(c.binary, "login", "status")
 	cmd.Env = c.env()
 	return cmd.Run() == nil
+}
+
+// ListModels reads available models from the Codex CLI models_cache.json file.
+// Returns model slugs sorted alphabetically, or an error if the cache is unavailable.
+func (c *Client) ListModels() ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(c.codexHome, "models_cache.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read models cache: %w", err)
+	}
+	var cache struct {
+		Models []struct {
+			Slug string `json:"slug"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, fmt.Errorf("parse models cache: %w", err)
+	}
+	result := make([]string, 0, len(cache.Models))
+	for _, m := range cache.Models {
+		result = append(result, m.Slug)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 var (
@@ -192,8 +216,18 @@ type jsonlEvent struct {
 	Type string          `json:"type"`
 	Item json.RawMessage `json:"item,omitempty"`
 
+	// agent_message_content_delta fields
+	Delta string `json:"delta,omitempty"`
+	Text  string `json:"text,omitempty"`
+
 	// turn.completed fields
 	Usage *turnUsage `json:"usage,omitempty"`
+
+	// Error fields
+	Message string `json:"message,omitempty"`
+	Error   *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 }
 
 type itemData struct {
@@ -430,4 +464,171 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// StreamEvent represents a single event from the Codex CLI JSONL stream.
+type StreamEvent struct {
+	// Text contains an agent message chunk (may be empty).
+	Text string
+	// Usage is populated on turn.completed.
+	Usage *openai.Usage
+	// Done is true when the stream is complete.
+	Done bool
+	// Err is set if an error occurred.
+	Err error
+}
+
+// ChatCompletionStream runs codex exec and streams JSONL events as they arrive.
+// Returns a channel of StreamEvents. The channel is closed when the process exits.
+func (c *Client) ChatCompletionStream(ctx context.Context, model string, messages []openai.Message, imageURLs []string, workdirOverride string) <-chan StreamEvent {
+	ch := make(chan StreamEvent, 32)
+
+	go func() {
+		defer close(ch)
+
+		prompt := buildPrompt(messages)
+
+		// Download images to temp files.
+		var imagePaths []string
+		for _, u := range imageURLs {
+			path, err := downloadImage(u)
+			if err != nil {
+				log.Printf("[codex-cli] failed to download image %s: %v", u, err)
+				continue
+			}
+			imagePaths = append(imagePaths, path)
+		}
+		defer func() {
+			for _, p := range imagePaths {
+				os.Remove(p)
+			}
+		}()
+
+		args := []string{
+			"exec",
+			"--json",
+			"--full-auto",
+			"--skip-git-repo-check",
+		}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		for _, p := range imagePaths {
+			args = append(args, "--image", p)
+		}
+
+		cmd := exec.CommandContext(ctx, c.binary, args...)
+		if workdirOverride != "" {
+			cmd.Dir = workdirOverride
+		} else {
+			cmd.Dir = c.workdir
+		}
+		cmd.Env = append(os.Environ(), "CODEX_HOME="+c.codexHome)
+		cmd.Stdin = strings.NewReader(prompt)
+
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("stdout pipe: %w", err)}
+			return
+		}
+		cmd.Stderr = io.Discard
+
+		if err := cmd.Start(); err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("start codex: %w", err)}
+			return
+		}
+
+		if c.debug {
+			log.Printf("[codex-cli] streaming: %s %s", c.binary, strings.Join(args, " "))
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+		var lastText string
+
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+
+			var event jsonlEvent
+			if err := json.Unmarshal([]byte(line), &event); err != nil {
+				continue
+			}
+
+			switch event.Type {
+			case "agent_message_content_delta", "agent_message_delta":
+				// Token-level streaming delta.
+				delta := event.Delta
+				if delta == "" {
+					delta = event.Text
+				}
+				if delta != "" {
+					ch <- StreamEvent{Text: delta}
+					lastText += delta
+				}
+			case "item.completed":
+				var item itemData
+				if err := json.Unmarshal(event.Item, &item); err == nil {
+					if item.Type == "agent_message" && item.Text != "" {
+						// If we already streamed deltas, only emit remainder.
+						if lastText != "" && strings.HasPrefix(item.Text, lastText) {
+							remainder := item.Text[len(lastText):]
+							if remainder != "" {
+								ch <- StreamEvent{Text: remainder}
+							}
+						} else if lastText == "" {
+							// No deltas were received — emit full text.
+							ch <- StreamEvent{Text: item.Text}
+						}
+						lastText = item.Text
+					}
+				}
+			case "turn.completed":
+				if event.Usage != nil {
+					ch <- StreamEvent{
+						Usage: &openai.Usage{
+							PromptTokens:     event.Usage.InputTokens,
+							CompletionTokens: event.Usage.OutputTokens,
+							CachedTokens:     event.Usage.CachedInputTokens,
+							TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
+						},
+					}
+				}
+			case "turn.failed":
+				msg := ""
+				if event.Error != nil {
+					msg = event.Error.Message
+				}
+				if msg == "" {
+					msg = extractJSONLError([]byte(line))
+				}
+				if msg != "" {
+					ch <- StreamEvent{Err: fmt.Errorf("codex: %s", msg)}
+				}
+			default:
+				if c.debug {
+					log.Printf("[codex-cli] event: %s", event.Type)
+				}
+			}
+		}
+
+		if err := cmd.Wait(); err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				ch <- StreamEvent{Err: fmt.Errorf("codex CLI timed out after %s", c.timeout)}
+				return
+			}
+			// Only emit error if we haven't already sent text.
+			if lastText == "" {
+				ch <- StreamEvent{Err: fmt.Errorf("codex CLI: %w", err)}
+				return
+			}
+		}
+
+		ch <- StreamEvent{Done: true}
+	}()
+
+	return ch
 }

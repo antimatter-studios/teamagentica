@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -239,67 +238,40 @@ type modelsResponse struct {
 	} `json:"data"`
 }
 
-// chatModelPrefixes lists prefixes for chat-compatible models.
-var chatModelPrefixes = []string{"gpt-", "o1-", "o3-", "o4-", "chatgpt-", "codex-"}
-
-// fallbackModels is returned when the /v1/models endpoint is inaccessible
-// (e.g. restricted API key lacking the model.read scope).
-var fallbackModels = []string{
-	"gpt-4.1",
-	"gpt-4.1-mini",
-	"gpt-4.1-nano",
-	"gpt-4o",
-	"gpt-4o-mini",
-	"o3",
-	"o3-mini",
-	"o4-mini",
-}
-
-// ListModels calls GET /v1/models and returns sorted chat-compatible model IDs.
-// Falls back to a hardcoded list if the API returns 403 (insufficient scopes).
-// The bool return indicates whether the fallback list was used.
-func ListModels(apiKey, endpoint string) ([]string, bool, error) {
+// ListModels calls GET /v1/models and returns all available model IDs.
+func ListModels(apiKey, endpoint string) ([]string, error) {
 	url := fmt.Sprintf("%s/models", endpoint)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("http request: %w", err)
+		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, false, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode == http.StatusForbidden {
-		return fallbackModels, true, nil
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, false, fmt.Errorf("OpenAI returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("OpenAI returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var models modelsResponse
 	if err := json.Unmarshal(body, &models); err != nil {
-		return nil, false, fmt.Errorf("unmarshal response: %w", err)
+		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	var result []string
-	for _, m := range models.Data {
-		for _, prefix := range chatModelPrefixes {
-			if strings.HasPrefix(m.ID, prefix) {
-				result = append(result, m.ID)
-				break
-			}
-		}
+	result := make([]string, len(models.Data))
+	for i, m := range models.Data {
+		result[i] = m.ID
 	}
 	sort.Strings(result)
-	return result, false, nil
+	return result, nil
 }
