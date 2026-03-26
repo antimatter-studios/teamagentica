@@ -9,13 +9,18 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/storage"
 )
 
+// Tools handles GET /mcp — returns tool definitions for MCP discovery.
+func (h *Handler) Tools(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
+}
+
 // ToolDefs returns the MCP tool definitions for chat operations.
 func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
 		{
 			"name":        "list_conversations",
 			"description": "List chat conversations. Returns conversation ID, title, message count, and timestamps.",
-			"endpoint":    "/tools/list-conversations",
+			"endpoint":    "/mcp/list_conversations",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -33,7 +38,7 @@ func (h *Handler) ToolDefs() interface{} {
 		{
 			"name":        "get_messages",
 			"description": "Read messages from a chat conversation. Returns message content, role, agent info, and timestamps.",
-			"endpoint":    "/tools/get-messages",
+			"endpoint":    "/mcp/get_messages",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -52,7 +57,7 @@ func (h *Handler) ToolDefs() interface{} {
 		{
 			"name":        "post_message",
 			"description": "Post a message into a chat conversation. The message appears in the web chat UI as an assistant message.",
-			"endpoint":    "/tools/post-message",
+			"endpoint":    "/mcp/post_message",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
@@ -75,7 +80,7 @@ func (h *Handler) ToolDefs() interface{} {
 		{
 			"name":        "create_conversation",
 			"description": "Create a new chat conversation. Returns the conversation ID for use with other chat tools.",
-			"endpoint":    "/tools/create-conversation",
+			"endpoint":    "/mcp/create_conversation",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{

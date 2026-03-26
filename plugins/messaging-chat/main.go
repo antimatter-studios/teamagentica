@@ -102,11 +102,12 @@ func main() {
 	router.POST("/upload", h.Upload)
 	router.GET("/files/*filepath", h.ServeFile)
 
-	// Tool endpoints (discoverable via MCP).
-	router.POST("/tools/list-conversations", h.ToolListConversations)
-	router.POST("/tools/get-messages", h.ToolGetMessages)
-	router.POST("/tools/post-message", h.ToolPostMessage)
-	router.POST("/tools/create-conversation", h.ToolCreateConversation)
+	// MCP tool discovery + endpoints.
+	router.GET("/mcp", h.Tools)
+	router.POST("/mcp/list_conversations", h.ToolListConversations)
+	router.POST("/mcp/get_messages", h.ToolGetMessages)
+	router.POST("/mcp/post_message", h.ToolPostMessage)
+	router.POST("/mcp/create_conversation", h.ToolCreateConversation)
 
 	// Handler for alias registry events (update + ready).
 	handleAliasEvent := func(event pluginsdk.EventCallback) {

@@ -2,7 +2,7 @@ id: messaging-chat
 name: "Web Chat"
 description: "Built-in web chat interface for conversing with AI agents"
 group: messaging
-version: "1.0.21"
+version: "1.0.23"
 image: "teamagentica-messaging-chat:latest"
 author: teamagentica
 tags: [system, chat, ui]
