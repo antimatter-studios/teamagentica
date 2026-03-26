@@ -26,6 +26,10 @@ var (
 // DBPath returns the database file path used at init.
 func DBPath() string { return dbPath }
 
+// Get returns the current database connection. Use this instead of storing
+// a *gorm.DB reference so that watchdog reconnects propagate automatically.
+func Get() *gorm.DB { return DB }
+
 func Init(path string) {
 	dbPath = path
 	// SQLite pragmas via DSN: WAL mode, 5s busy timeout, normal sync (safe for WAL).

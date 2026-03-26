@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/antimatter-studios/teamagentica/kernel/internal/config"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
@@ -17,21 +18,21 @@ import (
 
 // Orchestrator manages plugin lifecycle at kernel startup and shutdown.
 type Orchestrator struct {
-	db      *gorm.DB
 	runtime runtime.ContainerRuntime
 	config  *config.Config
 	events  *events.Hub
 }
 
 // NewOrchestrator creates a new Orchestrator.
-func NewOrchestrator(db *gorm.DB, rt runtime.ContainerRuntime, cfg *config.Config, hub *events.Hub) *Orchestrator {
+func NewOrchestrator(rt runtime.ContainerRuntime, cfg *config.Config, hub *events.Hub) *Orchestrator {
 	return &Orchestrator{
-		db:      db,
 		runtime: rt,
 		config:  cfg,
 		events:  hub,
 	}
 }
+
+func (o *Orchestrator) db() *gorm.DB { return database.Get() }
 
 // emit sends a debug event if the events hub is available.
 func (o *Orchestrator) emit(eventType, pluginID, detail string) {
@@ -62,12 +63,12 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 
 	// Auto-enable metadata-only plugins that aren't enabled yet.
 	// These have no container to start — they exist purely as discoverable config.
-	o.db.Model(&models.Plugin{}).
+	o.db().Model(&models.Plugin{}).
 		Where("image = ? AND enabled = ?", "", false).
 		Updates(map[string]interface{}{"enabled": true, "status": "enabled"})
 
 	var plugins []models.Plugin
-	if err := o.db.Where("enabled = ?", true).Find(&plugins).Error; err != nil {
+	if err := o.db().Where("enabled = ?", true).Find(&plugins).Error; err != nil {
 		log.Printf("orchestrator: failed to query enabled plugins: %v", err)
 		return err
 	}
@@ -104,7 +105,7 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 	// Metadata-only plugins have no runtime image — just mark enabled.
 	if plugin.IsMetadataOnly() {
-		o.db.Model(plugin).Updates(map[string]interface{}{
+		o.db().Model(plugin).Updates(map[string]interface{}{
 			"status":  "enabled",
 			"enabled": true,
 		})
@@ -114,7 +115,7 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 
 	// Look up service token for this plugin.
 	var serviceToken models.ServiceToken
-	if err := o.db.Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
+	if err := o.db().Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
 		log.Printf("orchestrator: WARNING: no service token found for plugin %s, skipping (plugin cannot auth without a token)", plugin.ID)
 		o.emit("warning", plugin.ID, "no service token found, skipping")
 		return
@@ -134,7 +135,7 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		o.emit("stop", plugin.ID, fmt.Sprintf("stopping old container=%s", plugin.ContainerID[:12]))
 		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
 	}
-	o.db.Model(plugin).Updates(map[string]interface{}{
+	o.db().Model(plugin).Updates(map[string]interface{}{
 		"container_id": "",
 		"status":       "running",
 		"host":         "",
@@ -153,14 +154,14 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 	if err != nil {
 		log.Printf("orchestrator: ERROR: failed to start plugin %s: %v", plugin.ID, err)
 		o.emit("error", plugin.ID, fmt.Sprintf("start failed: %v", err))
-		o.db.Model(plugin).Updates(map[string]interface{}{
+		o.db().Model(plugin).Updates(map[string]interface{}{
 			"container_id": "",
 			"status":       "error",
 		})
 		return
 	}
 
-	o.db.Model(plugin).Update("container_id", containerID)
+	o.db().Model(plugin).Update("container_id", containerID)
 
 	log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
 	o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
@@ -174,7 +175,7 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	}
 
 	var plugin models.Plugin
-	if err := o.db.First(&plugin, "id = ?", pluginID).Error; err != nil {
+	if err := o.db().First(&plugin, "id = ?", pluginID).Error; err != nil {
 		return fmt.Errorf("plugin not found: %w", err)
 	}
 
@@ -199,14 +200,14 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	containerID, err := o.runtime.StartPlugin(ctx, &plugin, env)
 	if err != nil {
 		o.emit("error", pluginID, fmt.Sprintf("restart failed: %v", err))
-		o.db.Model(&plugin).Updates(map[string]interface{}{
+		o.db().Model(&plugin).Updates(map[string]interface{}{
 			"container_id": "",
 			"status":       "error",
 		})
 		return fmt.Errorf("failed to start plugin %s: %w", pluginID, err)
 	}
 
-	o.db.Model(&plugin).Updates(map[string]interface{}{
+	o.db().Model(&plugin).Updates(map[string]interface{}{
 		"container_id": containerID,
 		"status":       "running",
 		"host":         "",
@@ -227,7 +228,7 @@ func (o *Orchestrator) RecoverManagedContainers(ctx context.Context) {
 	}
 
 	var containers []models.ManagedContainer
-	if err := o.db.Where("status = ?", "running").Find(&containers).Error; err != nil {
+	if err := o.db().Where("status = ?", "running").Find(&containers).Error; err != nil {
 		log.Printf("orchestrator: failed to query managed containers: %v", err)
 		return
 	}
@@ -243,10 +244,10 @@ func (o *Orchestrator) RecoverManagedContainers(ctx context.Context) {
 		containerID, err := o.runtime.StartManagedContainer(ctx, mc, o.config.BaseDomain)
 		if err != nil {
 			log.Printf("orchestrator: failed to recover managed container %s: %v", mc.ID, err)
-			o.db.Model(mc).Update("status", "stopped")
+			o.db().Model(mc).Update("status", "stopped")
 			continue
 		}
-		o.db.Model(mc).Update("container_id", containerID)
+		o.db().Model(mc).Update("container_id", containerID)
 		log.Printf("orchestrator: recovered managed container %s (%s)", mc.ID, mc.Name)
 	}
 }
@@ -258,7 +259,7 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 	}
 
 	var plugins []models.Plugin
-	if err := o.db.Where("enabled = ? AND container_id != ?", true, "").Find(&plugins).Error; err != nil {
+	if err := o.db().Where("enabled = ? AND container_id != ?", true, "").Find(&plugins).Error; err != nil {
 		log.Printf("orchestrator: failed to query running plugins: %v", err)
 		return err
 	}
@@ -283,7 +284,7 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 			continue
 		}
 
-		o.db.Model(plugin).Updates(map[string]interface{}{
+		o.db().Model(plugin).Updates(map[string]interface{}{
 			"container_id": "",
 			"status":       "stopped",
 		})
@@ -294,11 +295,11 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 
 	// Stop managed containers.
 	var mcList []models.ManagedContainer
-	if err := o.db.Where("status = ? AND container_id != ?", "running", "").Find(&mcList).Error; err == nil {
+	if err := o.db().Where("status = ? AND container_id != ?", "running", "").Find(&mcList).Error; err == nil {
 		for i := range mcList {
 			mc := &mcList[i]
 			_ = o.runtime.StopPlugin(ctx, mc.ContainerID)
-			o.db.Model(mc).Updates(map[string]interface{}{
+			o.db().Model(mc).Updates(map[string]interface{}{
 				"container_id": "",
 				"status":       "stopped",
 			})
@@ -320,7 +321,7 @@ func (o *Orchestrator) resolveDependencies(plugins []models.Plugin) []models.Plu
 	}
 
 	var allPlugins []models.Plugin
-	o.db.Find(&allPlugins)
+	o.db().Find(&allPlugins)
 
 	capMap := map[string]*models.Plugin{}
 	for i := range allPlugins {
@@ -339,7 +340,7 @@ func (o *Orchestrator) resolveDependencies(plugins []models.Plugin) []models.Plu
 				continue
 			}
 			seen[dep.ID] = true
-			o.db.Model(dep).Updates(map[string]interface{}{"enabled": true})
+			o.db().Model(dep).Updates(map[string]interface{}{"enabled": true})
 			log.Printf("orchestrator: auto-enabling dep %s (provides %q required by %s)", dep.ID, cap, p.ID)
 			result = append(result, *dep)
 		}

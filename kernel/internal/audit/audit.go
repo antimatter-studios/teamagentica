@@ -6,23 +6,24 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // Logger records audit events to the database.
-type Logger struct {
-	db *gorm.DB
-}
+type Logger struct{}
 
 // NewLogger creates a new audit Logger.
-func NewLogger(db *gorm.DB) *Logger {
-	return &Logger{db: db}
+func NewLogger() *Logger {
+	return &Logger{}
 }
+
+func (l *Logger) db() *gorm.DB { return database.Get() }
 
 // Log records an audit event asynchronously.
 func (l *Logger) Log(entry models.AuditLog) {
 	go func() {
-		if err := l.db.Create(&entry).Error; err != nil {
+		if err := l.db().Create(&entry).Error; err != nil {
 			log.Printf("audit: failed to write log entry: %v", err)
 		}
 	}()

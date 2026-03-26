@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
@@ -19,7 +20,6 @@ type Restarter interface {
 
 // Monitor periodically checks the health of running plugin containers.
 type Monitor struct {
-	db        *gorm.DB
 	runtime   runtime.ContainerRuntime
 	events    *events.Hub
 	interval  time.Duration
@@ -31,14 +31,15 @@ type Monitor struct {
 	candidateUnhealthyCounts map[string]int
 }
 
+func (m *Monitor) db() *gorm.DB { return database.Get() }
+
 // restartThreshold is the number of consecutive unhealthy checks before
 // the monitor attempts an auto-restart (~2 minutes at 30s interval).
 const restartThreshold = 4
 
 // NewMonitor creates a health monitor with the given check interval.
-func NewMonitor(db *gorm.DB, rt runtime.ContainerRuntime, evts *events.Hub, interval time.Duration) *Monitor {
+func NewMonitor(rt runtime.ContainerRuntime, evts *events.Hub, interval time.Duration) *Monitor {
 	return &Monitor{
-		db:                       db,
 		runtime:                  rt,
 		events:                   evts,
 		interval:                 interval,
@@ -82,7 +83,7 @@ func (m *Monitor) checkAll(ctx context.Context) {
 
 func (m *Monitor) checkPlugins(ctx context.Context) {
 	var plugins []models.Plugin
-	if err := m.db.Where("enabled = ?", true).Find(&plugins).Error; err != nil {
+	if err := m.db().Where("enabled = ?", true).Find(&plugins).Error; err != nil {
 		log.Printf("health monitor: query plugins: %v", err)
 		return
 	}
@@ -127,7 +128,7 @@ func (m *Monitor) checkPlugins(ctx context.Context) {
 					running, err := m.runtime.HealthCheck(ctx, p.ContainerID)
 					if err != nil || !running {
 						log.Printf("health monitor: plugin %s container gone", p.ID)
-						m.db.Model(p).Updates(map[string]interface{}{
+						m.db().Model(p).Updates(map[string]interface{}{
 							"status": "stopped",
 							"host":   "",
 						})
@@ -143,7 +144,7 @@ func (m *Monitor) checkPlugins(ctx context.Context) {
 				if m.unhealthyCounts[p.ID] >= restartThreshold && m.restarter != nil {
 					log.Printf("health monitor: plugin %s stuck (heartbeat stale, container present) — force restart", p.ID)
 					m.emitEvent(p.ID, "warning", "plugin unresponsive — force restart")
-					m.db.Model(p).Updates(map[string]interface{}{
+					m.db().Model(p).Updates(map[string]interface{}{
 						"status": "stopped",
 						"host":   "",
 					})
@@ -171,7 +172,7 @@ func (m *Monitor) checkPlugins(ctx context.Context) {
 					log.Printf("health monitor: plugin %s container running but never registered after %d checks — restart",
 						p.ID, m.unhealthyCounts[p.ID])
 					m.emitEvent(p.ID, "warning", "container running but not registered — force restart")
-					m.db.Model(p).Updates(map[string]interface{}{
+					m.db().Model(p).Updates(map[string]interface{}{
 						"status": "stopped",
 						"host":   "",
 					})
@@ -189,7 +190,7 @@ func (m *Monitor) checkPlugins(ctx context.Context) {
 			if m.unhealthyCounts[p.ID] >= restartThreshold {
 				log.Printf("health monitor: plugin %s container not running after %d checks — auto-restart",
 					p.ID, m.unhealthyCounts[p.ID])
-				m.db.Model(p).Updates(map[string]interface{}{
+				m.db().Model(p).Updates(map[string]interface{}{
 					"status": "stopped",
 					"host":   "",
 				})
@@ -231,7 +232,7 @@ func (m *Monitor) setStatus(p *models.Plugin, status string) {
 	if p.Status == status {
 		return
 	}
-	if err := m.db.Model(p).Update("status", status).Error; err != nil {
+	if err := m.db().Model(p).Update("status", status).Error; err != nil {
 		log.Printf("health monitor: update status for %s: %v", p.ID, err)
 	}
 }
@@ -244,7 +245,7 @@ const candidateRollbackThreshold = 4
 // and auto-rolls back after repeated failures to protect the running system.
 func (m *Monitor) checkCandidates(ctx context.Context) {
 	var plugins []models.Plugin
-	if err := m.db.Where("candidate_host != ''").Find(&plugins).Error; err != nil {
+	if err := m.db().Where("candidate_host != ''").Find(&plugins).Error; err != nil {
 		return
 	}
 
@@ -262,7 +263,7 @@ func (m *Monitor) checkCandidates(ctx context.Context) {
 		if time.Since(p.CandidateLastSeen) > staleTimeout {
 			if p.CandidateHealthy {
 				log.Printf("health monitor: candidate for %s heartbeat stale — marking unhealthy", p.ID)
-				m.db.Model(p).Update("candidate_healthy", false)
+				m.db().Model(p).Update("candidate_healthy", false)
 				m.emitEvent(p.ID, "warning", "candidate heartbeat stale — traffic falling back to primary")
 			}
 
@@ -294,7 +295,7 @@ func (m *Monitor) autoRollbackCandidate(ctx context.Context, p *models.Plugin) {
 	}
 
 	p.ClearCandidate()
-	m.db.Save(p)
+	m.db().Save(p)
 
 	delete(m.candidateUnhealthyCounts, p.ID)
 
@@ -305,7 +306,7 @@ func (m *Monitor) autoRollbackCandidate(ctx context.Context, p *models.Plugin) {
 // No auto-restart — the owning plugin decides whether to recreate.
 func (m *Monitor) checkManagedContainers(ctx context.Context) {
 	var containers []models.ManagedContainer
-	if err := m.db.Where("status = ?", "running").Find(&containers).Error; err != nil {
+	if err := m.db().Where("status = ?", "running").Find(&containers).Error; err != nil {
 		log.Printf("health monitor: query managed containers: %v", err)
 		return
 	}
@@ -319,7 +320,7 @@ func (m *Monitor) checkManagedContainers(ctx context.Context) {
 		running, err := m.runtime.HealthCheck(ctx, mc.ContainerID)
 		if err != nil || !running {
 			log.Printf("health monitor: managed container %s (%s) no longer running", mc.ID, mc.Name)
-			m.db.Model(mc).Update("status", "stopped")
+			m.db().Model(mc).Update("status", "stopped")
 			m.emitEvent(mc.PluginID, "warning", "managed container "+mc.Name+" stopped")
 		}
 	}

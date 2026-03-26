@@ -18,21 +18,23 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // MarketplaceHandler handles marketplace endpoints: provider management, catalog browsing, install.
 type MarketplaceHandler struct {
-	db         *gorm.DB
 	Events     *events.Hub
 	httpClient *http.Client // mTLS-aware client for calling provider plugins
 }
 
 // NewMarketplaceHandler creates a new MarketplaceHandler.
-func NewMarketplaceHandler(db *gorm.DB, hub *events.Hub, client *http.Client) *MarketplaceHandler {
-	return &MarketplaceHandler{db: db, Events: hub, httpClient: client}
+func NewMarketplaceHandler(hub *events.Hub, client *http.Client) *MarketplaceHandler {
+	return &MarketplaceHandler{Events: hub, httpClient: client}
 }
+
+func (h *MarketplaceHandler) db() *gorm.DB { return database.Get() }
 
 // --- request/response types ---
 
@@ -131,7 +133,7 @@ func validateProviderURL(raw string) error {
 // ListProviders handles GET /api/marketplace/providers.
 func (h *MarketplaceHandler) ListProviders(c *gin.Context) {
 	var providers []models.Provider
-	if err := h.db.Find(&providers).Error; err != nil {
+	if err := h.db().Find(&providers).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch providers"})
 		return
 	}
@@ -156,7 +158,7 @@ func (h *MarketplaceHandler) AddProvider(c *gin.Context) {
 		URL:     req.URL,
 		Enabled: true,
 	}
-	if err := h.db.Create(&provider).Error; err != nil {
+	if err := h.db().Create(&provider).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add provider"})
 		return
 	}
@@ -169,7 +171,7 @@ func (h *MarketplaceHandler) DeleteProvider(c *gin.Context) {
 	id := c.Param("id")
 
 	var provider models.Provider
-	if err := h.db.First(&provider, "id = ?", id).Error; err != nil {
+	if err := h.db().First(&provider, "id = ?", id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
 		return
 	}
@@ -179,7 +181,7 @@ func (h *MarketplaceHandler) DeleteProvider(c *gin.Context) {
 		return
 	}
 
-	if err := h.db.Delete(&provider).Error; err != nil {
+	if err := h.db().Delete(&provider).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete provider"})
 		return
 	}
@@ -195,7 +197,7 @@ func (h *MarketplaceHandler) ProviderPlugins(c *gin.Context) {
 	name := c.Param("name")
 
 	var provider models.Provider
-	if err := h.db.Where("name = ? AND enabled = ?", name, true).First(&provider).Error; err != nil {
+	if err := h.db().Where("name = ? AND enabled = ?", name, true).First(&provider).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found or disabled", name)})
 		return
 	}
@@ -221,7 +223,7 @@ func (h *MarketplaceHandler) BrowsePlugins(c *gin.Context) {
 	q := c.Query("q")
 
 	var providers []models.Provider
-	if err := h.db.Where("enabled = ?", true).Find(&providers).Error; err != nil {
+	if err := h.db().Where("enabled = ?", true).Find(&providers).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch providers"})
 		return
 	}
@@ -334,7 +336,7 @@ func (h *MarketplaceHandler) SubmitManifest(c *gin.Context) {
 	}
 
 	var provider models.Provider
-	if err := h.db.Where("enabled = ?", true).First(&provider).Error; err != nil {
+	if err := h.db().Where("enabled = ?", true).First(&provider).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no providers configured"})
 		return
 	}
@@ -363,7 +365,7 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 
 	// Check if plugin already installed.
 	var existing models.Plugin
-	if h.db.First(&existing, "id = ?", req.PluginID).Error == nil {
+	if h.db().First(&existing, "id = ?", req.PluginID).Error == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "plugin already installed"})
 		return
 	}
@@ -371,13 +373,13 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	// Determine which provider to fetch from.
 	var provider models.Provider
 	if req.ProviderID != nil {
-		if err := h.db.First(&provider, "id = ?", *req.ProviderID).Error; err != nil {
+		if err := h.db().First(&provider, "id = ?", *req.ProviderID).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
 			return
 		}
 	} else {
 		// Use first enabled provider.
-		if err := h.db.Where("enabled = ?", true).First(&provider).Error; err != nil {
+		if err := h.db().Where("enabled = ?", true).First(&provider).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no providers configured"})
 			return
 		}
@@ -439,7 +441,7 @@ func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugi
 		Version: entry.Version,
 		Image:   entry.Image,
 	}
-	if err := h.db.Create(&plugin).Error; err != nil {
+	if err := h.db().Create(&plugin).Error; err != nil {
 		return nil, fmt.Errorf("failed to create plugin %s: %w", plugin.ID, err)
 	}
 
@@ -458,10 +460,10 @@ func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugi
 		IssuedBy:     0,
 		ExpiresAt:    time.Now().Add(expiry),
 	}
-	if err := h.db.Create(&st).Error; err != nil {
+	if err := h.db().Create(&st).Error; err != nil {
 		log.Printf("marketplace: failed to create service token for %s: %v", entry.PluginID, err)
 	}
-	h.db.Model(&plugin).Update("service_token", token)
+	h.db().Model(&plugin).Update("service_token", token)
 
 	return &plugin, nil
 }
@@ -479,7 +481,7 @@ func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models
 	if err != nil {
 		return fmt.Errorf("could not fetch manifest for %s: %w", plugin.ID, err)
 	}
-	if err := applyManifest(plugin, manifest, h.db); err != nil {
+	if err := applyManifest(plugin, manifest, h.db()); err != nil {
 		return err
 	}
 
@@ -494,7 +496,7 @@ func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models
 		}
 
 		var dep models.Plugin
-		if h.db.First(&dep, "id = ?", depEntry.PluginID).Error != nil {
+		if h.db().First(&dep, "id = ?", depEntry.PluginID).Error != nil {
 			bootstrapped, err := h.bootstrapPlugin(depEntry)
 			if err != nil {
 				log.Printf("marketplace: failed to bootstrap dependency %s: %v", depEntry.PluginID, err)
@@ -547,19 +549,19 @@ func (h *MarketplaceHandler) UpgradePlugin(c *gin.Context) {
 	}
 
 	var existing models.Plugin
-	if err := h.db.First(&existing, "id = ?", req.PluginID).Error; err != nil {
+	if err := h.db().First(&existing, "id = ?", req.PluginID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not installed — use install first"})
 		return
 	}
 
 	var provider models.Provider
 	if req.ProviderID != nil {
-		if err := h.db.First(&provider, "id = ?", *req.ProviderID).Error; err != nil {
+		if err := h.db().First(&provider, "id = ?", *req.ProviderID).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
 			return
 		}
 	} else {
-		if err := h.db.Where("enabled = ?", true).First(&provider).Error; err != nil {
+		if err := h.db().Where("enabled = ?", true).First(&provider).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no providers configured"})
 			return
 		}

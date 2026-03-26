@@ -28,7 +28,7 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -77,7 +77,7 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 		return
 	}
 
-	h.db.Model(&plugin).Updates(map[string]interface{}{
+	h.db().Model(&plugin).Updates(map[string]interface{}{
 		"candidate_container_id": containerID,
 		"candidate_image":        candidateImage,
 		"candidate_version":      "",
@@ -109,7 +109,7 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -131,7 +131,7 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 	}
 
 	// Promote: candidate → stable, stable → previous.
-	h.db.Model(&plugin).Updates(map[string]interface{}{
+	h.db().Model(&plugin).Updates(map[string]interface{}{
 		// Save old stable for rollback.
 		"previous_image":   plugin.Image,
 		"previous_version": plugin.Version,
@@ -174,7 +174,7 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -191,7 +191,7 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 		if h.runtime != nil {
 			_ = h.runtime.StopPlugin(ctx, plugin.CandidateContainerID)
 		}
-		h.db.Model(&plugin).Updates(map[string]interface{}{
+		h.db().Model(&plugin).Updates(map[string]interface{}{
 			"candidate_container_id": "",
 			"candidate_image":        "",
 			"candidate_version":      "",
@@ -232,12 +232,12 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 	plugin.Image = plugin.PreviousImage
 	containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
 	if err != nil {
-		h.db.Model(&plugin).Updates(map[string]interface{}{"container_id": "", "status": "error"})
+		h.db().Model(&plugin).Updates(map[string]interface{}{"container_id": "", "status": "error"})
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "rollback failed: " + err.Error()})
 		return
 	}
 
-	h.db.Model(&plugin).Updates(map[string]interface{}{
+	h.db().Model(&plugin).Updates(map[string]interface{}{
 		"container_id": containerID,
 		"image":        plugin.PreviousImage,
 		"version":      plugin.PreviousVersion,

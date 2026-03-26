@@ -94,7 +94,7 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 
 	// Check subdomain uniqueness.
 	var existing models.ManagedContainer
-	if err := h.db.Where("subdomain = ?", req.Subdomain).First(&existing).Error; err == nil {
+	if err := h.db().Where("subdomain = ?", req.Subdomain).First(&existing).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("subdomain %q already in use", req.Subdomain)})
 		return
 	}
@@ -114,7 +114,7 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 	mc.SetCmd(req.Cmd)
 	mc.SetExtraMounts(req.ExtraMounts)
 
-	if err := h.db.Create(&mc).Error; err != nil {
+	if err := h.db().Create(&mc).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save container record"})
 		return
 	}
@@ -127,14 +127,14 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 
 	containerID, err := h.runtime.StartManagedContainer(c.Request.Context(), &mc, h.cfg.BaseDomain)
 	if err != nil {
-		h.db.Delete(&mc)
+		h.db().Delete(&mc)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to start container: %v", err)})
 		return
 	}
 
 	mc.ContainerID = containerID
 	mc.Status = "running"
-	h.db.Save(&mc)
+	h.db().Save(&mc)
 
 	c.JSON(http.StatusCreated, mc)
 }
@@ -147,7 +147,7 @@ func (h *PluginHandler) ListManagedContainers(c *gin.Context) {
 	}
 
 	var containers []models.ManagedContainer
-	h.db.Where("plugin_id = ?", pluginID).Find(&containers)
+	h.db().Where("plugin_id = ?", pluginID).Find(&containers)
 	c.JSON(http.StatusOK, containers)
 }
 
@@ -159,7 +159,7 @@ func (h *PluginHandler) GetManagedContainer(c *gin.Context) {
 	}
 
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -174,7 +174,7 @@ func (h *PluginHandler) DeleteManagedContainer(c *gin.Context) {
 	}
 
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -187,7 +187,7 @@ func (h *PluginHandler) DeleteManagedContainer(c *gin.Context) {
 		}
 	}
 
-	h.db.Delete(&mc)
+	h.db().Delete(&mc)
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
@@ -200,7 +200,7 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	}
 
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -224,7 +224,7 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	if req.Subdomain != nil {
 		// Check uniqueness.
 		var existing models.ManagedContainer
-		if err := h.db.Where("subdomain = ? AND id != ?", *req.Subdomain, mc.ID).First(&existing).Error; err == nil {
+		if err := h.db().Where("subdomain = ? AND id != ?", *req.Subdomain, mc.ID).First(&existing).Error; err == nil {
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("subdomain %q already in use", *req.Subdomain)})
 			return
 		}
@@ -240,8 +240,8 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 		return
 	}
 
-	h.db.Model(&mc).Updates(updates)
-	h.db.First(&mc, "id = ?", mc.ID)
+	h.db().Model(&mc).Updates(updates)
+	h.db().First(&mc, "id = ?", mc.ID)
 	c.JSON(http.StatusOK, mc)
 }
 
@@ -254,7 +254,7 @@ func (h *PluginHandler) StartManagedContainer(c *gin.Context) {
 	}
 
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -277,7 +277,7 @@ func (h *PluginHandler) StartManagedContainer(c *gin.Context) {
 
 	mc.ContainerID = containerID
 	mc.Status = "running"
-	h.db.Save(&mc)
+	h.db().Save(&mc)
 
 	c.JSON(http.StatusOK, mc)
 }
@@ -290,7 +290,7 @@ func (h *PluginHandler) GetManagedContainerLogs(c *gin.Context) {
 	}
 
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -314,14 +314,14 @@ func (h *PluginHandler) GetManagedContainerLogs(c *gin.Context) {
 // ListAllManagedContainers handles GET /api/managed-containers.
 func (h *PluginHandler) ListAllManagedContainers(c *gin.Context) {
 	var containers []models.ManagedContainer
-	h.db.Find(&containers)
+	h.db().Find(&containers)
 	c.JSON(http.StatusOK, containers)
 }
 
 // ForceDeleteManagedContainer handles DELETE /api/managed-containers/:id.
 func (h *PluginHandler) ForceDeleteManagedContainer(c *gin.Context) {
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ?", c.Param("id")).Error; err != nil {
+	if err := h.db().First(&mc, "id = ?", c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -330,7 +330,7 @@ func (h *PluginHandler) ForceDeleteManagedContainer(c *gin.Context) {
 		_ = h.runtime.StopPlugin(c.Request.Context(), mc.ContainerID)
 	}
 
-	h.db.Delete(&mc)
+	h.db().Delete(&mc)
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
@@ -369,7 +369,7 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 	start := time.Now()
 
 	var mc models.ManagedContainer
-	if err := h.db.First(&mc, "id = ?", containerID).Error; err != nil {
+	if err := h.db().First(&mc, "id = ?", containerID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
 		return
 	}
@@ -385,6 +385,7 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 	}
 	target, _ := url.Parse(targetURL)
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = h.transport
 
 	// Forward the full path (/ws/{id}/...) to the container.
 	// Containers with portpilot (devbox) use PROXY_BASE_PATH to strip the prefix.
@@ -444,12 +445,12 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 // owned by the given plugin. Called during plugin disable/uninstall.
 func (h *PluginHandler) StopManagedContainersByPlugin(ctx context.Context, pluginID string) {
 	var containers []models.ManagedContainer
-	h.db.Where("plugin_id = ?", pluginID).Find(&containers)
+	h.db().Where("plugin_id = ?", pluginID).Find(&containers)
 
 	for _, mc := range containers {
 		if h.runtime != nil && mc.ContainerID != "" {
 			_ = h.runtime.StopPlugin(ctx, mc.ContainerID)
 		}
-		h.db.Delete(&mc)
+		h.db().Delete(&mc)
 	}
 }

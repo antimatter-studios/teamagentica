@@ -7,24 +7,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
 // PricingHandler manages model price CRUD.
-type PricingHandler struct {
-	db *gorm.DB
-}
+type PricingHandler struct{}
 
 // NewPricingHandler creates a new PricingHandler.
-func NewPricingHandler(db *gorm.DB) *PricingHandler {
-	return &PricingHandler{db: db}
+func NewPricingHandler() *PricingHandler {
+	return &PricingHandler{}
 }
+
+func (h *PricingHandler) db() *gorm.DB { return database.Get() }
 
 // ListPrices returns all pricing entries.
 // GET /api/pricing
 func (h *PricingHandler) ListPrices(c *gin.Context) {
 	var prices []models.ModelPrice
-	if err := h.db.Order("provider, model, effective_from DESC").Find(&prices).Error; err != nil {
+	if err := h.db().Order("provider, model, effective_from DESC").Find(&prices).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query prices"})
 		return
 	}
@@ -35,7 +36,7 @@ func (h *PricingHandler) ListPrices(c *gin.Context) {
 // GET /api/pricing/current
 func (h *PricingHandler) ListCurrentPrices(c *gin.Context) {
 	var prices []models.ModelPrice
-	if err := h.db.Where("effective_to IS NULL").Order("provider, model").Find(&prices).Error; err != nil {
+	if err := h.db().Where("effective_to IS NULL").Order("provider, model").Find(&prices).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query prices"})
 		return
 	}
@@ -95,7 +96,7 @@ func (h *PricingHandler) SavePrice(c *gin.Context) {
 		return
 	}
 
-	price, err := SavePriceRecord(h.db, req.Provider, req.Model, req.InputPer1M, req.OutputPer1M, req.CachedPer1M, req.PerRequest, req.Currency)
+	price, err := SavePriceRecord(h.db(), req.Provider, req.Model, req.InputPer1M, req.OutputPer1M, req.CachedPer1M, req.PerRequest, req.Currency)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save price"})
 		return
@@ -109,7 +110,7 @@ func (h *PricingHandler) SavePrice(c *gin.Context) {
 func (h *PricingHandler) DeletePrice(c *gin.Context) {
 	id := c.Param("id")
 
-	result := h.db.Delete(&models.ModelPrice{}, id)
+	result := h.db().Delete(&models.ModelPrice{}, id)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete price"})
 		return

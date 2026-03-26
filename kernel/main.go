@@ -63,7 +63,7 @@ func main() {
 	}
 
 	// Audit logger.
-	auditLogger := audit.NewLogger(database.DB)
+	auditLogger := audit.NewLogger()
 
 	r := gin.Default()
 	r.Use(middleware.CORS(cfg.BaseDomain))
@@ -80,7 +80,7 @@ func main() {
 	})
 
 	// Pricing routes (admin only).
-	pricingHandler := handlers.NewPricingHandler(database.DB)
+	pricingHandler := handlers.NewPricingHandler()
 	pricingGroup := r.Group("/api/pricing")
 	pricingGroup.Use(middleware.AuthRequired())
 	{
@@ -103,7 +103,7 @@ func main() {
 	}
 
 	// Plugin routes (authenticated).
-	pluginHandler := handlers.NewPluginHandler(database.DB, dockerRT, cfg, clientTLS)
+	pluginHandler := handlers.NewPluginHandler(dockerRT, cfg, clientTLS)
 
 	// --- Auth/User routes — proxied to system-user-manager plugin ---
 	// Rate limiters for auth endpoints to prevent brute-force attacks.
@@ -158,7 +158,7 @@ func main() {
 	// Health monitor (started after pluginHandler so it can emit to the event hub).
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 	defer monitorCancel()
-	monitor := health.NewMonitor(database.DB, dockerRT, pluginHandler.Events, 30*time.Second)
+	monitor := health.NewMonitor(dockerRT, pluginHandler.Events, 30*time.Second)
 	go monitor.Start(monitorCtx)
 	pluginsGroup := r.Group("/api/plugins")
 	pluginsGroup.Use(middleware.AuthRequired())
@@ -187,7 +187,7 @@ func main() {
 		Timeout:   10 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: clientTLS},
 	}
-	marketplaceHandler := handlers.NewMarketplaceHandler(database.DB, pluginHandler.Events, marketplaceClient)
+	marketplaceHandler := handlers.NewMarketplaceHandler(pluginHandler.Events, marketplaceClient)
 	marketplaceGroup := r.Group("/api/marketplace")
 	marketplaceGroup.Use(middleware.AuthRequired())
 	{
@@ -274,12 +274,12 @@ func main() {
 	{
 		debugGroup.GET("/events", handlers.DebugEventsSSE(pluginHandler.Events))
 		debugGroup.GET("/history", handlers.DebugEventsHistory(pluginHandler.Events))
-		debugGroup.GET("/event-log", handlers.DebugEventLog(database.DB))
+		debugGroup.GET("/event-log", handlers.DebugEventLog(database.Get()))
 		debugGroup.GET("/test", handlers.DebugEventsTest(pluginHandler.Events))
 	}
 
 	// Boot orchestrator: start all enabled plugins in background.
-	orch := orchestrator.NewOrchestrator(database.DB, dockerRT, cfg, pluginHandler.Events)
+	orch := orchestrator.NewOrchestrator(dockerRT, cfg, pluginHandler.Events)
 	monitor.SetRestarter(orch)
 	go func() {
 		orchCtx, orchCancel := context.WithTimeout(context.Background(), 5*time.Minute)

@@ -72,18 +72,12 @@ func validatePluginHost(host string) error {
 	return nil
 }
 
-// proxyClient returns an http.Client for proxying requests to plugins.
-// Uses mTLS if clientTLS is configured, otherwise uses the default client.
+// proxyClient returns an http.Client that reuses the shared transport.
 func (h *PluginHandler) proxyClient() *http.Client {
-	if h.clientTLS != nil {
-		return &http.Client{
-			Timeout: 5 * time.Minute,
-			Transport: &http.Transport{
-				TLSClientConfig: h.clientTLS,
-			},
-		}
+	return &http.Client{
+		Timeout:   5 * time.Minute,
+		Transport: h.transport,
 	}
-	return http.DefaultClient
 }
 
 // pluginScheme returns "https" if mTLS is enabled, "http" otherwise.
@@ -143,7 +137,7 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 	}
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", req.ID); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", req.ID); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found in registry"})
 		return
 	}
@@ -162,7 +156,7 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		if req.Version != "" {
 			updates["candidate_version"] = req.Version
 		}
-		h.db.Model(&plugin).Updates(updates)
+		h.db().Model(&plugin).Updates(updates)
 
 		h.Events.Emit(events.DebugEvent{
 			Type:     "register",
@@ -206,7 +200,7 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 			visited := map[string]bool{req.ID: true}
 			for _, cap := range req.Dependencies.Capabilities {
 				var allPlugins []models.Plugin
-				h.db.Find(&allPlugins)
+				h.db().Find(&allPlugins)
 				for i := range allPlugins {
 					for _, c := range allPlugins[i].GetCapabilities() {
 						if c == cap {
@@ -235,7 +229,7 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		}
 	}
 
-	h.db.Model(&plugin).Updates(updates)
+	h.db().Model(&plugin).Updates(updates)
 
 	h.Events.Emit(events.DebugEvent{
 		Type:     "register",
@@ -282,19 +276,19 @@ func (h *PluginHandler) Heartbeat(c *gin.Context) {
 	}
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", req.ID); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", req.ID); result.Error != nil {
 		database.CheckError(result.Error)
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
 
 	if req.Candidate {
-		h.db.Model(&plugin).Updates(map[string]interface{}{
+		h.db().Model(&plugin).Updates(map[string]interface{}{
 			"candidate_last_seen": time.Now(),
 			"candidate_healthy":   true,
 		})
 	} else {
-		h.db.Model(&plugin).Updates(map[string]interface{}{
+		h.db().Model(&plugin).Updates(map[string]interface{}{
 			"last_seen": time.Now(),
 			"status":    "running",
 		})
@@ -317,12 +311,12 @@ func (h *PluginHandler) Deregister(c *gin.Context) {
 	}
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", req.ID); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", req.ID); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
 
-	h.db.Model(&plugin).Updates(map[string]interface{}{
+	h.db().Model(&plugin).Updates(map[string]interface{}{
 		"status": "stopped",
 		"host":   "",
 	})
@@ -418,7 +412,7 @@ func (h *PluginHandler) handleAddressedEvent(sourceID, eventType, detail, destID
 		Attempts:       0,
 		CreatedAt:      ts,
 	}
-	if err := h.db.Create(&pending).Error; err != nil {
+	if err := h.db().Create(&pending).Error; err != nil {
 		log.Printf("event queue: failed to persist pending event: %v", err)
 		return
 	}
@@ -428,14 +422,14 @@ func (h *PluginHandler) handleAddressedEvent(sourceID, eventType, detail, destID
 
 	// Attempt instant dispatch if target is running.
 	var plugin models.Plugin
-	if err := h.db.First(&plugin, "id = ?", destID).Error; err != nil {
+	if err := h.db().First(&plugin, "id = ?", destID).Error; err != nil {
 		return
 	}
 
 	if plugin.Status == "running" && plugin.Host != "" {
 		if h.tryDispatch(plugin, callbackPath, body) {
 			// Success — remove from pending queue.
-			h.db.Delete(&pending)
+			h.db().Delete(&pending)
 			h.Events.Emit(events.DebugEvent{
 				Type:     "dispatch_ok",
 				PluginID: destID,
@@ -445,7 +439,7 @@ func (h *PluginHandler) handleAddressedEvent(sourceID, eventType, detail, destID
 			return
 		}
 		// Dispatch failed — increment attempts, leave in queue.
-		h.db.Model(&pending).Update("attempts", pending.Attempts+1)
+		h.db().Model(&pending).Update("attempts", pending.Attempts+1)
 		h.logEvent(eventType, sourceID, destID, "failed", "target unreachable")
 	}
 
@@ -473,10 +467,7 @@ func callbackPort(plugin models.Plugin, callbackPath string) int {
 func (h *PluginHandler) tryDispatch(plugin models.Plugin, callbackPath string, body []byte) bool {
 	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin, callbackPath), callbackPath)
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	if h.clientTLS != nil {
-		client.Transport = &http.Transport{TLSClientConfig: h.clientTLS}
-	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: h.transport}
 
 	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -490,7 +481,7 @@ func (h *PluginHandler) tryDispatch(plugin models.Plugin, callbackPath string, b
 // Called when a plugin registers (comes online).
 func (h *PluginHandler) flushPendingEvents(targetPluginID string) {
 	var pending []models.Event
-	if err := h.db.Where("target_plugin_id = ?", targetPluginID).Order("created_at ASC").Find(&pending).Error; err != nil {
+	if err := h.db().Where("target_plugin_id = ?", targetPluginID).Order("created_at ASC").Find(&pending).Error; err != nil {
 		log.Printf("event flush: failed to query pending events for %s: %v", targetPluginID, err)
 		return
 	}
@@ -502,7 +493,7 @@ func (h *PluginHandler) flushPendingEvents(targetPluginID string) {
 	log.Printf("event flush: delivering %d pending events to %s", len(pending), targetPluginID)
 
 	var plugin models.Plugin
-	if err := h.db.First(&plugin, "id = ?", targetPluginID).Error; err != nil {
+	if err := h.db().First(&plugin, "id = ?", targetPluginID).Error; err != nil {
 		log.Printf("event flush: target plugin %s not found", targetPluginID)
 		return
 	}
@@ -521,7 +512,7 @@ func (h *PluginHandler) flushPendingEvents(targetPluginID string) {
 		}
 
 		if h.tryDispatch(plugin, callbackPath, []byte(pe.Payload)) {
-			h.db.Delete(&pe)
+			h.db().Delete(&pe)
 			h.Events.Emit(events.DebugEvent{
 				Type:     "dispatch_ok",
 				PluginID: targetPluginID,
@@ -529,7 +520,7 @@ func (h *PluginHandler) flushPendingEvents(targetPluginID string) {
 			})
 			h.logEvent(pe.EventType, pe.SourcePluginID, targetPluginID, "delivered", "flushed from queue")
 		} else {
-			h.db.Model(&pe).Update("attempts", pe.Attempts+1)
+			h.db().Model(&pe).Update("attempts", pe.Attempts+1)
 			h.Events.Emit(events.DebugEvent{
 				Type:     "dispatch_error",
 				PluginID: targetPluginID,
@@ -544,17 +535,17 @@ func (h *PluginHandler) flushPendingEvents(targetPluginID string) {
 // Deletes oldest events (FIFO) if over the cap.
 func (h *PluginHandler) enforcePendingCap(targetPluginID string, maxCount int) {
 	var count int64
-	h.db.Model(&models.Event{}).Where("target_plugin_id = ?", targetPluginID).Count(&count)
+	h.db().Model(&models.Event{}).Where("target_plugin_id = ?", targetPluginID).Count(&count)
 	if count <= int64(maxCount) {
 		return
 	}
 
 	excess := int(count) - maxCount
 	var oldest []models.Event
-	h.db.Where("target_plugin_id = ?", targetPluginID).Order("created_at ASC").Limit(excess).Find(&oldest)
+	h.db().Where("target_plugin_id = ?", targetPluginID).Order("created_at ASC").Limit(excess).Find(&oldest)
 	for _, pe := range oldest {
 		h.logEvent(pe.EventType, pe.SourcePluginID, pe.TargetPluginID, "evicted", fmt.Sprintf("cap=%d exceeded", maxCount))
-		h.db.Delete(&pe)
+		h.db().Delete(&pe)
 	}
 	log.Printf("event queue: evicted %d oldest events for %s (cap=%d)", excess, targetPluginID, maxCount)
 }
@@ -563,7 +554,7 @@ func (h *PluginHandler) enforcePendingCap(targetPluginID string, maxCount int) {
 // Fire-and-forget: errors are logged but do not propagate.
 func (h *PluginHandler) dispatchEvent(sub events.Subscription, body []byte) {
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", sub.PluginID); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", sub.PluginID); result.Error != nil {
 		log.Printf("event dispatch: subscriber %s not found in db", sub.PluginID)
 		return
 	}
@@ -580,10 +571,7 @@ func (h *PluginHandler) dispatchEvent(sub events.Subscription, body []byte) {
 
 	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin, sub.CallbackPath), sub.CallbackPath)
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	if h.clientTLS != nil {
-		client.Transport = &http.Transport{TLSClientConfig: h.clientTLS}
-	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: h.transport}
 
 	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -626,7 +614,7 @@ func (h *PluginHandler) UpdatePricing(c *gin.Context) {
 
 	var saved []models.ModelPrice
 	for _, p := range req.Prices {
-		price, err := SavePriceRecord(h.db, p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, p.Currency)
+		price, err := SavePriceRecord(h.db(), p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, p.Currency)
 		if err != nil {
 			log.Printf("pricing: failed to save %s/%s: %v", p.Provider, p.Model, err)
 			continue
@@ -663,7 +651,7 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 	}
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", pluginID); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", pluginID); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -675,6 +663,9 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 
 	target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), plugin.Host, plugin.HTTPPort))
 	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	// Enable streaming support (SSE, chunked responses) by flushing every 100ms.
+	proxy.FlushInterval = 100 * time.Millisecond
 
 	// Use mTLS transport if configured.
 	if h.clientTLS != nil {
@@ -829,7 +820,7 @@ func (h *PluginHandler) logEvent(eventType, sourceID, targetID, status, detail s
 		Status:         status,
 		Detail:         detail,
 	}
-	if err := h.db.Create(&entry).Error; err != nil {
+	if err := h.db().Create(&entry).Error; err != nil {
 		log.Printf("event log: failed to persist: %v", err)
 		return
 	}

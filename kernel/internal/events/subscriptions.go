@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
 
@@ -18,10 +19,12 @@ type Subscription struct {
 
 // SubscriptionManager is an in-memory registry of inter-plugin event subscriptions.
 type SubscriptionManager struct {
-	mu   sync.RWMutex
-	subs []Subscription
-	db   *gorm.DB // nil for non-persistent (test) instances
+	mu         sync.RWMutex
+	subs       []Subscription
+	persistent bool // true when backed by the database
 }
+
+func (sm *SubscriptionManager) db() *gorm.DB { return database.Get() }
 
 // NewSubscriptionManager creates a new in-memory-only SubscriptionManager (for tests).
 func NewSubscriptionManager() *SubscriptionManager {
@@ -30,11 +33,11 @@ func NewSubscriptionManager() *SubscriptionManager {
 
 // NewPersistentSubscriptionManager creates a SubscriptionManager backed by the database.
 // Loads existing subscriptions from DB on creation.
-func NewPersistentSubscriptionManager(db *gorm.DB) *SubscriptionManager {
-	sm := &SubscriptionManager{db: db}
+func NewPersistentSubscriptionManager() *SubscriptionManager {
+	sm := &SubscriptionManager{persistent: true}
 
 	var rows []models.EventSubscription
-	if err := db.Find(&rows).Error; err != nil {
+	if err := sm.db().Find(&rows).Error; err != nil {
 		log.Printf("events: failed to load subscriptions from db: %v", err)
 		return sm
 	}
@@ -64,8 +67,8 @@ func (sm *SubscriptionManager) Subscribe(pluginID, eventType, callbackPath strin
 	for i, s := range sm.subs {
 		if s.PluginID == pluginID && s.EventType == eventType {
 			sm.subs[i].CallbackPath = callbackPath
-			if sm.db != nil {
-				sm.db.Model(&models.EventSubscription{}).
+			if sm.persistent {
+				sm.db().Model(&models.EventSubscription{}).
 					Where("plugin_id = ? AND event_type = ?", pluginID, eventType).
 					Update("callback_path", callbackPath)
 			}
@@ -79,8 +82,8 @@ func (sm *SubscriptionManager) Subscribe(pluginID, eventType, callbackPath strin
 		CallbackPath: callbackPath,
 	})
 
-	if sm.db != nil {
-		sm.db.Create(&models.EventSubscription{
+	if sm.persistent {
+		sm.db().Create(&models.EventSubscription{
 			PluginID:     pluginID,
 			EventType:    eventType,
 			CallbackPath: callbackPath,
@@ -100,8 +103,8 @@ func (sm *SubscriptionManager) Unsubscribe(pluginID, eventType string) {
 		}
 	}
 
-	if sm.db != nil {
-		sm.db.Where("plugin_id = ? AND event_type = ?", pluginID, eventType).
+	if sm.persistent {
+		sm.db().Where("plugin_id = ? AND event_type = ?", pluginID, eventType).
 			Delete(&models.EventSubscription{})
 	}
 }
@@ -119,8 +122,8 @@ func (sm *SubscriptionManager) UnsubscribeAll(pluginID string) {
 	}
 	sm.subs = filtered
 
-	if sm.db != nil {
-		sm.db.Where("plugin_id = ?", pluginID).Delete(&models.EventSubscription{})
+	if sm.persistent {
+		sm.db().Where("plugin_id = ?", pluginID).Delete(&models.EventSubscription{})
 	}
 }
 

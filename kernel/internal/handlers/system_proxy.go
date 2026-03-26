@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
@@ -23,9 +24,14 @@ func (h *PluginHandler) SystemPluginProxy(pluginID, pathPrefix string) gin.Handl
 		start := time.Now()
 
 		var plugin models.Plugin
-		if result := h.db.First(&plugin, "id = ?", pluginID); result.Error != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "system plugin not found: " + pluginID})
-			return
+		if result := h.db().First(&plugin, "id = ?", pluginID); result.Error != nil {
+			database.CheckError(result.Error)
+
+			// If CheckError reconnected the DB, retry with the fresh connection.
+			if result2 := h.db().First(&plugin, "id = ?", pluginID); result2.Error != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "system plugin not found: " + pluginID})
+				return
+			}
 		}
 
 		if plugin.Host == "" || plugin.HTTPPort == 0 {
@@ -36,9 +42,9 @@ func (h *PluginHandler) SystemPluginProxy(pluginID, pathPrefix string) gin.Handl
 		target, _ := url.Parse(fmt.Sprintf("%s://%s:%d", h.pluginScheme(), plugin.Host, plugin.HTTPPort))
 		proxy := httputil.NewSingleHostReverseProxy(target)
 
-		if h.clientTLS != nil {
-			proxy.Transport = &http.Transport{TLSClientConfig: h.clientTLS}
-		}
+		// Enable streaming support (SSE, chunked responses).
+		proxy.FlushInterval = 100 * time.Millisecond
+		proxy.Transport = h.transport
 
 		// Strip /api prefix so plugin gets e.g. /auth/login instead of /api/auth/login.
 		path := c.Request.URL.Path

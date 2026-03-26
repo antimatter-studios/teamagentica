@@ -26,18 +26,28 @@ import (
 
 // PluginHandler holds dependencies for plugin management endpoints.
 type PluginHandler struct {
-	db        *gorm.DB
 	runtime   runtime.ContainerRuntime
 	cfg       *config.Config
 	clientTLS *tls.Config
+	transport *http.Transport // shared transport for all outbound plugin requests
 	Events    *events.Hub
 	Subs      *events.SubscriptionManager
 }
 
+func (h *PluginHandler) db() *gorm.DB { return database.Get() }
+
 // NewPluginHandler creates a new PluginHandler.
 // clientTLS is optional; pass nil to disable mTLS for proxied requests.
-func NewPluginHandler(db *gorm.DB, rt runtime.ContainerRuntime, cfg *config.Config, clientTLS *tls.Config) *PluginHandler {
-	return &PluginHandler{db: db, runtime: rt, cfg: cfg, clientTLS: clientTLS, Events: events.NewHub(), Subs: events.NewPersistentSubscriptionManager(db)}
+func NewPluginHandler(rt runtime.ContainerRuntime, cfg *config.Config, clientTLS *tls.Config) *PluginHandler {
+	t := &http.Transport{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     60 * time.Second,
+	}
+	if clientTLS != nil {
+		t.TLSClientConfig = clientTLS
+	}
+	return &PluginHandler{runtime: rt, cfg: cfg, clientTLS: clientTLS, transport: t, Events: events.NewHub(), Subs: events.NewPersistentSubscriptionManager()}
 }
 
 // stripHTMLTags removes all HTML tags from a string to prevent XSS.
@@ -81,7 +91,7 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 
 	// Check for duplicate.
 	var existing models.Plugin
-	if err := h.db.First(&existing, "id = ?", req.ID).Error; err == nil {
+	if err := h.db().First(&existing, "id = ?", req.ID).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "plugin already registered"})
 		return
 	}
@@ -100,7 +110,7 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 		plugin.ConfigSchema = models.JSONRawString(req.ConfigSchema)
 	}
 
-	if result := h.db.Create(&plugin); result.Error != nil {
+	if result := h.db().Create(&plugin); result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register plugin"})
 		return
 	}
@@ -126,7 +136,7 @@ func (h *PluginHandler) RegisterPlugin(c *gin.Context) {
 // ListPlugins handles GET /api/plugins.
 func (h *PluginHandler) ListPlugins(c *gin.Context) {
 	var plugins []models.Plugin
-	if result := h.db.Find(&plugins); result.Error != nil {
+	if result := h.db().Find(&plugins); result.Error != nil {
 		database.CheckError(result.Error)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch plugins"})
 		return
@@ -140,7 +150,7 @@ func (h *PluginHandler) GetPlugin(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -153,7 +163,7 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -180,13 +190,13 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 	h.StopManagedContainersByPlugin(c.Request.Context(), id)
 
 	// Remove config entries.
-	h.db.Where("owner_id = ?", id).Delete(&models.Config{})
+	h.db().Where("owner_id = ?", id).Delete(&models.Config{})
 
 	// Remove aliases owned by this plugin.
-	h.db.Where("plugin_id = ?", id).Delete(&models.Alias{})
+	h.db().Where("plugin_id = ?", id).Delete(&models.Alias{})
 
 	// Remove plugin record (data volume is kept).
-	if result := h.db.Delete(&plugin); result.Error != nil {
+	if result := h.db().Delete(&plugin); result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete plugin"})
 		return
 	}
@@ -210,7 +220,7 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -254,7 +264,7 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 	// Recursively enable dependencies first.
 	for _, cap := range plugin.GetDependencies() {
 		var allPlugins []models.Plugin
-		h.db.Find(&allPlugins)
+		h.db().Find(&allPlugins)
 		var dep *models.Plugin
 		for i := range allPlugins {
 			for _, c := range allPlugins[i].GetCapabilities() {
@@ -277,7 +287,7 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 
 	// Metadata-only plugins have no runtime — just mark enabled.
 	if plugin.IsMetadataOnly() {
-		h.db.Model(plugin).Updates(map[string]interface{}{"status": "enabled", "enabled": true})
+		h.db().Model(plugin).Updates(map[string]interface{}{"status": "enabled", "enabled": true})
 		h.Events.Emit(events.DebugEvent{
 			Type:     "enable",
 			PluginID: plugin.ID,
@@ -311,7 +321,7 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 		return fmt.Errorf("start %s: %w", plugin.ID, err)
 	}
 
-	h.db.Model(plugin).Updates(map[string]interface{}{
+	h.db().Model(plugin).Updates(map[string]interface{}{
 		"container_id": containerID,
 		"status":       "running",
 		"enabled":      true,
@@ -333,7 +343,7 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -360,7 +370,7 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 	// Stop any managed containers owned by this plugin.
 	h.StopManagedContainersByPlugin(c.Request.Context(), id)
 
-	h.db.Model(&plugin).Updates(map[string]interface{}{
+	h.db().Model(&plugin).Updates(map[string]interface{}{
 		"container_id": "",
 		"status":       "stopped",
 		"enabled":      false,
@@ -390,7 +400,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -434,7 +444,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 			PluginID: id,
 			Detail:   "restart failed: " + err.Error(),
 		})
-		h.db.Model(&plugin).Updates(map[string]interface{}{
+		h.db().Model(&plugin).Updates(map[string]interface{}{
 			"container_id": "",
 			"status":       "error",
 		})
@@ -442,7 +452,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 		return
 	}
 
-	h.db.Model(&plugin).Updates(map[string]interface{}{
+	h.db().Model(&plugin).Updates(map[string]interface{}{
 		"container_id": containerID,
 		"status":       "running",
 	})
@@ -472,7 +482,7 @@ func (h *PluginHandler) GetPluginLogs(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -566,13 +576,13 @@ func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
 
 	var configs []models.Config
-	h.db.Where("owner_id = ?", id).Find(&configs)
+	h.db().Where("owner_id = ?", id).Find(&configs)
 
 	result := make(map[string]string, len(configs))
 	for _, cfg := range configs {
@@ -590,13 +600,13 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
 
 	var configs []models.Config
-	h.db.Where("owner_id = ?", id).Find(&configs)
+	h.db().Where("owner_id = ?", id).Find(&configs)
 
 	// Build map of stored values.
 	stored := make(map[string]models.Config, len(configs))
@@ -706,7 +716,7 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -757,14 +767,20 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 			IsSecret: entry.IsSecret,
 		}
 		// Upsert: update if exists, create if not.
-		result := h.db.Where("owner_id = ? AND key = ?", id, key).First(&models.Config{})
+		result := h.db().Where("owner_id = ? AND key = ?", id, key).First(&models.Config{})
 		if result.Error != nil {
-			h.db.Create(&pc)
+			if res := h.db().Create(&pc); res.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config key %q: %v", key, res.Error)})
+				return
+			}
 		} else {
-			h.db.Model(&models.Config{}).Where("owner_id = ? AND key = ?", id, key).Updates(map[string]interface{}{
+			if res := h.db().Model(&models.Config{}).Where("owner_id = ? AND key = ?", id, key).Updates(map[string]interface{}{
 				"value":     entry.Value,
 				"is_secret": entry.IsSecret,
-			})
+			}); res.Error != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update config key %q: %v", key, res.Error)})
+				return
+			}
 		}
 	}
 
@@ -819,12 +835,12 @@ func (h *PluginHandler) DeletePluginConfigKey(c *gin.Context) {
 	key := c.Param("key")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
 
-	result := h.db.Where("owner_id = ? AND key = ?", id, key).Delete(&models.Config{})
+	result := h.db().Where("owner_id = ? AND key = ?", id, key).Delete(&models.Config{})
 	if result.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "config key not found"})
 		return
@@ -851,7 +867,7 @@ func (h *PluginHandler) SearchPlugins(c *gin.Context) {
 	}
 
 	var allPlugins []models.Plugin
-	if err := h.db.Where("enabled = ?", true).Find(&allPlugins).Error; err != nil {
+	if err := h.db().Where("enabled = ?", true).Find(&allPlugins).Error; err != nil {
 		database.CheckError(err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search plugins"})
 		return
@@ -876,7 +892,7 @@ func (h *PluginHandler) GetPluginSchema(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -906,7 +922,7 @@ func (h *PluginHandler) GetPluginSchemaSection(c *gin.Context) {
 	section := c.Param("section")
 
 	var plugin models.Plugin
-	if result := h.db.First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
 		return
 	}
@@ -946,10 +962,7 @@ func (h *PluginHandler) fetchPluginSchema(plugin models.Plugin) ([]byte, error) 
 	}
 
 	url := fmt.Sprintf("%s://%s:%d/schema", h.pluginScheme(), plugin.Host, port)
-	client := &http.Client{Timeout: 5 * time.Second}
-	if h.clientTLS != nil {
-		client.Transport = &http.Transport{TLSClientConfig: h.clientTLS}
-	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: h.transport}
 
 	resp, err := client.Get(url)
 	if err != nil {
