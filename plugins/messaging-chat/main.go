@@ -29,6 +29,8 @@ func main() {
 
 	const httpPort = 8092
 
+	var h *handlers.Handler
+
 	dataPath := "/data" // default, overridden by FetchConfig below
 
 	db, err := storage.Open(dataPath)
@@ -52,6 +54,12 @@ func main() {
 			return map[string]interface{}{
 				"config": manifest.ConfigSchema,
 			}
+		},
+		ToolsFunc: func() interface{} {
+			if h != nil {
+				return h.ToolDefs()
+			}
+			return nil
 		},
 	})
 
@@ -78,7 +86,7 @@ func main() {
 
 	rc := relay.NewClient(sdkClient, manifest.ID)
 
-	h := handlers.NewHandler(db, files, rc, sdkClient, aliases, debug)
+	h = handlers.NewHandler(db, files, rc, sdkClient, aliases, debug)
 
 	router := gin.Default()
 	router.GET("/health", h.Health)
@@ -93,6 +101,12 @@ func main() {
 	router.POST("/conversations/:id/messages", h.SendMessage)
 	router.POST("/upload", h.Upload)
 	router.GET("/files/*filepath", h.ServeFile)
+
+	// Tool endpoints (discoverable via MCP).
+	router.POST("/tools/list-conversations", h.ToolListConversations)
+	router.POST("/tools/get-messages", h.ToolGetMessages)
+	router.POST("/tools/post-message", h.ToolPostMessage)
+	router.POST("/tools/create-conversation", h.ToolCreateConversation)
 
 	// Handler for alias registry events (update + ready).
 	handleAliasEvent := func(event pluginsdk.EventCallback) {

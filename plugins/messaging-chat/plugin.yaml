@@ -2,11 +2,11 @@ id: messaging-chat
 name: "Web Chat"
 description: "Built-in web chat interface for conversing with AI agents"
 group: messaging
-version: "1.0.20"
+version: "1.0.21"
 image: "teamagentica-messaging-chat:latest"
 author: teamagentica
 tags: [system, chat, ui]
-capabilities: ["messaging:web", "messaging:chat"]
+capabilities: ["messaging:web", "messaging:chat", "tool:chat"]
 dependencies: ["infra:agent-relay"]
 config_schema:
   PLUGIN_DEBUG:

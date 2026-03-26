@@ -64,9 +64,11 @@ type Bot struct {
 
 // taskProgress tracks a pending task group for progress updates.
 type taskProgress struct {
-	ChatID    int64
-	MessageID int    // Telegram message ID for editMessageText
-	Cancel    context.CancelFunc // cancel typing loop
+	ChatID     int64
+	MessageID  int                // Telegram message ID for editMessageText
+	Cancel     context.CancelFunc // cancel typing loop
+	Streaming  bool               // true once we receive the first streaming event
+	LastEditAt time.Time          // debounce edits during streaming
 }
 
 // New creates a new Bot instance and validates the token via GetMe().
@@ -909,6 +911,41 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		b.tasksMu.Unlock()
 
 		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s chat=%d", ev.TaskGroupID, tp.ChatID))
+
+	case "streaming":
+		// Streaming token update — edit the progress message with accumulated text.
+		// Debounce to avoid Telegram rate limits (~1 edit/sec).
+		if time.Since(tp.LastEditAt) < 800*time.Millisecond {
+			return
+		}
+
+		msg := ev.Message
+		if msg == "" {
+			return
+		}
+
+		// Truncate to Telegram's message limit (4096 chars).
+		if len(msg) > 4000 {
+			msg = msg[len(msg)-4000:]
+		}
+
+		if !tp.Streaming {
+			// First streaming event — cancel typing indicator.
+			tp.Cancel()
+			tp.Streaming = true
+		}
+
+		edit := tgbotapi.NewEditMessageText(tp.ChatID, tp.MessageID, msg)
+		if _, err := b.api.Send(edit); err != nil {
+			log.Printf("[progress] streaming edit error: %v", err)
+		}
+
+		tp.LastEditAt = time.Now()
+
+		// Write back updated state.
+		b.tasksMu.Lock()
+		b.taskChats[ev.TaskGroupID] = tp
+		b.tasksMu.Unlock()
 
 	case "failed":
 		tp.Cancel()
