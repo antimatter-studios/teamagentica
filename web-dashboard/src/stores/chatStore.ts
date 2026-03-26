@@ -145,6 +145,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
 
       set(updates as ChatStore);
+      // Also refresh the sidebar conversation list to keep unread badges current.
+      get().loadConversations();
     } catch {
       // silent — polling failure shouldn't disrupt UX
     }
@@ -246,6 +248,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 }));
+
+// ---------- Periodic background refresh ----------
+// Safety net: poll active conversation + conversation list every 10s.
+// Catches anything SSE missed (reconnect gaps, events without in-flight tasks).
+const POLL_INTERVAL_MS = 10_000;
+let _pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function startBackgroundPoll() {
+  if (_pollTimer) return;
+  _pollTimer = setInterval(() => {
+    const state = useChatStore.getState();
+    state.loadConversations();
+    if (state.activeConversationId) {
+      state.refreshMessages();
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+// Auto-start polling when the module loads.
+startBackgroundPoll();
 
 // Track which event IDs we've already processed so we scan all new events,
 // not just the single newest one (which could be a non-progress event).

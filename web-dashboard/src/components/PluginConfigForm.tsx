@@ -62,7 +62,8 @@ function ExpandableItem({ item, idx }: { item: Record<string, unknown>; idx: num
   const stateColor = state === "running" ? "#f59e0b"
     : state === "completed" ? "#22c55e"
     : state === "failed" ? "#ef4444"
-    : "#888";
+    : state ? "#888"
+    : "#e5e5e5";
   const message = String(item.message || "");
   const nodes = (item.nodes || []) as DAGNode[];
 
@@ -71,15 +72,15 @@ function ExpandableItem({ item, idx }: { item: Record<string, unknown>; idx: num
       <div
         className="schema-readonly-row schema-readonly-row-clickable"
         onClick={() => setOpen(!open)}
-        style={{ cursor: "pointer" }}
+        style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
       >
-        <span style={{ color: stateColor, fontWeight: state === "running" ? 600 : 400 }}>
+        <span style={{ color: stateColor, fontWeight: state === "running" ? 600 : 400, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           <span style={{ marginRight: 6, display: "inline-block", width: 12, fontSize: 10 }}>
             {open ? "▼" : "▶"}
           </span>
-          {String(item.time || "")} {truncate(message, 30)}
+          {String(item.time || "")} {message}
         </span>
-        <span className="schema-readonly-value" style={{ color: stateColor }}>
+        <span className="schema-readonly-value" style={{ color: "#f59e0b", flexShrink: 0, textAlign: "right", fontSize: 12 }}>
           {String(item.summary || "")}
         </span>
       </div>
@@ -269,6 +270,64 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
     // Aliases have their own dedicated tab — skip rendering here.
     if (fieldType === "aliases") {
       return null;
+    }
+
+    if (fieldType === "model_list") {
+      let entries: string[] = [];
+      try {
+        entries = JSON.parse(field.value || "[]");
+      } catch {
+        entries = [];
+      }
+
+      const updateEntries = (updated: string[]) => {
+        updateField(index, JSON.stringify(updated));
+      };
+
+      return (
+        <div className="form-field" key={field.key}>
+          <label>
+            {label}
+            {schema?.required && <span className="config-required"> *</span>}
+          </label>
+          {helpText && <span className="config-help-text">{helpText}</span>}
+
+          <div className="model-list-table">
+            {entries.map((entry, i) => (
+              <div className="model-list-row" key={i}>
+                <input
+                  className="model-list-input"
+                  type="text"
+                  value={entry}
+                  placeholder="model name (e.g. llama3.2:3b)"
+                  onChange={(e) => {
+                    const updated = [...entries];
+                    updated[i] = e.target.value;
+                    updateEntries(updated);
+                  }}
+                />
+                <button
+                  className="model-list-remove"
+                  onClick={() => {
+                    updateEntries(entries.filter((_, j) => j !== i));
+                  }}
+                  title="Remove model"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <button
+              className="model-list-add"
+              onClick={() => {
+                updateEntries([...entries, ""]);
+              }}
+            >
+              + Add model
+            </button>
+          </div>
+        </div>
+      );
     }
 
     if (fieldType === "bot_token") {
@@ -509,14 +568,8 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
         <ReadonlySection key={section.name} section={section} />
       ))}
 
-      {plugin.status === "running" && dirty && (
-        <div className="config-notice">
-          Plugin will be restarted after saving.
-        </div>
-      )}
-
       {error && <div className="form-error">{error}</div>}
-      {saveSuccess && <div className="form-success">Configuration saved.</div>}
+      {saveSuccess && <div className="form-success">Configuration saved. Changes are now active.</div>}
 
       {fields.length > 0 && (
         <div className="config-inline-actions">

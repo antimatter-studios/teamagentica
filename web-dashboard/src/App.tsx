@@ -256,7 +256,7 @@ export default function App() {
       {/* Chat and Code stay mounted (hidden) to preserve iframe/websocket state */}
       {hasChat && (
         <div style={{ display: page === "chat" ? "contents" : "none" }}>
-          <Chat />
+          <Chat activePage={page} subpath={subpath} onConversationChange={setSubpath} />
         </div>
       )}
       {hasEditor && (

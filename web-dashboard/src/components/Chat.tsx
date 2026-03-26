@@ -44,7 +44,13 @@ function AuthImage({ fileKey, alt, className }: { fileKey: string; alt: string; 
   return <img src={src} alt={alt} className={className} onClick={() => window.open(src, "_blank")} />;
 }
 
-export default function Chat() {
+interface ChatProps {
+  activePage: string;
+  subpath: string;
+  onConversationChange: (subpath: string) => void;
+}
+
+export default function Chat({ activePage, subpath, onConversationChange }: ChatProps) {
   const { conversations, activeConversationId, messages, sending, loading, error, sendStartedAt, activeTaskGroupId, shelvedTasks } = useChatStore(
     useShallow((s) => ({
       conversations: s.conversations,
@@ -78,17 +84,50 @@ export default function Chat() {
   const expandedAttachmentId = useRef<string>("");
   const dragCounter = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Track whether user is scrolled near the bottom (within 500px)
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceFromBottom < 500;
+  }, []);
 
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
 
-  // Progress updates now arrive via SSE → eventStore → chatStore subscription.
-  // No polling needed.
-
+  // Sync URL subpath → store: when navigating to /chat/{id}, select that conversation.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (activePage !== "chat") return;
+    const urlConvId = subpath ? Number(subpath) : null;
+    if (urlConvId && !Number.isNaN(urlConvId) && urlConvId !== activeConversationId) {
+      selectConversation(urlConvId);
+    } else if (!subpath && activeConversationId) {
+      // URL cleared (e.g. navigated to /chat) — keep current selection but update URL.
+      onConversationChange(String(activeConversationId));
+    }
+  }, [activePage, subpath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync store → URL: when user clicks a conversation in sidebar, update the URL.
+  useEffect(() => {
+    if (activePage !== "chat") return;
+    const urlConvId = subpath ? Number(subpath) : null;
+    if (activeConversationId && activeConversationId !== urlConvId) {
+      onConversationChange(String(activeConversationId));
+    } else if (!activeConversationId && subpath) {
+      onConversationChange("");
+    }
+  }, [activeConversationId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Only auto-scroll if user is near the bottom
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
 
   const handleSend = async () => {
@@ -189,10 +228,10 @@ export default function Chat() {
     <div className="chat-container">
       {/* Sidebar */}
       <div className="chat-sidebar">
-        <button className="chat-new-btn" onClick={newConversation}>
+        <button className="chat-new-btn" onClick={() => { newConversation(); onConversationChange(""); }}>
           + NEW CHAT
         </button>
-        <div className="chat-conv-list">
+        <div className="chat-conv-list" style={{ flex: 1 }}>
           {conversations.map((conv) => (
             <div
               key={conv.id}
@@ -222,6 +261,41 @@ export default function Chat() {
             <div className="chat-conv-empty">No conversations yet</div>
           )}
         </div>
+
+        {/* Participants panel */}
+        {messages.length > 0 && (() => {
+          const participants = new Map<string, { label: string; count: number }>();
+          for (const msg of messages) {
+            if (msg.role === "progress") continue;
+            const key = msg.role === "user" ? "_you" : (msg.agent_alias || "agent");
+            const existing = participants.get(key);
+            if (existing) {
+              existing.count++;
+            } else {
+              participants.set(key, {
+                label: msg.role === "user" ? "You" : `@${msg.agent_alias || "agent"}`,
+                count: 1,
+              });
+            }
+          }
+          const totalMessages = messages.filter((m) => m.role !== "progress").length;
+          return (
+            <div className="chat-participants">
+              <div className="chat-participants-header">
+                <span>PARTICIPANTS</span>
+                <span className="chat-participants-total">{totalMessages} msg{totalMessages !== 1 ? "s" : ""}</span>
+              </div>
+              <div className="chat-participants-list">
+                {Array.from(participants.values()).map((p) => (
+                  <div key={p.label} className="chat-participant">
+                    <span className="chat-participant-name">{p.label}</span>
+                    <span className="chat-participant-count">{p.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Main area */}
@@ -259,7 +333,7 @@ export default function Chat() {
           </div>
         ) : (
         <>
-        <div className="chat-messages">
+        <div className="chat-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
           {loading && (
             <div className="chat-loading">Loading messages...</div>
           )}

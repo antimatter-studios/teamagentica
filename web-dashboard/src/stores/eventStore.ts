@@ -142,19 +142,22 @@ export const useEventStore = create<EventStore>((set) => ({
     const startSSE = () => {
       readSSE(ac.signal, addAudit, addEventLog, setConnected).catch(() => {
         set({ connected: false });
-        // Auto-reconnect after 3s unless aborted
+        // Auto-reconnect after 3s unless aborted.
+        // Reload history first to catch events missed during the gap.
         if (!ac.signal.aborted) {
-          setTimeout(startSSE, 3000);
+          setTimeout(() => {
+            loadHistory(ac.signal).finally(() => startSSE());
+          }, 3000);
         }
       });
     };
 
-    // Load history first, then start SSE
-    const token = localStorage.getItem("teamagentica_token");
-    if (token) {
-      fetch(apiClient.events.historyUrl(), {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: ac.signal,
+    const loadHistory = (signal: AbortSignal) => {
+      const t = localStorage.getItem("teamagentica_token");
+      if (!t) return Promise.resolve();
+      return fetch(apiClient.events.historyUrl(), {
+        headers: { Authorization: `Bearer ${t}` },
+        signal,
       })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
@@ -175,11 +178,11 @@ export const useEventStore = create<EventStore>((set) => ({
             });
           }
         })
-        .catch(() => {})
-        .finally(() => startSSE());
-    } else {
-      startSSE();
-    }
+        .catch(() => {});
+    };
+
+    // Load history first, then start SSE
+    loadHistory(ac.signal).finally(() => startSSE());
   },
 
   disconnect: () => {

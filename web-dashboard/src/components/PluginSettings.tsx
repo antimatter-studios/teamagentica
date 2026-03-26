@@ -185,13 +185,13 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
       const caps = parseCapabilities(selected);
       const isAgent = caps.some((c) => c.startsWith("agent:"));
       const isDiscord = caps.includes("messaging:discord");
+      // Any running plugin can expose tools via /mcp.
+      probeTools(selected.id, selected.status);
       if (isAgent) {
         probePricing(selected.id, selected.status);
-        probeTools(selected.id, selected.status);
         probeSystemPrompt(selected.id, selected.status);
       } else {
         setHasPricing(false);
-        setHasTools(false);
         setHasSystemPrompt(false);
       }
       if (isDiscord) {

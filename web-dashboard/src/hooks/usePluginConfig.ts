@@ -179,7 +179,7 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
       const fullSchema = await apiClient.plugins.getSchema(plugin.id);
       const sections: SchemaSection[] = [];
       for (const [sectionName, raw] of Object.entries(fullSchema)) {
-        if (sectionName === "config") continue;
+        if (sectionName === "config" || sectionName === "tools") continue;
         if (typeof raw !== "object" || raw === null) continue;
         if (Array.isArray(raw)) {
           // Array of objects (e.g. DAGs) — store as structured items.
