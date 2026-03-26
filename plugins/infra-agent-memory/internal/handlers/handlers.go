@@ -1,821 +1,613 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-memory/internal/storage"
+	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-memory/internal/memory"
 )
 
-// Handler serves REST + MCP endpoints for memory management.
+// Handler serves REST + MCP endpoints backed by a memory Provider.
 type Handler struct {
-	db               *storage.DB
-	maxMsgPerSession int
-	sdk              *pluginsdk.Client
-	compactor        *Compactor
-	activity         *ActivityLog
-
-	mu                sync.RWMutex
-	extractionPersona string // alias without '@', e.g. "brains"
+	provider memory.Provider
+	mem0URL  string // base URL of the local Mem0 Python server
 }
 
-// New creates a Handler backed by the given DB.
-func New(db *storage.DB, maxMsgPerSession int) *Handler {
-	return &Handler{db: db, maxMsgPerSession: maxMsgPerSession, extractionPersona: "brains"}
+// New creates a Handler backed by the given memory provider.
+func New(provider memory.Provider) *Handler {
+	return &Handler{provider: provider, mem0URL: "http://localhost:8010"}
 }
 
-// SetActivityLog attaches the activity log for operation tracking.
-func (h *Handler) SetActivityLog(log *ActivityLog) {
-	h.activity = log
+// SetMem0URL sets the base URL for the local Mem0 Python server.
+func (h *Handler) SetMem0URL(url string) {
+	h.mem0URL = url
 }
 
-// ActivityEntries returns the current activity log entries for schema display.
-func (h *Handler) ActivityEntries() []ActivityEntry {
-	if h.activity == nil {
+// Health checks if the memory backend is reachable.
+func (h *Handler) Health(c *gin.Context) {
+	if err := h.provider.Healthy(c.Request.Context()); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+}
+
+// ── Schema helpers ──────────────────────────────────────────────────────────────
+
+// schemaCtx returns a context with a short timeout for schema polling calls.
+func schemaCtx() context.Context {
+	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second) //nolint:lostcancel
+	return ctx
+}
+
+// MemoryList returns stored memories for the schema readonly section.
+// Returns (items, totalCount) so callers can show "Memories (50/1234)".
+func (h *Handler) MemoryList() (interface{}, int, int) {
+	mems, err := h.provider.List(schemaCtx(), memory.ListOpts{
+		Filters:  map[string]any{"user_id": "global"},
+		PageSize: 50,
+	})
+	if err != nil {
+		log.Printf("schema memory list error: %v", err)
+		return nil, 0, 0
+	}
+	// Get total count from stats (uses page_size=1000).
+	allMems, _ := h.provider.List(schemaCtx(), memory.ListOpts{
+		Filters:  map[string]any{"user_id": "global"},
+		PageSize: 1000,
+	})
+	total := len(allMems)
+	type item struct {
+		Time    string   `json:"time"`
+		Message string   `json:"message"`
+		Summary string   `json:"summary"`
+		ID      string   `json:"id"`
+		Text    string   `json:"text"`
+		UserID  string   `json:"user_id,omitempty"`
+		AgentID string   `json:"agent_id,omitempty"`
+		Tags    []string `json:"categories,omitempty"`
+	}
+	result := make([]item, len(mems))
+	for i, m := range mems {
+		text := m.Text
+		if len(text) > 120 {
+			text = text[:117] + "..."
+		}
+		result[i] = item{
+			Time:    m.CreatedAt,
+			Message: text,
+			Summary: m.ID,
+			ID:      m.ID,
+			Text:    m.Text,
+			UserID:  m.UserID,
+			AgentID: m.AgentID,
+			Tags:    m.Categories,
+		}
+	}
+	return result, total, len(result)
+}
+
+// MemoryStats returns aggregate counts for the schema readonly section.
+func (h *Handler) MemoryStats() interface{} {
+	mems, err := h.provider.List(schemaCtx(), memory.ListOpts{
+		Filters:  map[string]any{"user_id": "global"},
+		PageSize: 1000,
+	})
+	if err != nil {
+		log.Printf("schema memory stats error: %v", err)
 		return nil
 	}
-	return h.activity.Entries()
+	entities, _ := h.provider.ListEntities(schemaCtx())
+
+	stats := map[string]any{
+		"total_memories": len(mems),
+		"total_entities": len(entities),
+	}
+
+	// Poll Mem0's migration/sync status.
+	if migration := h.fetchMigrationStatus(); migration != nil {
+		stats["sync"] = migration
+	}
+
+	return stats
 }
 
-// SetSDK sets the SDK client for inter-plugin communication.
-func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
-	h.sdk = sdk
+// fetchMigrationStatus polls the Mem0 Python server for background sync progress.
+func (h *Handler) fetchMigrationStatus() map[string]any {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", h.mem0URL+"/migration/status", nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	var status struct {
+		Active    bool `json:"active"`
+		Processed int  `json:"processed"`
+		Total     int  `json:"total"`
+	}
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil
+	}
+
+	if !status.Active {
+		return nil
+	}
+
+	pct := 0
+	if status.Total > 0 {
+		pct = (status.Processed * 100) / status.Total
+	}
+	return map[string]any{
+		"status":    fmt.Sprintf("Re-indexing: %d/%d memories (%d%%)", status.Processed, status.Total, pct),
+		"processed": status.Processed,
+		"total":     status.Total,
+	}
 }
 
-// SetCompactor attaches the compaction buffer to this handler.
-func (h *Handler) SetCompactor(c *Compactor) {
-	h.compactor = c
-}
-
-// SetExtractionPersona sets the persona alias used for memory extraction.
-func (h *Handler) SetExtractionPersona(persona string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.extractionPersona = persona
-}
-
-func (h *Handler) getExtractionPersona() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.extractionPersona
-}
-
-// lookupMemoryPersona finds the persona with the "memory" role via the persona plugin,
-// falling back to the configured extraction persona if the role lookup fails.
-func (h *Handler) lookupMemoryPersona() string {
-	if h.sdk != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		respBody, err := h.sdk.RouteToPlugin(ctx, "infra-agent-persona", "GET", "/personas/by-role/memory", nil)
-		if err == nil {
-			var resp struct {
-				Personas []struct {
-					Alias string `json:"alias"`
-				} `json:"personas"`
-			}
-			if json.Unmarshal(respBody, &resp) == nil && len(resp.Personas) > 0 {
-				return resp.Personas[0].Alias
-			}
+// EntityList returns known entities for the schema readonly section.
+func (h *Handler) EntityList() interface{} {
+	entities, err := h.provider.ListEntities(schemaCtx())
+	if err != nil {
+		log.Printf("schema entity list error: %v", err)
+		return nil
+	}
+	type item struct {
+		Time    string `json:"time"`
+		Message string `json:"message"`
+		Summary string `json:"summary"`
+		Type    string `json:"type"`
+		ID      string `json:"id"`
+	}
+	result := make([]item, len(entities))
+	for i, e := range entities {
+		result[i] = item{
+			Time:    e.Type,
+			Message: e.ID,
+			Summary: e.Type,
+			Type:    e.Type,
+			ID:      e.ID,
 		}
 	}
-	return h.getExtractionPersona()
+	return result
 }
 
-// ValidMemoryCategories lists acceptable categories for memory facts.
-var ValidMemoryCategories = map[string]bool{
-	"user_fact": true,
-	"decision":  true,
-	"project":   true,
-	"reference": true,
-	"general":   true,
-}
+// ── MCP Tool Definitions ────────────────────────────────────────────────────────
 
-func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-// ── Session REST API ───────────────────────────────────────────────────────────
-
-// ListSessions handles GET /sessions — returns all session summaries.
-func (h *Handler) ListSessions(c *gin.Context) {
-	sessions, err := h.db.ListSessions()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
-}
-
-// GetHistory handles GET /sessions/:id/messages — returns recent messages for a session.
-func (h *Handler) GetHistory(c *gin.Context) {
-	sessionID := c.Param("id")
-	limit := h.maxMsgPerSession
-	if v := c.Query("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	msgs, err := h.db.GetHistory(sessionID, limit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"session_id": sessionID, "messages": msgs})
-}
-
-// AddMessage handles POST /sessions/:id/messages — appends a message to a session.
-func (h *Handler) AddMessage(c *gin.Context) {
-	sessionID := c.Param("id")
-	var req struct {
-		Role      string `json:"role" binding:"required"`
-		Content   string `json:"content" binding:"required"`
-		Responder string `json:"responder"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if req.Role != "user" && req.Role != "assistant" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "role must be 'user' or 'assistant'"})
-		return
-	}
-	msg, err := h.db.AddMessage(sessionID, req.Role, req.Content, req.Responder)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// Prune after adding so the session stays within the configured limit.
-	if h.maxMsgPerSession > 0 {
-		_ = h.db.PruneSession(sessionID, h.maxMsgPerSession)
-	}
-	// Push to compaction buffer.
-	if h.compactor != nil {
-		h.compactor.Push(sessionID, req.Role, req.Content, req.Responder)
-	}
-	c.JSON(http.StatusCreated, msg)
-}
-
-// ClearSession handles DELETE /sessions/:id — wipes all messages for a session.
-func (h *Handler) ClearSession(c *gin.Context) {
-	sessionID := c.Param("id")
-	if err := h.db.ClearSession(sessionID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.Status(http.StatusNoContent)
-}
-
-// ── MCP tool discovery ─────────────────────────────────────────────────────────
-
-// ToolDefs returns all tool definitions (session + memory) as a plain slice for schema display.
 func (h *Handler) ToolDefs() interface{} {
-	sessionTools := []gin.H{
+	return []gin.H{
 		{
-			"name":        "list_sessions",
-			"description": "List all active conversation sessions with message counts and last activity time",
-			"endpoint":    "/mcp/list_sessions",
+			"name":        "add_memory",
+			"description": "Save a conversation or text to memory. Mem0 automatically extracts important facts. Use this to remember conversations, decisions, or important context.",
+			"endpoint":    "/mcp/add_memory",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"messages": gin.H{
+						"type":        "array",
+						"description": "Array of {role, content} message objects to extract memories from",
+						"items": gin.H{
+							"type": "object",
+							"properties": gin.H{
+								"role":    gin.H{"type": "string", "description": "Message role: user or assistant"},
+								"content": gin.H{"type": "string", "description": "Message content"},
+							},
+							"required": []string{"role", "content"},
+						},
+					},
+					"user_id":              gin.H{"type": "string", "description": "User scope (default: global)"},
+					"agent_id":             gin.H{"type": "string", "description": "Agent scope"},
+					"run_id":               gin.H{"type": "string", "description": "Run/session scope"},
+					"metadata":             gin.H{"type": "object", "description": "Arbitrary metadata to attach"},
+					"infer":                gin.H{"type": "boolean", "description": "Extract facts from messages (default: true)"},
+					"immutable":            gin.H{"type": "boolean", "description": "If true, memory cannot be updated later"},
+					"custom_categories":    gin.H{"type": "array", "items": gin.H{"type": "string"}, "description": "Constrain extraction to these categories"},
+					"custom_instructions":  gin.H{"type": "string", "description": "Extra guidance for the extraction LLM"},
+				},
+				"required": []string{"messages"},
+			},
+		},
+		{
+			"name":        "search_memories",
+			"description": "Semantic search across stored memories. Returns the most relevant memories for a query.",
+			"endpoint":    "/mcp/search_memories",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"query":          gin.H{"type": "string", "description": "Natural language search query"},
+					"user_id":        gin.H{"type": "string", "description": "Filter by user (default: global)"},
+					"agent_id":       gin.H{"type": "string", "description": "Filter by agent"},
+					"run_id":         gin.H{"type": "string", "description": "Filter by run/session"},
+					"top_k":          gin.H{"type": "integer", "description": "Max results to return (default: 10)"},
+					"threshold":      gin.H{"type": "number", "description": "Minimum similarity score (0-1)"},
+					"rerank":         gin.H{"type": "boolean", "description": "Re-rank results for better relevance"},
+					"keyword_search": gin.H{"type": "boolean", "description": "Also include keyword-based matches"},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			"name":        "get_memories",
+			"description": "List all memories with optional filters and pagination.",
+			"endpoint":    "/mcp/get_memories",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"user_id":   gin.H{"type": "string", "description": "Filter by user (default: global)"},
+					"agent_id":  gin.H{"type": "string", "description": "Filter by agent"},
+					"run_id":    gin.H{"type": "string", "description": "Filter by run/session"},
+					"page":      gin.H{"type": "integer", "description": "Page number for pagination"},
+					"page_size": gin.H{"type": "integer", "description": "Results per page (default: 50)"},
+				},
+			},
+		},
+		{
+			"name":        "get_memory",
+			"description": "Retrieve a single memory by its ID.",
+			"endpoint":    "/mcp/get_memory",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"memory_id": gin.H{"type": "string", "description": "The memory ID to retrieve"},
+				},
+				"required": []string{"memory_id"},
+			},
+		},
+		{
+			"name":        "update_memory",
+			"description": "Update an existing memory's text or metadata.",
+			"endpoint":    "/mcp/update_memory",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"memory_id": gin.H{"type": "string", "description": "The memory ID to update"},
+					"text":      gin.H{"type": "string", "description": "New text content"},
+					"metadata":  gin.H{"type": "object", "description": "Updated metadata"},
+				},
+				"required": []string{"memory_id"},
+			},
+		},
+		{
+			"name":        "delete_memory",
+			"description": "Delete a single memory by ID.",
+			"endpoint":    "/mcp/delete_memory",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"memory_id": gin.H{"type": "string", "description": "The memory ID to delete"},
+				},
+				"required": []string{"memory_id"},
+			},
+		},
+		{
+			"name":        "delete_all_memories",
+			"description": "Delete all memories for a given scope (user, agent, app, or run). At least one scope filter is required.",
+			"endpoint":    "/mcp/delete_all_memories",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"user_id":  gin.H{"type": "string", "description": "Delete all memories for this user"},
+					"agent_id": gin.H{"type": "string", "description": "Delete all memories for this agent"},
+					"app_id":   gin.H{"type": "string", "description": "Delete all memories for this app"},
+					"run_id":   gin.H{"type": "string", "description": "Delete all memories for this run"},
+				},
+			},
+		},
+		{
+			"name":        "delete_entities",
+			"description": "Hard-delete an entity (user, agent, app, or run) and all its associated memories.",
+			"endpoint":    "/mcp/delete_entities",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"entity_type": gin.H{"type": "string", "enum": []string{"user", "agent", "app", "run"}, "description": "Entity type"},
+					"entity_id":   gin.H{"type": "string", "description": "Entity ID to delete"},
+				},
+				"required": []string{"entity_type", "entity_id"},
+			},
+		},
+		{
+			"name":        "list_entities",
+			"description": "List all known entities (users, agents, apps, runs) in the memory system.",
+			"endpoint":    "/mcp/list_entities",
 			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
 		},
-		{
-			"name":        "get_history",
-			"description": "Get conversation history for a session, ordered oldest-first",
-			"endpoint":    "/mcp/get_history",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"session_id": gin.H{"type": "string", "description": "The session/channel ID"},
-					"limit":      gin.H{"type": "integer", "description": "Max messages to return (default: 20)"},
-				},
-				"required": []string{"session_id"},
-			},
-		},
-		{
-			"name":        "add_message",
-			"description": "Append a message to a conversation session",
-			"endpoint":    "/mcp/add_message",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"session_id": gin.H{"type": "string", "description": "The session/channel ID"},
-					"role":       gin.H{"type": "string", "enum": []string{"user", "assistant"}, "description": "Message author role"},
-					"content":    gin.H{"type": "string", "description": "Message content"},
-					"responder":  gin.H{"type": "string", "description": "Agent alias that produced this message (for assistant messages)"},
-				},
-				"required": []string{"session_id", "role", "content"},
-			},
-		},
-		{
-			"name":        "clear_session",
-			"description": "Delete all messages in a conversation session",
-			"endpoint":    "/mcp/clear_session",
-			"parameters": gin.H{
-				"type":       "object",
-				"properties": gin.H{"session_id": gin.H{"type": "string", "description": "The session/channel ID to clear"}},
-				"required":   []string{"session_id"},
-			},
-		},
 	}
-	return append(sessionTools, h.MemoryTools()...)
 }
 
 func (h *Handler) GetTools(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"tools": h.ToolDefs()})
 }
 
-// ── MCP tool execution ─────────────────────────────────────────────────────────
+// ── MCP Tool Execution ──────────────────────────────────────────────────────────
 
-func (h *Handler) MCPListSessions(c *gin.Context) {
-	sessions, err := h.db.ListSessions()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
-}
-
-func (h *Handler) MCPGetHistory(c *gin.Context) {
+func (h *Handler) MCPAddMemory(c *gin.Context) {
 	var req struct {
-		SessionID string `json:"session_id" binding:"required"`
-		Limit     int    `json:"limit"`
+		Messages           []memory.Message `json:"messages"`
+		UserID             string           `json:"user_id"`
+		AgentID            string           `json:"agent_id"`
+		AppID              string           `json:"app_id"`
+		RunID              string           `json:"run_id"`
+		Metadata           map[string]any   `json:"metadata"`
+		Infer              *bool            `json:"infer"`
+		Immutable          *bool            `json:"immutable"`
+		EnableGraph        *bool            `json:"enable_graph"`
+		ExpirationDate     string           `json:"expiration_date"`
+		CustomCategories   []string         `json:"custom_categories"`
+		CustomInstructions string           `json:"custom_instructions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 20
+	if len(req.Messages) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "messages is required"})
+		return
 	}
-	msgs, err := h.db.GetHistory(req.SessionID, limit)
+
+	userID := req.UserID
+	if userID == "" {
+		userID = "global"
+	}
+
+	memories, err := h.provider.Add(c.Request.Context(), req.Messages, memory.AddOpts{
+		UserID:             userID,
+		AgentID:            req.AgentID,
+		AppID:              req.AppID,
+		RunID:              req.RunID,
+		Metadata:           req.Metadata,
+		Infer:              req.Infer,
+		Immutable:          req.Immutable,
+		EnableGraph:        req.EnableGraph,
+		ExpirationDate:     req.ExpirationDate,
+		CustomCategories:   req.CustomCategories,
+		CustomInstructions: req.CustomInstructions,
+	})
 	if err != nil {
+		log.Printf("add_memory error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"session_id": req.SessionID, "messages": msgs})
+	c.JSON(http.StatusOK, gin.H{"results": memories})
 }
 
-func (h *Handler) MCPAddMessage(c *gin.Context) {
+func (h *Handler) MCPSearchMemories(c *gin.Context) {
 	var req struct {
-		SessionID string `json:"session_id" binding:"required"`
-		Role      string `json:"role" binding:"required"`
-		Content   string `json:"content" binding:"required"`
-		Responder string `json:"responder"`
+		Query         string  `json:"query"`
+		UserID        string  `json:"user_id"`
+		AgentID       string  `json:"agent_id"`
+		RunID         string  `json:"run_id"`
+		TopK          int     `json:"top_k"`
+		Threshold     float64 `json:"threshold"`
+		Rerank        *bool   `json:"rerank"`
+		KeywordSearch *bool   `json:"keyword_search"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	msg, err := h.db.AddMessage(req.SessionID, req.Role, req.Content, req.Responder)
+	if req.Query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
+		return
+	}
+
+	filters := map[string]any{}
+	if req.UserID != "" {
+		filters["user_id"] = req.UserID
+	} else {
+		filters["user_id"] = "global"
+	}
+	if req.AgentID != "" {
+		filters["agent_id"] = req.AgentID
+	}
+	if req.RunID != "" {
+		filters["run_id"] = req.RunID
+	}
+
+	memories, err := h.provider.Search(c.Request.Context(), req.Query, memory.SearchOpts{
+		Filters:       filters,
+		TopK:          req.TopK,
+		Threshold:     req.Threshold,
+		Rerank:        req.Rerank,
+		KeywordSearch: req.KeywordSearch,
+	})
 	if err != nil {
+		log.Printf("search_memories error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if h.maxMsgPerSession > 0 {
-		_ = h.db.PruneSession(req.SessionID, h.maxMsgPerSession)
-	}
-	// Push to compaction buffer.
-	if h.compactor != nil {
-		h.compactor.Push(req.SessionID, req.Role, req.Content, req.Responder)
-	}
-	c.JSON(http.StatusOK, gin.H{"message": msg})
+	c.JSON(http.StatusOK, gin.H{"results": memories})
 }
 
-func (h *Handler) MCPClearSession(c *gin.Context) {
+func (h *Handler) MCPGetMemories(c *gin.Context) {
 	var req struct {
-		SessionID string `json:"session_id" binding:"required"`
+		UserID   string `json:"user_id"`
+		AgentID  string `json:"agent_id"`
+		RunID    string `json:"run_id"`
+		Page     int    `json:"page"`
+		PageSize int    `json:"page_size"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.db.ClearSession(req.SessionID); err != nil {
+
+	filters := map[string]any{}
+	if req.UserID != "" {
+		filters["user_id"] = req.UserID
+	} else {
+		filters["user_id"] = "global"
+	}
+	if req.AgentID != "" {
+		filters["agent_id"] = req.AgentID
+	}
+	if req.RunID != "" {
+		filters["run_id"] = req.RunID
+	}
+
+	memories, err := h.provider.List(c.Request.Context(), memory.ListOpts{
+		Filters:  filters,
+		Page:     req.Page,
+		PageSize: req.PageSize,
+	})
+	if err != nil {
+		log.Printf("get_memories error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "session cleared"})
+	c.JSON(http.StatusOK, gin.H{"results": memories})
 }
 
-// ── Memory (facts) MCP tools ─────────────────────────────────────────────────
-
-// MemoryTools returns tool definitions for the memory fact system.
-func (h *Handler) MemoryTools() []gin.H {
-	categories := make([]string, 0, len(ValidMemoryCategories))
-	for k := range ValidMemoryCategories {
-		categories = append(categories, k)
-	}
-
-	return []gin.H{
-		{
-			"name":        "recall_memory",
-			"description": "Search stored memories by keyword query. Returns facts ranked by relevance and importance. Use this to recall context about users, past decisions, projects, or any stored knowledge.",
-			"endpoint":    "/mcp/recall_memory",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"query":    gin.H{"type": "string", "description": "Search query — keywords to match against memory content and tags"},
-					"category": gin.H{"type": "string", "enum": categories, "description": "Optional category filter"},
-					"limit":    gin.H{"type": "integer", "description": "Max results to return (default: 10)"},
-				},
-				"required": []string{"query"},
-			},
-		},
-		{
-			"name":        "save_memory",
-			"description": "Store an important fact, decision, or piece of context for future recall. Use this when you encounter information worth remembering across conversations — user preferences, technical decisions, project context, or reference pointers.",
-			"endpoint":    "/mcp/save_memory",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"content":    gin.H{"type": "string", "description": "The fact or information to remember"},
-					"category":   gin.H{"type": "string", "enum": categories, "description": "Category: user_fact, decision, project, reference, or general"},
-					"tags":       gin.H{"type": "string", "description": "Comma-separated tags for searchability (e.g. 'api,migration,postgres')"},
-					"importance": gin.H{"type": "integer", "description": "1-10 importance score (default: 5, use 8+ for critical facts)"},
-				},
-				"required": []string{"content", "category"},
-			},
-		},
-		{
-			"name":        "update_memory",
-			"description": "Update an existing memory — change its content, tags, category, or importance. Use when a previously stored fact has changed or needs correction.",
-			"endpoint":    "/mcp/update_memory",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"id":         gin.H{"type": "integer", "description": "Memory ID to update"},
-					"content":    gin.H{"type": "string", "description": "Updated content"},
-					"category":   gin.H{"type": "string", "enum": categories, "description": "Updated category"},
-					"tags":       gin.H{"type": "string", "description": "Updated tags"},
-					"importance": gin.H{"type": "integer", "description": "Updated importance (1-10)"},
-				},
-				"required": []string{"id"},
-			},
-		},
-		{
-			"name":        "delete_memory",
-			"description": "Remove an outdated or incorrect memory by ID.",
-			"endpoint":    "/mcp/delete_memory",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"id": gin.H{"type": "integer", "description": "Memory ID to delete"},
-				},
-				"required": []string{"id"},
-			},
-		},
-		{
-			"name":        "list_memories",
-			"description": "List all stored memories, optionally filtered by category. Returns memories ordered by importance then recency.",
-			"endpoint":    "/mcp/list_memories",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"category": gin.H{"type": "string", "enum": categories, "description": "Optional category filter"},
-					"limit":    gin.H{"type": "integer", "description": "Max results (default: 50)"},
-				},
-			},
-		},
-		{
-			"name":        "compact_conversation",
-			"description": "Send a conversation transcript for fact extraction. An extraction agent will analyze the transcript and save important facts, decisions, and context.",
-			"endpoint":    "/mcp/compact_conversation",
-			"parameters": gin.H{
-				"type": "object",
-				"properties": gin.H{
-					"session_id":  gin.H{"type": "string", "description": "Session ID for the conversation being compacted"},
-					"transcript":  gin.H{"type": "string", "description": "The full conversation transcript text"},
-					"agent_alias": gin.H{"type": "string", "description": "The agent alias that participated in the conversation (optional)"},
-				},
-				"required": []string{"session_id", "transcript"},
-			},
-		},
-	}
-}
-
-// MCPRecallMemory handles POST /mcp/recall_memory — keyword search across stored facts.
-func (h *Handler) MCPRecallMemory(c *gin.Context) {
+func (h *Handler) MCPGetMemory(c *gin.Context) {
 	var req struct {
-		Query    string `json:"query" binding:"required"`
-		Category string `json:"category"`
-		Limit    int    `json:"limit"`
+		MemoryID string `json:"memory_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Category != "" && !ValidMemoryCategories[req.Category] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category"})
+	if req.MemoryID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "memory_id is required"})
 		return
 	}
-	memories, err := h.db.RecallMemory(req.Query, req.Category, req.Limit)
+
+	mem, err := h.provider.Get(c.Request.Context(), req.MemoryID)
 	if err != nil {
+		log.Printf("get_memory error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if h.activity != nil {
-		h.activity.RecordRecall(req.Query, "", len(memories))
-	}
-	c.JSON(http.StatusOK, gin.H{"memories": memories, "count": len(memories)})
+	c.JSON(http.StatusOK, mem)
 }
 
-// MCPSaveMemory handles POST /mcp/save_memory — store a new fact.
-func (h *Handler) MCPSaveMemory(c *gin.Context) {
-	var req struct {
-		Content       string `json:"content" binding:"required"`
-		Category      string `json:"category" binding:"required"`
-		Tags          string `json:"tags"`
-		Importance    int    `json:"importance"`
-		SourceAgent   string `json:"source_agent"`
-		SourceSession string `json:"source_session"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if !ValidMemoryCategories[req.Category] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category, must be one of: user_fact, decision, project, reference, general"})
-		return
-	}
-	// Allow source_agent from header if not in body.
-	if req.SourceAgent == "" {
-		req.SourceAgent = c.GetHeader("X-Teamagentica-Agent-Alias")
-	}
-	if req.SourceSession == "" {
-		req.SourceSession = c.GetHeader("X-Teamagentica-Session-ID")
-	}
-	if req.Importance == 0 {
-		req.Importance = 5
-	}
-	mem, err := h.db.SaveMemory(req.Category, req.Content, req.Tags, req.SourceAgent, req.SourceSession, req.Importance)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if h.activity != nil {
-		h.activity.RecordSave(req.Category, req.Content, req.SourceAgent, req.SourceSession)
-	}
-	c.JSON(http.StatusCreated, gin.H{"memory": mem})
-}
-
-// MCPUpdateMemory handles POST /mcp/update_memory — modify an existing fact.
 func (h *Handler) MCPUpdateMemory(c *gin.Context) {
 	var req struct {
-		ID         uint   `json:"id" binding:"required"`
-		Content    string `json:"content"`
-		Category   string `json:"category"`
-		Tags       string `json:"tags"`
-		Importance int    `json:"importance"`
+		MemoryID string         `json:"memory_id"`
+		Text     string         `json:"text"`
+		Metadata map[string]any `json:"metadata"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Category != "" && !ValidMemoryCategories[req.Category] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category"})
+	if req.MemoryID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "memory_id is required"})
 		return
 	}
-	updates := map[string]interface{}{}
-	if req.Content != "" {
-		updates["content"] = req.Content
-	}
-	if req.Category != "" {
-		updates["category"] = req.Category
-	}
-	if req.Tags != "" {
-		updates["tags"] = req.Tags
-	}
-	if req.Importance > 0 {
-		updates["importance"] = req.Importance
-	}
-	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
-		return
-	}
-	mem, err := h.db.UpdateMemory(req.ID, updates)
-	if err != nil {
+
+	if err := h.provider.Update(c.Request.Context(), req.MemoryID, req.Text, req.Metadata); err != nil {
+		log.Printf("update_memory error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if h.activity != nil {
-		h.activity.RecordUpdate(req.ID, "")
-	}
-	c.JSON(http.StatusOK, gin.H{"memory": mem})
+	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
-// MCPDeleteMemory handles POST /mcp/delete_memory — remove a fact.
 func (h *Handler) MCPDeleteMemory(c *gin.Context) {
 	var req struct {
-		ID uint `json:"id" binding:"required"`
+		MemoryID string `json:"memory_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.db.DeleteMemory(req.ID); err != nil {
+	if req.MemoryID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "memory_id is required"})
+		return
+	}
+
+	if err := h.provider.Delete(c.Request.Context(), req.MemoryID); err != nil {
+		log.Printf("delete_memory error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if h.activity != nil {
-		h.activity.RecordDelete(req.ID)
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "memory deleted"})
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
-// MCPListMemories handles POST /mcp/list_memories — browse stored facts.
-func (h *Handler) MCPListMemories(c *gin.Context) {
+func (h *Handler) MCPDeleteAllMemories(c *gin.Context) {
 	var req struct {
-		Category string `json:"category"`
-		Limit    int    `json:"limit"`
-	}
-	// Allow empty body for listing all.
-	_ = c.ShouldBindJSON(&req)
-	if req.Category != "" && !ValidMemoryCategories[req.Category] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid category"})
-		return
-	}
-	memories, err := h.db.ListMemories(req.Category, req.Limit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"memories": memories, "count": len(memories)})
-}
-
-// ── Compact (fact extraction) ─────────────────────────────────────────────────
-
-// extractedFact is a single fact returned by the extraction persona.
-type extractedFact struct {
-	Content    string `json:"content"`
-	Category   string `json:"category"`
-	Tags       string `json:"tags"`
-	Importance int    `json:"importance"`
-}
-
-// extractionResponse is the JSON envelope returned by @brains.
-type extractionResponse struct {
-	Facts []extractedFact `json:"facts"`
-}
-
-// MCPCompact handles POST /mcp/compact_conversation and POST /compact.
-// It sends the transcript to an extraction persona via the relay and stores the resulting facts.
-func (h *Handler) MCPCompact(c *gin.Context) {
-	var req struct {
-		SessionID  string `json:"session_id" binding:"required"`
-		Transcript string `json:"transcript" binding:"required"`
-		AgentAlias string `json:"agent_alias"`
+		UserID  string `json:"user_id"`
+		AgentID string `json:"agent_id"`
+		AppID   string `json:"app_id"`
+		RunID   string `json:"run_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	if h.sdk == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SDK client not configured"})
+	if req.UserID == "" && req.AgentID == "" && req.AppID == "" && req.RunID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one of user_id, agent_id, app_id, or run_id is required"})
 		return
 	}
 
-	persona := h.lookupMemoryPersona()
-
-	// Build the extraction prompt addressed to the persona.
-	extractionPrompt := fmt.Sprintf(`@%s Extract important facts from this conversation transcript. Return ONLY valid JSON in this format:
-{"facts": [{"content": "the fact", "category": "user_fact|decision|project|reference|general", "tags": "comma,separated,tags", "importance": 5}]}
-
-Categories:
-- user_fact: User preferences, roles, knowledge
-- decision: Technical or project decisions made
-- project: Project context, goals, status
-- reference: Pointers to external resources
-- general: Other important information
-
-Transcript:
----
-%s
----`, persona, req.Transcript)
-
-	// Build the relay request matching relayRequest struct.
-	relayReq := map[string]interface{}{
-		"source_plugin": "infra-agent-memory",
-		"channel_id":    "compact:" + req.SessionID,
-		"message":       extractionPrompt,
+	filters := map[string]any{}
+	if req.UserID != "" {
+		filters["user_id"] = req.UserID
 	}
-	body, err := json.Marshal(relayReq)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to marshal relay request"})
+	if req.AgentID != "" {
+		filters["agent_id"] = req.AgentID
+	}
+	if req.AppID != "" {
+		filters["app_id"] = req.AppID
+	}
+	if req.RunID != "" {
+		filters["run_id"] = req.RunID
+	}
+
+	if err := h.provider.DeleteAll(c.Request.Context(), filters); err != nil {
+		log.Printf("delete_all_memories error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
-	defer cancel()
-
-	respBody, err := h.sdk.RouteToPlugin(ctx, "infra-agent-relay", "POST", "/chat", bytes.NewReader(body))
-	if err != nil {
-		log.Printf("[compact] relay call failed: %v", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "relay call failed: " + err.Error()})
-		return
-	}
-
-	// The relay returns {"task_group_id": "..."} for async processing.
-	// Parse and return it — the extraction will be processed asynchronously
-	// and facts will arrive via relay:progress events.
-	var relayResp struct {
-		TaskGroupID string `json:"task_group_id"`
-		Response    string `json:"response,omitempty"`
-	}
-	if err := json.Unmarshal(respBody, &relayResp); err != nil {
-		log.Printf("[compact] failed to parse relay response: %v", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid relay response"})
-		return
-	}
-
-	// If the relay returned a synchronous response (e.g. workspace routing),
-	// try to parse facts from it immediately.
-	if relayResp.Response != "" {
-		stored := h.parseAndStoreFacts(relayResp.Response, req.AgentAlias, req.SessionID)
-		if h.activity != nil {
-			h.activity.RecordCompactResult(req.SessionID, len(stored))
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "completed",
-			"facts":   stored,
-			"count":   len(stored),
-		})
-		return
-	}
-
-	// Async — return the task group ID so caller can track progress.
-	if h.activity != nil {
-		h.activity.RecordCompactDispatch(req.SessionID, 0)
-	}
-	c.JSON(http.StatusAccepted, gin.H{
-		"status":         "dispatched",
-		"task_group_id":  relayResp.TaskGroupID,
-		"message":        fmt.Sprintf("Extraction dispatched to @%s — facts will be stored when processing completes", persona),
-	})
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
-// compactTranscript is called by the Compactor to send a transcript for extraction.
-// It reuses the same relay call logic as MCPCompact but runs outside an HTTP context.
-func (h *Handler) compactTranscript(sessionID, transcript, agentAlias string) {
-	if h.sdk == nil {
-		log.Printf("[compactor] SDK not configured, skipping compaction for session=%s", sessionID)
+func (h *Handler) MCPDeleteEntities(c *gin.Context) {
+	var req struct {
+		EntityType string `json:"entity_type"`
+		EntityID   string `json:"entity_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.EntityType == "" || req.EntityID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "entity_type and entity_id are required"})
 		return
 	}
 
-	persona := h.lookupMemoryPersona()
-
-	extractionPrompt := fmt.Sprintf(`@%s Extract important facts from this conversation transcript. Return ONLY valid JSON in this format:
-{"facts": [{"content": "the fact", "category": "user_fact|decision|project|reference|general", "tags": "comma,separated,tags", "importance": 5}]}
-
-Categories:
-- user_fact: User preferences, roles, knowledge
-- decision: Technical or project decisions made
-- project: Project context, goals, status
-- reference: Pointers to external resources
-- general: Other important information
-
-Transcript:
----
-%s
----`, persona, transcript)
-
-	relayReq := map[string]interface{}{
-		"source_plugin": "infra-agent-memory",
-		"channel_id":    "compact:" + sessionID,
-		"message":       extractionPrompt,
+	if err := h.provider.DeleteEntities(c.Request.Context(), req.EntityType, req.EntityID); err != nil {
+		log.Printf("delete_entities error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	body, err := json.Marshal(relayReq)
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (h *Handler) MCPListEntities(c *gin.Context) {
+	entities, err := h.provider.ListEntities(c.Request.Context())
 	if err != nil {
-		log.Printf("[compactor] failed to marshal relay request: %v", err)
+		log.Printf("list_entities error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	respBody, err := h.sdk.RouteToPlugin(ctx, "infra-agent-relay", "POST", "/chat", bytes.NewReader(body))
-	if err != nil {
-		log.Printf("[compactor] relay call failed for session=%s: %v", sessionID, err)
-		return
-	}
-
-	var relayResp struct {
-		TaskGroupID string `json:"task_group_id"`
-		Response    string `json:"response,omitempty"`
-	}
-	if err := json.Unmarshal(respBody, &relayResp); err != nil {
-		log.Printf("[compactor] failed to parse relay response for session=%s: %v", sessionID, err)
-		return
-	}
-
-	if relayResp.Response != "" {
-		stored := h.parseAndStoreFacts(relayResp.Response, agentAlias, sessionID)
-		if h.activity != nil {
-			h.activity.RecordCompactResult(sessionID, len(stored))
-		}
-	} else {
-		if h.activity != nil {
-			h.activity.RecordCompactDispatch(sessionID, 0)
-		}
-		log.Printf("[compactor] extraction dispatched async for session=%s task_group=%s", sessionID, relayResp.TaskGroupID)
-	}
-}
-
-// parseAndStoreFacts extracts JSON facts from an agent response and saves them to the DB.
-func (h *Handler) parseAndStoreFacts(response, agentAlias, sessionID string) []*storage.Memory {
-	// Try to find JSON in the response — the agent may wrap it in markdown code blocks.
-	jsonStr := extractJSON(response)
-	if jsonStr == "" {
-		log.Printf("[compact] no JSON found in extraction response")
-		return nil
-	}
-
-	var extraction extractionResponse
-	if err := json.Unmarshal([]byte(jsonStr), &extraction); err != nil {
-		log.Printf("[compact] failed to parse extraction JSON: %v", err)
-		return nil
-	}
-
-	var stored []*storage.Memory
-	for _, fact := range extraction.Facts {
-		if fact.Content == "" {
-			continue
-		}
-		if !ValidMemoryCategories[fact.Category] {
-			fact.Category = "general"
-		}
-		if fact.Importance < 1 || fact.Importance > 10 {
-			fact.Importance = 5
-		}
-		mem, err := h.db.SaveMemory(fact.Category, fact.Content, fact.Tags, agentAlias, sessionID, fact.Importance)
-		if err != nil {
-			log.Printf("[compact] failed to save fact: %v", err)
-			continue
-		}
-		stored = append(stored, mem)
-	}
-	log.Printf("[compact] stored %d facts from extraction (session=%s)", len(stored), sessionID)
-	return stored
-}
-
-// ParseAndStoreFacts is the exported version for use by event handlers.
-func (h *Handler) ParseAndStoreFacts(response, agentAlias, sessionID string) []*storage.Memory {
-	return h.parseAndStoreFacts(response, agentAlias, sessionID)
-}
-
-// extractJSON tries to find a JSON object in the response text.
-// Handles raw JSON and markdown code blocks.
-func extractJSON(s string) string {
-	// Try raw parse first.
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "{") {
-		return s
-	}
-
-	// Look for ```json ... ``` blocks.
-	if idx := strings.Index(s, "```json"); idx >= 0 {
-		start := idx + len("```json")
-		if end := strings.Index(s[start:], "```"); end >= 0 {
-			return strings.TrimSpace(s[start : start+end])
-		}
-	}
-
-	// Look for ``` ... ``` blocks.
-	if idx := strings.Index(s, "```"); idx >= 0 {
-		start := idx + len("```")
-		if end := strings.Index(s[start:], "```"); end >= 0 {
-			candidate := strings.TrimSpace(s[start : start+end])
-			if strings.HasPrefix(candidate, "{") {
-				return candidate
-			}
-		}
-	}
-
-	// Look for first { ... } span.
-	if idx := strings.Index(s, "{"); idx >= 0 {
-		depth := 0
-		for i := idx; i < len(s); i++ {
-			switch s[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return s[idx : i+1]
-				}
-			}
-		}
-	}
-
-	return ""
+	c.JSON(http.StatusOK, gin.H{"results": entities})
 }
