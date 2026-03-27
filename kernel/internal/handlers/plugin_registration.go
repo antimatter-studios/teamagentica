@@ -20,6 +20,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/watchdog"
 )
 
 // containerNameRe matches valid Docker container names (alphanumeric, hyphens, underscores, dots).
@@ -299,7 +300,10 @@ func (h *PluginHandler) Heartbeat(c *gin.Context) {
 		PluginID: req.ID,
 	})
 
-	c.JSON(http.StatusOK, gin.H{"message": "ok"})
+	// If host/port is empty, tell the plugin to re-register so the kernel
+	// can recover the connection without restarting the container.
+	msg := watchdog.HeartbeatStatus(&plugin)
+	c.JSON(http.StatusOK, gin.H{"message": msg})
 }
 
 // Deregister handles POST /api/plugins/deregister — called by plugins on shutdown.

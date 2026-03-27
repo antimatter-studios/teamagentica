@@ -1542,6 +1542,8 @@ func (c *Client) register() error {
 }
 
 // heartbeat calls POST /api/plugins/heartbeat on the kernel.
+// If the kernel responds with "re-register", the plugin re-sends its full
+// registration to recover from a lost host/port (e.g. after kernel restart).
 func (c *Client) heartbeat() error {
 	body, err := json.Marshal(map[string]interface{}{"id": c.registration.ID, "candidate": c.registration.Candidate})
 	if err != nil {
@@ -1563,6 +1565,19 @@ func (c *Client) heartbeat() error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("kernel returned status %d", resp.StatusCode)
 	}
+
+	// Check if the kernel wants us to re-register (host/port was cleared).
+	var result struct {
+		Message string `json:"message"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&result) == nil && result.Message == "re-register" {
+		log.Printf("pluginsdk: kernel requested re-register — re-sending registration")
+		if err := c.register(); err != nil {
+			return fmt.Errorf("re-register failed: %w", err)
+		}
+		log.Printf("pluginsdk: re-registered with kernel as %s", c.registration.ID)
+	}
+
 	return nil
 }
 

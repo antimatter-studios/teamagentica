@@ -21,6 +21,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/kernel/internal/orchestrator"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime/runtimecfg"
+	"github.com/antimatter-studios/teamagentica/kernel/internal/watchdog"
 )
 
 const version = "0.1.0"
@@ -160,6 +161,12 @@ func main() {
 	defer monitorCancel()
 	monitor := health.NewMonitor(dockerRT, pluginHandler.Events, 30*time.Second)
 	go monitor.Start(monitorCtx)
+
+	// Plugin watchdog — detects disconnected plugins and coordinates re-registration
+	// via the heartbeat signal. Complements the health monitor: health monitor handles
+	// dead containers, plugin watchdog handles alive-but-disconnected ones.
+	pluginWatchdog := watchdog.NewPluginWatchdog(dockerRT, 30*time.Second, database.Get)
+	go pluginWatchdog.Start(monitorCtx)
 	pluginsGroup := r.Group("/api/plugins")
 	pluginsGroup.Use(middleware.AuthRequired())
 	{
