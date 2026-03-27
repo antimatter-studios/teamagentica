@@ -15,6 +15,7 @@ interface MarketplaceStore {
   fetch: () => Promise<void>;
   fetchProviders: () => Promise<void>;
   install: (pluginId: string) => Promise<void>;
+  upgrade: (pluginId: string) => Promise<void>;
 }
 
 export const useMarketplaceStore = create<MarketplaceStore>((set, get) => ({
@@ -58,6 +59,15 @@ export const useMarketplaceStore = create<MarketplaceStore>((set, get) => ({
       await get().fetch();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Failed to install plugin" });
+    }
+  },
+
+  upgrade: async (pluginId) => {
+    try {
+      await apiClient.marketplace.upgrade(pluginId);
+      await get().fetch();
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Failed to upgrade plugin" });
     }
   },
 }));

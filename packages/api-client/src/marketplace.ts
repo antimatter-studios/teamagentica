@@ -67,4 +67,10 @@ export class MarketplaceAPI {
       plugin_id: pluginId,
     });
   }
+
+  async upgrade(pluginId: string): Promise<InstallResponse> {
+    return this.http.post<InstallResponse>("/api/marketplace/upgrade", {
+      plugin_id: pluginId,
+    });
+  }
 }

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useMarketplaceStore } from "../stores/marketplaceStore";
 import { usePluginStore } from "../stores/pluginStore";
+import { apiClient } from "../api/client";
 import type { MarketplacePlugin, MarketplaceGroup } from "@teamagentica/api-client";
 
 export default function Marketplace() {
@@ -22,6 +23,7 @@ export default function Marketplace() {
   const fetch = useMarketplaceStore((s) => s.fetch);
   const fetchProviders = useMarketplaceStore((s) => s.fetchProviders);
   const install = useMarketplaceStore((s) => s.install);
+  const upgrade = useMarketplaceStore((s) => s.upgrade);
   const plugins = usePluginStore((s) => s.plugins);
   const fetchPlugins = usePluginStore((s) => s.fetch);
 
@@ -37,6 +39,7 @@ export default function Marketplace() {
 
   const [searchInput, setSearchInput] = useState("");
   const [installing, setInstalling] = useState<string | null>(null);
+  const [upgrading, setUpgrading] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -119,6 +122,19 @@ export default function Marketplace() {
       showToast(err instanceof Error ? err.message : "Install failed");
     } finally {
       setInstalling(null);
+    }
+  }
+
+  async function handleUpgrade(pluginId: string) {
+    setUpgrading(pluginId);
+    try {
+      await apiClient.marketplace.upgrade(pluginId);
+      await Promise.all([fetch(), fetchPlugins()]);
+      showToast("Plugin upgraded successfully");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Upgrade failed");
+    } finally {
+      setUpgrading(null);
     }
   }
 
@@ -280,6 +296,7 @@ export default function Marketplace() {
               {groupPlugins.map((p) => {
                 const isInstalled = installedIds.has(p.plugin_id);
                 const isInstalling = installing === p.plugin_id;
+                const isUpgrading = upgrading === p.plugin_id;
                 const installedVersion = installedVersions.get(p.plugin_id);
                 const hasUpdate = isInstalled && installedVersion !== p.version;
 
@@ -316,7 +333,15 @@ export default function Marketplace() {
                     </div>
 
                     <div className="marketplace-row-action">
-                      {isInstalled ? (
+                      {hasUpdate ? (
+                        <span
+                          className="marketplace-installed-badge"
+                          role="button"
+                          onClick={() => !isUpgrading && handleUpgrade(p.plugin_id)}
+                        >
+                          {isUpgrading ? "UPGRADING..." : "UPDATE AVAILABLE"}
+                        </span>
+                      ) : isInstalled ? (
                         <span className="marketplace-installed-badge">
                           INSTALLED
                         </span>
