@@ -19,12 +19,12 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
-RUN apk add --no-cache git
+RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/tool-nanobanana/ plugins/tool-nanobanana/
 WORKDIR /build/plugins/tool-nanobanana
-RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /nanobanana-plugin .
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /nanobanana-plugin .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod

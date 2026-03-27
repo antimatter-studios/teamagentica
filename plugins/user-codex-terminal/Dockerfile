@@ -20,12 +20,12 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
-RUN apk add --no-cache git
+RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/user-codex-terminal/ plugins/user-codex-terminal/
 WORKDIR /build/plugins/user-codex-terminal
-RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /user-codex-terminal .
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /user-codex-terminal .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod

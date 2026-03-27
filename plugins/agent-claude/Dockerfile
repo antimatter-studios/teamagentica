@@ -31,12 +31,12 @@ CMD ["air", "-c", ".air.toml"]
 FROM golang:1.25-alpine AS builder
 ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
-RUN apk add --no-cache git
+RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/agent-claude/ plugins/agent-claude/
 WORKDIR /build/plugins/agent-claude
-RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /agent-claude .
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-claude .
 
 # ── Prod stage ──
 FROM node:22-alpine AS prod
