@@ -81,6 +81,11 @@ func (d *DB) Update(a *Alias) error {
 	return d.db.Save(a).Error
 }
 
+// Rename changes an alias's name (primary key).
+func (d *DB) Rename(oldName, newName string) error {
+	return d.db.Exec("UPDATE aliases SET name = ?, updated_at = ? WHERE name = ?", newName, time.Now(), oldName).Error
+}
+
 // Delete removes an alias by name.
 func (d *DB) Delete(name string) error {
 	result := d.db.Delete(&Alias{}, "name = ?", name)

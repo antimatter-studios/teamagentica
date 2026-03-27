@@ -86,6 +86,7 @@ func (h *Handler) CreateAlias(c *gin.Context) {
 		return
 	}
 
+	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
 	a := &storage.Alias{
 		Name:         req.Name,
 		Type:         req.Type,
@@ -119,6 +120,7 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 	}
 
 	var req struct {
+		Name         *string `json:"name"`
 		Type         *string `json:"type"`
 		Plugin       *string `json:"plugin"`
 		Provider     *string `json:"provider"`
@@ -150,6 +152,18 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Handle rename (must be last — changes the primary key).
+	if req.Name != nil && *req.Name != "" && *req.Name != name {
+		lowered := strings.ToLower(strings.TrimSpace(*req.Name))
+		req.Name = &lowered
+		if err := h.db.Rename(name, *req.Name); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "rename failed: " + err.Error()})
+			return
+		}
+		a.Name = *req.Name
+	}
+
 	h.broadcastAliasChange("updated", a)
 	c.JSON(http.StatusOK, a)
 }
@@ -312,6 +326,7 @@ func (h *Handler) MCPCreateAlias(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
 	a := &storage.Alias{
 		Name:         req.Name,
 		Type:         req.Type,

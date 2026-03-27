@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -56,6 +57,7 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Alias = strings.ToLower(strings.TrimSpace(req.Alias))
 	if req.Alias == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
@@ -144,6 +146,18 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 		if err := h.db.Update(alias, updates); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+	}
+
+	// Handle rename (must be last — changes the primary key).
+	if newAlias, ok := body["alias"]; ok {
+		if s, ok := newAlias.(string); ok && s != "" && s != alias {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if err := h.db.Rename(alias, s); err != nil {
+				c.JSON(http.StatusConflict, gin.H{"error": "rename failed: " + err.Error()})
+				return
+			}
+			alias = s
 		}
 	}
 
@@ -441,6 +455,7 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Alias = strings.ToLower(strings.TrimSpace(req.Alias))
 	if req.Alias == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
@@ -530,6 +545,19 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 			return
 		}
 	}
+
+	// Handle rename via new_alias.
+	if newAlias, ok := body["new_alias"]; ok {
+		if s, ok := newAlias.(string); ok && s != "" && s != alias {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if err := h.db.Rename(alias, s); err != nil {
+				c.JSON(http.StatusConflict, gin.H{"error": "rename failed: " + err.Error()})
+				return
+			}
+			alias = s
+		}
+	}
+
 	p, _ := h.db.Get(alias)
 	c.JSON(http.StatusOK, p)
 }

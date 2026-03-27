@@ -29,6 +29,7 @@ export interface CreatePersonaRequest {
 }
 
 export interface UpdatePersonaRequest {
+  alias?: string;
   system_prompt?: string;
   model?: string;
   backend_alias?: string;

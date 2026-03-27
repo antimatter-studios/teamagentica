@@ -73,6 +73,11 @@ func (d *DB) Update(alias string, updates map[string]interface{}) error {
 	return d.db.Model(&Persona{}).Where("alias = ?", alias).Updates(updates).Error
 }
 
+// Rename changes a persona's alias (primary key).
+func (d *DB) Rename(oldAlias, newAlias string) error {
+	return d.db.Exec("UPDATE personas SET alias = ?, updated_at = ? WHERE alias = ?", newAlias, time.Now(), oldAlias).Error
+}
+
 // Delete removes a persona by alias.
 func (d *DB) Delete(alias string) error {
 	return d.db.Delete(&Persona{}, "alias = ?", alias).Error

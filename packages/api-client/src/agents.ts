@@ -25,6 +25,7 @@ export interface CreateAliasRequest {
 }
 
 export interface UpdateAliasRequest {
+  name?: string;
   type?: AgentType;
   plugin?: string;
   provider?: string;
