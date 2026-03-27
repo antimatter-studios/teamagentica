@@ -8,11 +8,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// Role defines a persona role with optional cardinality constraints and a default system prompt.
+// Role defines a persona role with a default system prompt.
 type Role struct {
 	ID           string    `json:"id" gorm:"primaryKey"`
 	Label        string    `json:"label" gorm:"not null"`
-	MaxCount     int       `json:"max_count" gorm:"default:0"`
 	SystemPrompt string    `json:"system_prompt" gorm:"default:''"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -24,7 +23,8 @@ type Persona struct {
 	SystemPrompt string         `json:"system_prompt" gorm:"not null"`
 	Model        string         `json:"model" gorm:"default:''"`
 	BackendAlias string         `json:"backend_alias" gorm:"default:''"`
-	Role         string         `json:"role" gorm:"default:'worker';index:idx_persona_role"`
+	Role         string         `json:"role" gorm:"default:'';index:idx_persona_role"`
+	IsDefault    *bool          `json:"is_default" gorm:"uniqueIndex:idx_persona_default"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
@@ -42,48 +42,6 @@ func Open(dataPath string) (*DB, error) {
 		return nil, err
 	}
 	return &DB{db: db}, nil
-}
-
-// RoleSeed defines a role to be seeded with its default system prompt.
-type RoleSeed struct {
-	ID           string
-	Label        string
-	MaxCount     int
-	SystemPrompt string
-}
-
-// SeedRoles creates default roles if they don't already exist.
-func (d *DB) SeedRoles(seeds []RoleSeed) error {
-	for _, s := range seeds {
-		var existing Role
-		if err := d.db.Where("id = ?", s.ID).First(&existing).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				r := Role{
-					ID:           s.ID,
-					Label:        s.Label,
-					MaxCount:     s.MaxCount,
-					SystemPrompt: s.SystemPrompt,
-				}
-				if err := d.db.Create(&r).Error; err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// ResetRolePrompts overwrites role system_prompts with the given defaults.
-func (d *DB) ResetRolePrompts(seeds []RoleSeed) error {
-	for _, s := range seeds {
-		if s.SystemPrompt == "" {
-			continue
-		}
-		d.db.Model(&Role{}).Where("id = ?", s.ID).Update("system_prompt", s.SystemPrompt)
-	}
-	return nil
 }
 
 // List returns all personas.
@@ -106,9 +64,6 @@ func (d *DB) Get(alias string) (*Persona, error) {
 
 // Create inserts a new persona.
 func (d *DB) Create(p *Persona) error {
-	if p.Role == "" {
-		p.Role = "worker"
-	}
 	return d.db.Create(p).Error
 }
 
@@ -159,11 +114,8 @@ func (d *DB) UpdateRole(id string, updates map[string]interface{}) (*Role, error
 	return &r, nil
 }
 
-// DeleteRole removes a role by ID. The "worker" role cannot be deleted.
+// DeleteRole removes a role by ID.
 func (d *DB) DeleteRole(id string) error {
-	if id == "worker" {
-		return errors.New("cannot delete the worker role")
-	}
 	return d.db.Delete(&Role{}, "id = ?", id).Error
 }
 
@@ -174,6 +126,29 @@ func (d *DB) GetRolePrompt(roleID string) string {
 		return ""
 	}
 	return r.SystemPrompt
+}
+
+// GetDefault returns the persona marked as the default, or nil if none set.
+func (d *DB) GetDefault() (*Persona, error) {
+	var p Persona
+	if err := d.db.Where("is_default = ?", true).First(&p).Error; err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// SetDefault marks the given persona as the default, clearing any previous default.
+func (d *DB) SetDefault(alias string) error {
+	// Clear existing default.
+	d.db.Model(&Persona{}).Where("is_default = ?", true).Update("is_default", nil)
+	// Set new default.
+	isTrue := true
+	return d.db.Model(&Persona{}).Where("alias = ?", alias).Update("is_default", &isTrue).Error
+}
+
+// ClearDefault removes the default flag from a persona.
+func (d *DB) ClearDefault(alias string) error {
+	return d.db.Model(&Persona{}).Where("alias = ?", alias).Update("is_default", nil).Error
 }
 
 // GetPersonasByRole returns all personas with the given role.
@@ -194,30 +169,13 @@ func (d *DB) GetPersonaByRole(role string) (*Persona, error) {
 	return &p, nil
 }
 
-// AssignRole assigns a role to a persona, trimming excess holders if MaxCount > 0.
+// AssignRole assigns a role to a persona.
 func (d *DB) AssignRole(alias, role string) error {
-	// Verify persona exists.
 	if _, err := d.Get(alias); err != nil {
 		return errors.New("persona not found")
 	}
-
-	// Verify role exists.
-	r, err := d.GetRole(role)
-	if err != nil {
+	if _, err := d.GetRole(role); err != nil {
 		return errors.New("role not found")
 	}
-
-	// Enforce MaxCount: bump oldest holders back to "worker" if needed.
-	if r.MaxCount > 0 {
-		var holders []Persona
-		d.db.Where("role = ? AND alias != ?", role, alias).Order("created_at").Find(&holders)
-		excess := len(holders) - r.MaxCount + 1 // +1 because we're about to assign one more
-		if excess > 0 {
-			for i := 0; i < excess && i < len(holders); i++ {
-				d.db.Model(&Persona{}).Where("alias = ?", holders[i].Alias).Update("role", "worker")
-			}
-		}
-	}
-
 	return d.db.Model(&Persona{}).Where("alias = ?", alias).Update("role", role).Error
 }

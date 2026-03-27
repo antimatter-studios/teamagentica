@@ -10,15 +10,16 @@ import (
 
 // Handler serves persona API endpoints.
 type Handler struct {
-	db                *storage.DB
-	workerPrompt      string
-	coordinatorPrompt string
+	db *storage.DB
 }
 
 // New creates a new Handler.
-func New(db *storage.DB, workerPrompt, coordinatorPrompt string) *Handler {
-	return &Handler{db: db, workerPrompt: workerPrompt, coordinatorPrompt: coordinatorPrompt}
+func New(db *storage.DB) *Handler {
+	return &Handler{db: db}
 }
+
+// DB returns the underlying database (may be nil before init).
+func (h *Handler) DB() *storage.DB { return h.db }
 
 // Health handles GET /health.
 func (h *Handler) Health(c *gin.Context) {
@@ -59,24 +60,28 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
 	}
-	if req.Role == "" {
-		req.Role = "worker"
-	}
-	// Auto-fill system_prompt from role default if not provided.
-	if req.SystemPrompt == "" {
+	// Auto-fill system_prompt from role if not provided.
+	if req.SystemPrompt == "" && req.Role != "" {
 		if rolePrompt := h.db.GetRolePrompt(req.Role); rolePrompt != "" {
 			req.SystemPrompt = rolePrompt
-		} else {
-			req.SystemPrompt = h.defaultPromptForAlias(req.Alias)
 		}
 	}
+	wantDefault := req.IsDefault != nil && *req.IsDefault
+	req.IsDefault = nil // don't pass through GORM create; use SetDefault for atomicity
+	requestedRole := req.Role
 	if err := h.db.Create(&req); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "persona already exists"})
 		return
 	}
-	// If a non-worker role was specified, use AssignRole for trim logic.
-	if req.Role != "worker" {
-		if err := h.db.AssignRole(req.Alias, req.Role); err != nil {
+	// Use AssignRole for singleton enforcement.
+	if requestedRole != "" {
+		if err := h.db.AssignRole(req.Alias, requestedRole); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if wantDefault {
+		if err := h.db.SetDefault(req.Alias); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -103,10 +108,27 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 
 	// Handle role change via AssignRole.
 	if roleVal, ok := body["role"]; ok {
-		if roleStr, ok := roleVal.(string); ok && roleStr != "" {
+		if roleStr, ok := roleVal.(string); ok {
 			if err := h.db.AssignRole(alias, roleStr); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
+			}
+		}
+	}
+
+	// Handle is_default toggle.
+	if v, ok := body["is_default"]; ok {
+		if b, ok := v.(bool); ok {
+			if b {
+				if err := h.db.SetDefault(alias); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+			} else {
+				if err := h.db.ClearDefault(alias); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
 			}
 		}
 	}
@@ -129,17 +151,29 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 	c.JSON(http.StatusOK, p)
 }
 
-// defaultPromptForAlias returns the appropriate default prompt based on the persona alias.
-func (h *Handler) defaultPromptForAlias(alias string) string {
-	if alias == "coordinator" || alias == "default-coordinator" {
-		return h.coordinatorPrompt
+// GetDefaultPersona handles GET /personas/default.
+func (h *Handler) GetDefaultPersona(c *gin.Context) {
+	p, err := h.db.GetDefault()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no default persona set"})
+		return
 	}
-	return h.workerPrompt
+	c.JSON(http.StatusOK, p)
 }
 
-// DefaultPrompt returns the default worker system prompt for pre-filling new persona forms.
-func (h *Handler) DefaultPrompt(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"system_prompt": h.workerPrompt})
+// SetDefaultPersona handles POST /personas/:alias/set-default.
+func (h *Handler) SetDefaultPersona(c *gin.Context) {
+	alias := c.Param("alias")
+	if _, err := h.db.Get(alias); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		return
+	}
+	if err := h.db.SetDefault(alias); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	p, _ := h.db.Get(alias)
+	c.JSON(http.StatusOK, p)
 }
 
 // DeletePersona handles DELETE /personas/:alias.
@@ -227,9 +261,6 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 	if v, ok := body["label"]; ok {
 		updates["label"] = v
 	}
-	if v, ok := body["max_count"]; ok {
-		updates["max_count"] = v
-	}
 	if v, ok := body["system_prompt"]; ok {
 		updates["system_prompt"] = v
 	}
@@ -261,93 +292,111 @@ func (h *Handler) DeleteRole(c *gin.Context) {
 // ToolDefs returns the MCP tool definitions as a generic interface.
 func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
-			{
-				"name":        "list_personas",
-				"description": "List all configured agent personas",
-				"endpoint":    "/mcp/list_personas",
-				"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+		{
+			"name":        "list_personas",
+			"description": "List all configured agent personas",
+			"endpoint":    "/mcp/list_personas",
+			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+		},
+		{
+			"name":        "get_persona",
+			"description": "Get a specific agent persona by alias",
+			"endpoint":    "/mcp/get_persona",
+			"parameters": gin.H{
+				"type":       "object",
+				"properties": gin.H{"alias": gin.H{"type": "string", "description": "Persona alias"}},
+				"required":   []string{"alias"},
 			},
-			{
-				"name":        "get_persona",
-				"description": "Get a specific agent persona by alias",
-				"endpoint":    "/mcp/get_persona",
-				"parameters": gin.H{
-					"type":       "object",
-					"properties": gin.H{"alias": gin.H{"type": "string", "description": "Persona alias"}},
-					"required":   []string{"alias"},
+		},
+		{
+			"name":        "create_persona",
+			"description": "Create a new agent persona with a system prompt",
+			"endpoint":    "/mcp/create_persona",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"alias":         gin.H{"type": "string", "description": "Unique alias for this persona"},
+					"system_prompt": gin.H{"type": "string", "description": "System prompt defining the persona's behavior"},
+					"model":         gin.H{"type": "string", "description": "Optional model override"},
+					"backend_alias": gin.H{"type": "string", "description": "Backend agent alias to route to (e.g. claude, codex)"},
+					"role":          gin.H{"type": "string", "description": "Role to assign"},
+					"is_default":    gin.H{"type": "boolean", "description": "Set as the default persona for unaddressed messages"},
 				},
+				"required": []string{"alias", "system_prompt"},
 			},
-			{
-				"name":        "create_persona",
-				"description": "Create a new agent persona with a system prompt",
-				"endpoint":    "/mcp/create_persona",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"alias":         gin.H{"type": "string", "description": "Unique alias for this persona"},
-						"system_prompt": gin.H{"type": "string", "description": "System prompt defining the persona's behavior"},
-						"model":         gin.H{"type": "string", "description": "Optional model override"},
-						"backend_alias": gin.H{"type": "string", "description": "Backend agent alias to route to (e.g. claude, codex)"},
-						"role":          gin.H{"type": "string", "description": "Role to assign (e.g. coordinator, memory, worker). Defaults to worker"},
-					},
-					"required": []string{"alias", "system_prompt"},
+		},
+		{
+			"name":        "update_persona",
+			"description": "Update an existing agent persona",
+			"endpoint":    "/mcp/update_persona",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"alias":         gin.H{"type": "string", "description": "Persona alias to update"},
+					"system_prompt": gin.H{"type": "string", "description": "New system prompt"},
+					"model":         gin.H{"type": "string", "description": "New model override"},
+					"backend_alias": gin.H{"type": "string", "description": "New backend agent alias"},
+					"role":          gin.H{"type": "string", "description": "New role to assign"},
+					"is_default":    gin.H{"type": "boolean", "description": "Set as the default persona for unaddressed messages"},
 				},
+				"required": []string{"alias"},
 			},
-			{
-				"name":        "update_persona",
-				"description": "Update an existing agent persona",
-				"endpoint":    "/mcp/update_persona",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"alias":         gin.H{"type": "string", "description": "Persona alias to update"},
-						"system_prompt": gin.H{"type": "string", "description": "New system prompt"},
-						"model":         gin.H{"type": "string", "description": "New model override"},
-						"backend_alias": gin.H{"type": "string", "description": "New backend agent alias"},
-						"role":          gin.H{"type": "string", "description": "New role to assign"},
-					},
-					"required": []string{"alias"},
+		},
+		{
+			"name":        "delete_persona",
+			"description": "Delete an agent persona",
+			"endpoint":    "/mcp/delete_persona",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{"alias": gin.H{"type": "string", "description": "Persona alias to delete"}},
+				"required":   []string{"alias"},
+			},
+		},
+		{
+			"name":        "list_roles",
+			"description": "List all available persona roles",
+			"endpoint":    "/mcp/list_roles",
+			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+		},
+		{
+			"name":        "get_persona_by_role",
+			"description": "Get the persona assigned to a specific role (returns first match for singleton roles)",
+			"endpoint":    "/mcp/get_persona_by_role",
+			"parameters": gin.H{
+				"type":       "object",
+				"properties": gin.H{"role": gin.H{"type": "string", "description": "Role ID"}},
+				"required":   []string{"role"},
+			},
+		},
+		{
+			"name":        "get_default_persona",
+			"description": "Get the persona currently set as the default for unaddressed messages",
+			"endpoint":    "/mcp/get_default_persona",
+			"parameters":  gin.H{"type": "object", "properties": gin.H{}},
+		},
+		{
+			"name":        "set_default_persona",
+			"description": "Set a persona as the default for unaddressed messages (clears previous default)",
+			"endpoint":    "/mcp/set_default_persona",
+			"parameters": gin.H{
+				"type":       "object",
+				"properties": gin.H{"alias": gin.H{"type": "string", "description": "Persona alias to set as default"}},
+				"required":   []string{"alias"},
+			},
+		},
+		{
+			"name":        "assign_role",
+			"description": "Assign a role to a persona (enforces singleton constraint)",
+			"endpoint":    "/mcp/assign_role",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"alias": gin.H{"type": "string", "description": "Persona alias"},
+					"role":  gin.H{"type": "string", "description": "Role ID to assign"},
 				},
+				"required": []string{"alias", "role"},
 			},
-			{
-				"name":        "delete_persona",
-				"description": "Delete an agent persona",
-				"endpoint":    "/mcp/delete_persona",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{"alias": gin.H{"type": "string", "description": "Persona alias to delete"}},
-					"required":   []string{"alias"},
-				},
-			},
-			{
-				"name":        "list_roles",
-				"description": "List all available persona roles",
-				"endpoint":    "/mcp/list_roles",
-				"parameters":  gin.H{"type": "object", "properties": gin.H{}},
-			},
-			{
-				"name":        "get_persona_by_role",
-				"description": "Get the persona assigned to a specific role (returns first match for singleton roles)",
-				"endpoint":    "/mcp/get_persona_by_role",
-				"parameters": gin.H{
-					"type":       "object",
-					"properties": gin.H{"role": gin.H{"type": "string", "description": "Role ID (e.g. coordinator, memory, worker)"}},
-					"required":   []string{"role"},
-				},
-			},
-			{
-				"name":        "assign_role",
-				"description": "Assign a role to a persona (enforces max_count constraints)",
-				"endpoint":    "/mcp/assign_role",
-				"parameters": gin.H{
-					"type": "object",
-					"properties": gin.H{
-						"alias": gin.H{"type": "string", "description": "Persona alias"},
-						"role":  gin.H{"type": "string", "description": "Role ID to assign"},
-					},
-					"required": []string{"alias", "role"},
-				},
-			},
+		},
 	}
 }
 
@@ -396,25 +445,27 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
 	}
+	// Auto-fill system_prompt from role if not provided.
+	wantDefault := req.IsDefault != nil && *req.IsDefault
+	req.IsDefault = nil
 	requestedRole := req.Role
-	if requestedRole == "" {
-		requestedRole = "worker"
-	}
-	// Auto-fill system_prompt from role default if not provided.
-	if req.SystemPrompt == "" {
+	if req.SystemPrompt == "" && requestedRole != "" {
 		if rolePrompt := h.db.GetRolePrompt(requestedRole); rolePrompt != "" {
 			req.SystemPrompt = rolePrompt
-		} else {
-			req.SystemPrompt = h.defaultPromptForAlias(req.Alias)
 		}
 	}
-	req.Role = "worker" // Create with worker first, then assign if needed.
 	if err := h.db.Create(&req); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "persona already exists"})
 		return
 	}
-	if requestedRole != "worker" {
+	if requestedRole != "" {
 		if err := h.db.AssignRole(req.Alias, requestedRole); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if wantDefault {
+		if err := h.db.SetDefault(req.Alias); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -442,10 +493,27 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 
 	// Handle role change via AssignRole.
 	if roleVal, ok := body["role"]; ok {
-		if roleStr, ok := roleVal.(string); ok && roleStr != "" {
+		if roleStr, ok := roleVal.(string); ok {
 			if err := h.db.AssignRole(alias, roleStr); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
+			}
+		}
+	}
+
+	// Handle is_default toggle.
+	if v, ok := body["is_default"]; ok {
+		if b, ok := v.(bool); ok {
+			if b {
+				if err := h.db.SetDefault(alias); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+			} else {
+				if err := h.db.ClearDefault(alias); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
 			}
 		}
 	}
@@ -508,6 +576,37 @@ func (h *Handler) MCPGetPersonaByRole(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no persona found with role: " + req.Role})
 		return
 	}
+	c.JSON(http.StatusOK, p)
+}
+
+// MCPGetDefaultPersona handles POST /mcp/get_default_persona.
+func (h *Handler) MCPGetDefaultPersona(c *gin.Context) {
+	p, err := h.db.GetDefault()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no default persona set"})
+		return
+	}
+	c.JSON(http.StatusOK, p)
+}
+
+// MCPSetDefaultPersona handles POST /mcp/set_default_persona.
+func (h *Handler) MCPSetDefaultPersona(c *gin.Context) {
+	var req struct {
+		Alias string `json:"alias"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Alias == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
+		return
+	}
+	if _, err := h.db.Get(req.Alias); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		return
+	}
+	if err := h.db.SetDefault(req.Alias); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	p, _ := h.db.Get(req.Alias)
 	c.JSON(http.StatusOK, p)
 }
 
