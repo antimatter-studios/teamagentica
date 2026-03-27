@@ -20,6 +20,7 @@ tasks:
       - >-
         docker run -d
         --name {{.CONTAINER_PROD}}
+        --network teamagentica
         --restart unless-stopped
         --label com.docker.compose.project=teamagentica
         --label com.docker.compose.service=web-dashboard
@@ -53,6 +54,7 @@ tasks:
       - >-
         docker run -d
         --name {{.CONTAINER_DEV}}
+        --network teamagentica
         --label com.docker.compose.project=teamagentica
         --label com.docker.compose.service=web-dashboard-dev
         --label docker-proxy.teamagentica-web-dashboard.host=ui.teamagentica.localhost
