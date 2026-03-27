@@ -6,7 +6,7 @@ services:
     container_name: teamagentica-ui
     build:
       context: ..
-      dockerfile: user-interface/Dockerfile
+      dockerfile: web-dashboard/Dockerfile
       target: prod
     labels:
       docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
@@ -24,7 +24,7 @@ services:
     container_name: teamagentica-ui-dev
     build:
       context: ..
-      dockerfile: user-interface/Dockerfile
+      dockerfile: web-dashboard/Dockerfile
       target: dev
     labels:
       docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
