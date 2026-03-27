@@ -7,7 +7,7 @@ import (
 
 // ExtraMount describes an additional bind mount for a managed container.
 type ExtraMount struct {
-	// VolumeName is a path relative to the storage-volume volumes dir (same
+	// VolumeName is a path relative to the storage-disk volumes dir (same
 	// convention as the primary VolumeName). In dev mode it resolves to a host
 	// bind mount; in prod it maps to a named-volume subpath.
 	VolumeName string `json:"volume_name"`

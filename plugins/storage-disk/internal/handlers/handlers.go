@@ -15,16 +15,16 @@ import (
 )
 
 type Handler struct {
-	dataPath    string
-	volumesPath string
-	debug       bool
+	dataPath  string
+	disksPath string
+	debug     bool
 }
 
-func NewHandler(dataPath, volumesPath string, debug bool) *Handler {
+func NewHandler(dataPath, disksPath string, debug bool) *Handler {
 	return &Handler{
-		dataPath:    dataPath,
-		volumesPath: volumesPath,
-		debug:       debug,
+		dataPath:  dataPath,
+		disksPath: disksPath,
+		debug:     debug,
 	}
 }
 
@@ -56,18 +56,18 @@ func getDiskStats(path string) (*diskStats, error) {
 }
 
 func (h *Handler) Health(c *gin.Context) {
-	stats, err := getDiskStats(h.volumesPath)
+	stats, err := getDiskStats(h.disksPath)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"status": "ok",
-			"plugin": "storage-volume",
+			"plugin": "storage-disk",
 			"error":  err.Error(),
 		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
-		"plugin":     "storage-volume",
+		"plugin":     "storage-disk",
 		"version":    "1.1.0",
 		"disk_usage": stats,
 	})
@@ -75,7 +75,7 @@ func (h *Handler) Health(c *gin.Context) {
 
 // moveToTrash copies a file or directory to .Trash preserving its relative path,
 // then removes the original only after the copy succeeds.
-// root is the base directory (dataPath or volumesPath) that contains .Trash.
+// root is the base directory (dataPath or disksPath) that contains .Trash.
 func (h *Handler) moveToTrash(root, fullPath string) error {
 	rel, err := filepath.Rel(root, fullPath)
 	if err != nil {
@@ -158,7 +158,7 @@ func dirSize(path string) int64 {
 
 // ToolDefs returns the raw tool definitions for use in SDK schema registration.
 func (h *Handler) ToolDefs() interface{} {
-	tools := VolumeToolDefs()
+	tools := DiskToolDefs()
 	tools = append(tools, StorageAPIToolDefs()...)
 	tools = append(tools, TrashToolDefs()...)
 	return tools

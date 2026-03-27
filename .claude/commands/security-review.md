@@ -39,7 +39,7 @@ Launch parallel Explore agents to analyze the attack surface. Focus areas:
 - mTLS between kernel and plugins — certificate validation depth
 
 ### Storage & Data
-- storage-volume: path traversal protection, per-user isolation
+- storage-disk: path traversal protection, per-user isolation
 - storage-sss3: S3 key validation, access control
 - Plugin config secrets (`is_secret` flag) — are they masked in all API responses?
 - Database access patterns — row-level security? Multi-tenancy?

@@ -296,7 +296,7 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	var dataSource string
 	if isWorkspaceManager {
 		dataSource = runtimecfg.Resolve(d.rtCfg.DataMount.WorkspaceManagerSource, vars)
-		log.Printf("workspace:manager plugin %s using storage-volume data at /data", plugin.ID)
+		log.Printf("workspace:manager plugin %s using storage-disk data at /data", plugin.ID)
 	} else {
 		dataSource = runtimecfg.Resolve(d.rtCfg.DataMount.Source, vars)
 	}
@@ -311,8 +311,8 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		mounts = append(mounts, *certMount)
 	}
 
-	// Cross-mount the storage:volume plugin's data into workspace-aware plugins.
-	// workspace:manager is excluded — it already has storage-volume data at /data.
+	// Cross-mount the storage:disk plugin's data into workspace-aware plugins.
+	// workspace:manager is excluded — it already has storage-disk data at /data.
 	if !isWorkspaceManager && (hasCapabilityPrefix(plugin.GetCapabilities(), "agent:chat") ||
 		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:")) {
 		src := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Source, vars)
@@ -452,7 +452,7 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 	// Template vars for managed container config resolution.
 	vars := d.templateVars("", "")
 
-	// Primary volume mount: storage-volume's volumes/{name} → /workspace.
+	// Primary volume mount: storage-disk's volumes/{name} → /workspace.
 	var mounts []mount.Mount
 	if mc.VolumeName != "" {
 		vars["VOLUME_NAME"] = mc.VolumeName

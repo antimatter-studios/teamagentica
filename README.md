@@ -87,7 +87,7 @@ First visit: register at the web UI — first user becomes admin.
 | Plugin | Purpose | Capabilities |
 |--------|---------|-------------|
 | storage-sss3 | S3-compatible storage | storage:api, storage:object |
-| storage-volume | Block storage | storage:volume |
+| storage-disk | Disk storage | storage:disk |
 | user-vscode-server | VS Code environment | workspace:environment |
 | system-teamagentica-plugin-provider | Plugin catalog | marketplace:provider |
 

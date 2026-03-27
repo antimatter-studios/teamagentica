@@ -13,11 +13,11 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
-// DiscordCommandVolumeList handles POST /discord-command/volume/list.
-func (h *Handler) DiscordCommandVolumeList(c *gin.Context) {
-	entries, err := os.ReadDir(h.volumesPath)
+// DiscordCommandDiskList handles POST /discord-command/disk/list.
+func (h *Handler) DiscordCommandDiskList(c *gin.Context) {
+	entries, err := os.ReadDir(h.disksPath)
 	if err != nil {
-		discordText(c, "Failed to read volumes directory.")
+		discordText(c, "Failed to read disks directory.")
 		return
 	}
 
@@ -27,7 +27,7 @@ func (h *Handler) DiscordCommandVolumeList(c *gin.Context) {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		size := dirSize(h.volumeDataPath(e.Name()))
+		size := dirSize(h.diskDataPath(e.Name()))
 		fields = append(fields, pluginsdk.DiscordEmbedFieldResponse{
 			Name:   e.Name(),
 			Value:  formatSize(size),
@@ -36,22 +36,22 @@ func (h *Handler) DiscordCommandVolumeList(c *gin.Context) {
 	}
 
 	if len(fields) == 0 {
-		discordText(c, "No volumes found.")
+		discordText(c, "No disks found.")
 		return
 	}
 
 	c.JSON(http.StatusOK, pluginsdk.DiscordCommandResponse{
 		Type: "embed",
 		Embeds: []pluginsdk.DiscordEmbedResponse{{
-			Title:  fmt.Sprintf("Volumes (%d)", len(fields)),
+			Title:  fmt.Sprintf("Disks (%d)", len(fields)),
 			Color:  0x5865F2,
 			Fields: fields,
 		}},
 	})
 }
 
-// DiscordCommandVolumeCreate handles POST /discord-command/volume/create.
-func (h *Handler) DiscordCommandVolumeCreate(c *gin.Context) {
+// DiscordCommandDiskCreate handles POST /discord-command/disk/create.
+func (h *Handler) DiscordCommandDiskCreate(c *gin.Context) {
 	var req struct {
 		Name string `json:"name"`
 		Type string `json:"type"`
@@ -63,93 +63,93 @@ func (h *Handler) DiscordCommandVolumeCreate(c *gin.Context) {
 		discordText(c, "Name is required.")
 		return
 	}
-	if err := validateVolumeName(name); err != nil {
+	if err := validateDiskName(name); err != nil {
 		discordText(c, err.Error())
 		return
 	}
 
-	volType := req.Type
-	if volType == "" {
-		volType = "storage"
+	diskType := req.Type
+	if diskType == "" {
+		diskType = "storage"
 	}
-	if err := validateVolumeType(volType); err != nil {
+	if err := validateDiskType(diskType); err != nil {
 		discordText(c, err.Error())
 		return
 	}
 
-	dataDir := h.volumeDataPath(name)
+	dataDir := h.diskDataPath(name)
 	if _, err := os.Stat(dataDir); err == nil {
-		discordText(c, fmt.Sprintf("Volume %q already exists.", name))
+		discordText(c, fmt.Sprintf("Disk %q already exists.", name))
 		return
 	}
 
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		log.Printf("[volumes] discord create dir error: %v", err)
-		discordText(c, "Failed to create volume directory.")
+		log.Printf("[disks] discord create dir error: %v", err)
+		discordText(c, "Failed to create disk directory.")
 		return
 	}
 
 	// Save metadata so it shows up with type info.
-	vol := &Volume{
+	d := &Disk{
 		Name:      name,
-		Type:      volType,
+		Type:      diskType,
 		Labels:    map[string]string{},
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := h.saveVolumeMeta(vol); err != nil {
-		log.Printf("[volumes] discord save meta error: %v", err)
-		// Volume dir was created, that's fine — it'll show as unmanaged.
+	if err := h.saveDiskMeta(d); err != nil {
+		log.Printf("[disks] discord save meta error: %v", err)
+		// Disk dir was created, that's fine — it'll show as unmanaged.
 	}
 
 	c.JSON(http.StatusOK, pluginsdk.DiscordCommandResponse{
 		Type:    "text",
-		Content: fmt.Sprintf("Created volume **%s** (type: %s)", name, volType),
+		Content: fmt.Sprintf("Created disk **%s** (type: %s)", name, diskType),
 	})
 }
 
-// DiscordCommandVolumeRename handles POST /discord-command/volume/rename.
-func (h *Handler) DiscordCommandVolumeRename(c *gin.Context) {
+// DiscordCommandDiskRename handles POST /discord-command/disk/rename.
+func (h *Handler) DiscordCommandDiskRename(c *gin.Context) {
 	var req struct {
-		Volume string `json:"volume"`
-		Name   string `json:"name"`
+		Disk string `json:"disk"`
+		Name string `json:"name"`
 	}
 	c.ShouldBindJSON(&req)
 
-	oldName := strings.TrimSpace(req.Volume)
+	oldName := strings.TrimSpace(req.Disk)
 	newName := strings.TrimSpace(req.Name)
 	if oldName == "" || newName == "" {
-		discordText(c, "Both volume and name are required.")
+		discordText(c, "Both disk and name are required.")
 		return
 	}
-	if err := validateVolumeName(newName); err != nil {
+	if err := validateDiskName(newName); err != nil {
 		discordText(c, err.Error())
 		return
 	}
 
-	oldPath := h.volumeDataPath(oldName)
+	oldPath := h.diskDataPath(oldName)
 	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
-		discordText(c, fmt.Sprintf("Volume %q not found.", oldName))
+		discordText(c, fmt.Sprintf("Disk %q not found.", oldName))
 		return
 	}
 
-	newPath := h.volumeDataPath(newName)
+	newPath := h.diskDataPath(newName)
 	if _, err := os.Stat(newPath); err == nil {
-		discordText(c, fmt.Sprintf("Volume %q already exists.", newName))
+		discordText(c, fmt.Sprintf("Disk %q already exists.", newName))
 		return
 	}
 
 	if err := os.Rename(oldPath, newPath); err != nil {
-		log.Printf("[volumes] discord rename error: %v", err)
-		discordText(c, "Failed to rename volume: "+err.Error())
+		log.Printf("[disks] discord rename error: %v", err)
+		discordText(c, "Failed to rename disk: "+err.Error())
 		return
 	}
 
 	// Rename metadata file if it exists.
 	oldMeta := h.metaPath(oldName)
 	if _, err := os.Stat(oldMeta); err == nil {
-		if vol, err := h.loadVolumeMeta(oldName); err == nil {
-			vol.Name = newName
-			h.saveVolumeMeta(vol)
+		if d, err := h.loadDiskMeta(oldName); err == nil {
+			d.Name = newName
+			h.saveDiskMeta(d)
 			os.Remove(oldMeta)
 		} else {
 			os.Rename(oldMeta, h.metaPath(newName))

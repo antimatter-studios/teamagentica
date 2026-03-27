@@ -3,21 +3,21 @@ plugin_env: {}
 data_mount:
   type: bind
   source: "${DATA_DIR}/${PLUGIN_ID}"
-  workspace_manager_source: "${DATA_DIR}/storage-volume"
+  workspace_manager_source: "${DATA_DIR}/storage-disk"
 
 storage_cross_mount:
   type: bind
-  source: "${DATA_DIR}/storage-volume"
+  source: "${DATA_DIR}/storage-disk"
 
 plugin_mounts: []
 
 managed_volume_mount:
   type: bind
-  source: "${DATA_DIR}/storage-volume/volumes/${VOLUME_NAME}"
+  source: "${DATA_DIR}/storage-disk/volumes/${VOLUME_NAME}"
 
 managed_extra_mount:
   type: bind
-  source: "${DATA_DIR}/storage-volume/volumes/${VOLUME_NAME}"
+  source: "${DATA_DIR}/storage-disk/volumes/${VOLUME_NAME}"
 
 managed_plugin_source:
   enabled: false

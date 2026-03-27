@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: storage-volume
+  BINARY_NAME: storage-disk
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-storage-volume:dev
+  DEV_IMAGE: teamagentica-storage-disk:dev
 
 tasks:
   default:

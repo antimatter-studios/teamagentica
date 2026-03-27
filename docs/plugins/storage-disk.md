@@ -1,4 +1,4 @@
-# storage-volume
+# storage-disk
 
 > Local filesystem storage with S3-compatible API and AI agent tool interface.
 
@@ -17,7 +17,7 @@ The Disk Storage plugin provides file storage backed by a local filesystem path 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `STORAGE_DATA_PATH` | string | no | `/data` | Local filesystem path for disk storage |
-| `STORAGE_VOLUME_PORT` | string | no | `8090` | HTTP port for the storage plugin |
+| `STORAGE_DISK_PORT` | string | no | `8090` | HTTP port for the storage plugin |
 | `PLUGIN_ALIASES` | aliases | no | — | Alias configuration |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Log detailed operations |
 

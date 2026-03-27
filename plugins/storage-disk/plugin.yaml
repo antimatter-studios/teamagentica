@@ -1,0 +1,22 @@
+id: storage-disk
+name: "Disk Storage"
+description: "Namespace-isolated disk storage disks. Provides persistent, mountable disks with metadata and type labels (auth, storage). Other plugins discover it via the storage:disk capability."
+group: storage
+version: "1.2.10"
+image: "teamagentica-storage-disk:latest"
+author: teamagentica
+tags: [storage, disk, block, infrastructure, tool]
+capabilities: ["storage:api", "storage:disk", "tool:storage:api", "tool:storage:disk"]
+config_schema:
+  STORAGE_DISKS_PATH:
+    type: string
+    label: "Disks Path"
+    default: "/data/disks"
+    help_text: "Path for namespace-isolated disk storage disks. Each disk is a subdirectory."
+    order: 1
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

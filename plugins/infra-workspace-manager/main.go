@@ -97,7 +97,7 @@ func main() {
 	// Base domain for constructing workspace URLs.
 	baseDomain := pluginConfig["TEAMAGENTICA_BASE_DOMAIN"]
 
-	// Data dir is /data (storage-volume's data, cross-mounted by the kernel).
+	// Data dir is /data (storage-disk's data, cross-mounted by the kernel).
 	// Volumes live at /data/volumes/.
 	workspaceDir := "/data"
 	if err := os.MkdirAll(workspaceDir+"/volumes", 0755); err != nil {

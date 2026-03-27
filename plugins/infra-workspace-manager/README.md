@@ -92,7 +92,7 @@ None.
 
 ## Gotchas / Notes
 
-- Volumes live at `/data/volumes/` -- this is cross-mounted from `storage-volume`'s data
+- Volumes live at `/data/volumes/` -- this is cross-mounted from `storage-disk`'s data
 - Subdomain format is `ws-{8hex}` and never changes, even on rename
 - The local SQLite DB only tracks `container_id -> environment_id` mapping (not duplicating kernel data)
 - Volume listing detects tags (git repo, file extensions) via filesystem inspection

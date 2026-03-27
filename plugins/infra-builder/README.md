@@ -1,6 +1,6 @@
 # infra-builder
 
-Builds Docker images from source code stored in storage-volume volumes.
+Builds Docker images from source code stored in storage-disk volumes.
 
 ## Overview
 

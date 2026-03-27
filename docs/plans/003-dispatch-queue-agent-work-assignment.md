@@ -10,7 +10,7 @@ When a task is assigned to an agent (e.g. `@claude`) in the task tracker, we wan
 2. **Discuss** → user and agent converse via the comment thread — agent judges intent from natural language and decides whether to answer questions, adjust the plan, start work, or stop
 3. **Post-completion** → user can comment on Done/Failed cards, agent responds (can restart if asked)
 
-The cron scheduler becomes the dispatch mechanism — it queues work items and processes them with concurrency control to prevent request spikes.
+The task scheduler becomes the dispatch mechanism — it queues work items and processes them with concurrency control to prevent request spikes.
 
 ## Agent Work Flow (state machine)
 
@@ -107,7 +107,7 @@ A sensible default template is embedded in the scheduler code, but users can ove
 - Only emit if the card has a non-empty `assignee_agent` (so we don't fire events for human-assigned cards)
 
 ### 2. Scheduler: DispatchEntry model
-**File:** `plugins/infra-cron-scheduler/internal/storage/db.go`
+**File:** `plugins/infra-task-scheduler/internal/storage/db.go`
 
 New GORM model:
 ```
@@ -130,7 +130,7 @@ CRUD methods:
 Register in `Open()` alongside existing models.
 
 ### 3. Scheduler: Dispatch config + prompt template
-**File:** `plugins/infra-cron-scheduler/plugin.yaml`
+**File:** `plugins/infra-task-scheduler/plugin.yaml`
 
 Config schema additions:
 - `DISPATCH_ENABLED` (boolean, default true)
@@ -139,7 +139,7 @@ Config schema additions:
 - `DISPATCH_PROMPT_TEMPLATE` (text, multiline) — the master prompt template
 
 ### 4. Scheduler: Core dispatch logic
-**File:** `plugins/infra-cron-scheduler/internal/scheduler/scheduler.go`
+**File:** `plugins/infra-task-scheduler/internal/scheduler/scheduler.go`
 
 #### Event subscriptions
 - `task-tracking:assign` → creates DispatchEntry with type `"triage"`
@@ -209,7 +209,7 @@ Each dispatch is a separate relay call. The agent finishes its current step befo
 On init, reset any "dispatched" entries back to "pending" (crashed mid-flight).
 
 ### 5. Scheduler: API endpoints
-**Files:** `plugins/infra-cron-scheduler/internal/handlers/handlers.go`, `plugins/infra-cron-scheduler/main.go`
+**Files:** `plugins/infra-task-scheduler/internal/handlers/handlers.go`, `plugins/infra-task-scheduler/main.go`
 
 REST:
 - `GET /dispatch/queue` — list entries, optional `?status=` filter
@@ -221,7 +221,7 @@ MCP tools:
 - `POST /mcp/retry_dispatch`
 
 ### 6. Scheduler: main.go wiring
-**File:** `plugins/infra-cron-scheduler/main.go`
+**File:** `plugins/infra-task-scheduler/main.go`
 
 - Parse dispatch config from `FetchConfig()` result
 - Pass `DispatchConfig` to scheduler constructor

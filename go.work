@@ -30,7 +30,7 @@ use (
 	./plugins/network-webhook
 	./plugins/storage-sss3
 	./plugins/system-user-manager
-	./plugins/storage-volume
+	./plugins/storage-disk
 	./plugins/tool-nanobanana
 	./plugins/tool-seedance
 	./plugins/tool-stability

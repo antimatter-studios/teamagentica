@@ -88,9 +88,9 @@ includes:
   storage-sss3:
     taskfile: ./plugins/storage-sss3/Taskfile.yml
     dir: ./plugins/storage-sss3
-  storage-volume:
-    taskfile: ./plugins/storage-volume/Taskfile.yml
-    dir: ./plugins/storage-volume
+  storage-disk:
+    taskfile: ./plugins/storage-disk/Taskfile.yml
+    dir: ./plugins/storage-disk
   system-user-manager:
     taskfile: ./plugins/system-user-manager/Taskfile.yml
     dir: ./plugins/system-user-manager
@@ -214,7 +214,7 @@ tasks:
       - task: network-ngrok-ingress:build
       - task: network-webhook:build
       - task: storage-sss3:build
-      - task: storage-volume:build
+      - task: storage-disk:build
       - task: tool-nanobanana:build
       - task: tool-seedance:build
       - task: tool-task-tracker:build
@@ -251,7 +251,7 @@ tasks:
       - task: network-ngrok-ingress:build:dev
       - task: network-webhook:build:dev
       - task: storage-sss3:build:dev
-      - task: storage-volume:build:dev
+      - task: storage-disk:build:dev
       - task: tool-nanobanana:build:dev
       - task: tool-seedance:build:dev
       - task: tool-task-tracker:build:dev

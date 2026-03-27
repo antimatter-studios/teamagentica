@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/storage-volume/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/storage-disk/internal/handlers"
 )
 
 func main() {
@@ -38,30 +38,30 @@ func main() {
 		Version:      pluginsdk.DevVersion(manifest.Version),
 		DiscordCommands: []pluginsdk.DiscordCommand{
 			{
-				Name:        "volume",
-				Description: "Manage storage volumes",
+				Name:        "disk",
+				Description: "Manage storage disks",
 				Subcommands: []pluginsdk.DiscordSubcommand{
 					{
 						Name:        "list",
-						Description: "List all storage volumes with size and metadata",
-						Endpoint:    "/discord-command/volume/list",
+						Description: "List all storage disks with size and metadata",
+						Endpoint:    "/discord-command/disk/list",
 					},
 					{
 						Name:        "create",
-						Description: "Create a new storage volume",
-						Endpoint:    "/discord-command/volume/create",
+						Description: "Create a new storage disk",
+						Endpoint:    "/discord-command/disk/create",
 						Options: []pluginsdk.DiscordCommandOption{
-							{Name: "name", Description: "Volume name (alphanumeric, hyphens, underscores, dots)", Type: "string", Required: true},
-							{Name: "type", Description: "Volume type: auth or storage (default: storage)", Type: "string"},
+							{Name: "name", Description: "Disk name (alphanumeric, hyphens, underscores, dots)", Type: "string", Required: true},
+							{Name: "type", Description: "Disk type: auth or storage (default: storage)", Type: "string"},
 						},
 					},
 					{
 						Name:        "rename",
-						Description: "Rename an existing volume",
-						Endpoint:    "/discord-command/volume/rename",
+						Description: "Rename an existing disk",
+						Endpoint:    "/discord-command/disk/rename",
 						Options: []pluginsdk.DiscordCommandOption{
-							{Name: "volume", Description: "Current volume name", Type: "string", Required: true},
-							{Name: "name", Description: "New volume name", Type: "string", Required: true},
+							{Name: "disk", Description: "Current disk name", Type: "string", Required: true},
+							{Name: "name", Description: "New disk name", Type: "string", Required: true},
 						},
 					},
 				},
@@ -89,24 +89,24 @@ func main() {
 	// Fetch plugin config from kernel API.
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
-		log.Fatalf("[storage-volume] failed to fetch plugin config: %v", err)
+		log.Fatalf("[storage-disk] failed to fetch plugin config: %v", err)
 	}
 
 	// Extract config values with defaults.
 	dataPath := configOrDefault(pluginConfig, "STORAGE_DATA_PATH", "/data")
-	volumesPath := configOrDefault(pluginConfig, "STORAGE_VOLUMES_PATH", "/data/volumes")
+	disksPath := configOrDefault(pluginConfig, "STORAGE_DISKS_PATH", "/data/disks")
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
-	port := parseIntOrDefault(configOrDefault(pluginConfig, "STORAGE_VOLUME_PORT", ""), defaultPort)
+	port := parseIntOrDefault(configOrDefault(pluginConfig, "STORAGE_DISK_PORT", ""), defaultPort)
 
-	// Ensure volumes and metadata directories exist.
-	for _, dir := range []string{volumesPath, filepath.Join(dataPath, "meta")} {
+	// Ensure disks and metadata directories exist.
+	for _, dir := range []string{disksPath, filepath.Join(dataPath, "meta")} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Printf("[storage-volume] WARNING: failed to create directory %s: %v (some operations may fail)", dir, err)
+			log.Printf("[storage-disk] WARNING: failed to create directory %s: %v (some operations may fail)", dir, err)
 		}
 	}
 
 	router := gin.Default()
-	h = handlers.NewHandler(dataPath, volumesPath, debug)
+	h = handlers.NewHandler(dataPath, disksPath, debug)
 
 	router.GET("/health", h.Health)
 
@@ -125,23 +125,23 @@ func main() {
 	router.POST("/trash/restore", h.RestoreTrash)
 	router.POST("/trash/empty", h.EmptyTrash)
 
-	// storage:disk — volume management endpoints.
-	router.POST("/volumes", h.CreateVolume)
-	router.GET("/volumes", h.ListVolumes)
-	router.GET("/volumes/:name", h.GetVolume)
-	router.GET("/volumes/:name/path", h.GetVolumePath)
-	router.DELETE("/volumes/:name", h.DeleteVolume)
+	// storage:disk — disk management endpoints.
+	router.POST("/disks", h.CreateDisk)
+	router.GET("/disks", h.ListDisks)
+	router.GET("/disks/:name", h.GetDisk)
+	router.GET("/disks/:name/path", h.GetDiskPath)
+	router.DELETE("/disks/:name", h.DeleteDisk)
 
 	// Discord slash command handlers.
-	router.POST("/discord-command/volume/list", h.DiscordCommandVolumeList)
-	router.POST("/discord-command/volume/create", h.DiscordCommandVolumeCreate)
-	router.POST("/discord-command/volume/rename", h.DiscordCommandVolumeRename)
+	router.POST("/discord-command/disk/list", h.DiscordCommandDiskList)
+	router.POST("/discord-command/disk/create", h.DiscordCommandDiskCreate)
+	router.POST("/discord-command/disk/rename", h.DiscordCommandDiskRename)
 
 	// Tool interface for AI agents.
 	router.GET("/mcp", h.Tools)
-	router.POST("/mcp/create_volume", h.ToolCreateVolume)
-	router.POST("/mcp/list_volumes", h.ToolListVolumes)
-	router.POST("/mcp/delete_volume", h.ToolDeleteVolume)
+	router.POST("/mcp/create_disk", h.ToolCreateDisk)
+	router.POST("/mcp/list_disks", h.ToolListDisks)
+	router.POST("/mcp/delete_disk", h.ToolDeleteDisk)
 	router.POST("/mcp/list_files", h.ToolListFiles)
 	router.POST("/mcp/read_file", h.ToolReadFile)
 	router.POST("/mcp/write_file", h.ToolWriteFile)
