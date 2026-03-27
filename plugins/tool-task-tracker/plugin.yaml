@@ -2,7 +2,7 @@ id: tool-task-tracker
 name: "Task Tracker"
 description: "Kanban-style task boards for teams and agents"
 group: tool
-version: "1.0.25"
+version: "1.0.26"
 image: "teamagentica-tool-task-tracker:latest"
 author: teamagentica
 tags: [tasks, kanban, productivity]

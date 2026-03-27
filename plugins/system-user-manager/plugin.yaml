@@ -2,24 +2,12 @@ id: system-user-manager
 name: "User Manager"
 description: "User authentication, account management, service tokens, and audit logging"
 group: infrastructure
-version: "0.1.10"
+version: "0.1.11"
 image: "teamagentica-system-user-manager:latest"
 author: teamagentica
 tags: [users, auth, login, security, accounts, jwt]
 capabilities: ["system:users", "user:manage"]
 config_schema:
-  PLUGIN_PORT:
-    type: number
-    label: "Port"
-    default: "8090"
-    required: false
-    order: 1
-  PLUGIN_DATA_PATH:
-    type: string
-    label: "Data Path"
-    default: "/data"
-    required: false
-    order: 2
   JWT_EXPIRY_HOURS:
     type: number
     label: "Token Expiry (hours)"

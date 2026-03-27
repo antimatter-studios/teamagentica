@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -50,16 +49,7 @@ func main() {
 	}
 
 	port := defaultPort
-	if v := pluginConfig["PLUGIN_PORT"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
-
-	dataPath := pluginConfig["PLUGIN_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	dataPath := "/data"
 
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 	if debug {

@@ -65,10 +65,7 @@ func main() {
 		log.Println("Debug mode enabled")
 	}
 
-	dataPath := pluginConfig["PLUGIN_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	dataPath := "/data"
 
 	db, err := storage.Open(dataPath)
 	if err != nil {

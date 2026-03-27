@@ -54,7 +54,7 @@ func main() {
 
 	model := configOrDefault(pluginConfig, "OLLAMA_MODEL", "llama3.2:3b")
 	ollamaEndpoint := "http://localhost:11434" // local Ollama managed by supervisord
-	dataPath := configOrDefault(pluginConfig, "PLUGIN_DATA_PATH", "/data")
+	dataPath := "/data"
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 
 	toolLoopLimit := 20

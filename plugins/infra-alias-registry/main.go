@@ -6,8 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
@@ -45,22 +43,8 @@ func main() {
 	ctx := context.Background()
 	sdkClient.Start(ctx)
 
-	pluginConfig, err := sdkClient.FetchConfig()
-	if err != nil {
-		log.Fatalf("failed to fetch plugin config: %v", err)
-	}
-
 	port := defaultPort
-	if v := pluginConfig["PLUGIN_PORT"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
-
-	dataPath := pluginConfig["PLUGIN_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	dataPath := "/data"
 
 	db, err := storage.Open(dataPath)
 	if err != nil {

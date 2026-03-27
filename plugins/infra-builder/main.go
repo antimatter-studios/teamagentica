@@ -6,8 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
@@ -54,11 +52,6 @@ func main() {
 	}
 
 	port := defaultPort
-	if v := pluginConfig["PLUGIN_PORT"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
 
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 	if debug {

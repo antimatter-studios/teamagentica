@@ -49,16 +49,7 @@ func main() {
 
 	sdkClient.Start(context.Background())
 
-	pluginConfig, err := sdkClient.FetchConfig()
-	if err != nil {
-		log.Printf("WARNING: failed to fetch plugin config: %v", err)
-		pluginConfig = map[string]string{}
-	}
-
-	dataPath := pluginConfig["PLUGIN_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	dataPath := "/data"
 
 	db, err := storage.Open(dataPath)
 	if err != nil {

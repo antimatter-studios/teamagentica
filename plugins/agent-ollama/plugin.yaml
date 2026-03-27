@@ -2,7 +2,7 @@ id: agent-ollama
 name: "Ollama Agent"
 description: "AI agent powered by local Ollama models — free, private, no API keys required"
 group: agents
-version: "0.1.7"
+version: "0.1.8"
 image: "teamagentica-agent-ollama:latest"
 author: teamagentica
 tags: [chat, ai, agent, ollama, local]

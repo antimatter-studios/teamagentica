@@ -44,23 +44,12 @@ func main() {
 	ctx := context.Background()
 	sdkClient.Start(ctx)
 
+	port := defaultPort
+	dataPath := "/data"
+
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
 		log.Fatalf("failed to fetch plugin config: %v", err)
-	}
-
-	// --- Configure port ---
-	port := defaultPort
-	if v := pluginConfig["PLUGIN_PORT"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
-
-	// --- Configure data path ---
-	dataPath := pluginConfig["PLUGIN_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
 	}
 
 	// --- Open database (before JWT — secret is stored here) ---
