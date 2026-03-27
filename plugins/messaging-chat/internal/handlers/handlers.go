@@ -154,7 +154,7 @@ func (h *Handler) GetConversation(c *gin.Context) {
 	}
 	conv, err := h.db.GetConversation(uint(id))
 	if err != nil || conv.UserID != userID {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("conversation %d not found", id)})
 		return
 	}
 	msgs, err := h.db.ListMessages(uint(id))
@@ -182,7 +182,7 @@ func (h *Handler) UpdateConversation(c *gin.Context) {
 	}
 	conv, err := h.db.GetConversation(uint(id))
 	if err != nil || conv.UserID != userID {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("conversation %d not found", id)})
 		return
 	}
 	var req updateConversationReq
@@ -211,7 +211,7 @@ func (h *Handler) DeleteConversation(c *gin.Context) {
 	}
 	conv, err := h.db.GetConversation(uint(id))
 	if err != nil || conv.UserID != userID {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("conversation %d not found", id)})
 		return
 	}
 
@@ -239,7 +239,7 @@ func (h *Handler) MarkRead(c *gin.Context) {
 	}
 	conv, err := h.db.GetConversation(uint(id))
 	if err != nil || conv.UserID != userID {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("conversation %d not found", id)})
 		return
 	}
 	if err := h.db.MarkRead(uint(id)); err != nil {
@@ -269,7 +269,7 @@ func (h *Handler) SendMessage(c *gin.Context) {
 	}
 	conv, err := h.db.GetConversation(uint(convID))
 	if err != nil || conv.UserID != userID {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("conversation %d not found", convID)})
 		return
 	}
 
@@ -712,7 +712,7 @@ func (h *Handler) ServeFile(c *gin.Context) {
 
 	reader, contentType, err := h.sdk.StorageRead(ctx, key)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("file %q not found", key)})
 		return
 	}
 	defer reader.Close()

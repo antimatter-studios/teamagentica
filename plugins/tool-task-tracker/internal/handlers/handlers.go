@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -205,7 +206,7 @@ func (h *Handler) CreateBoard(c *gin.Context) {
 func (h *Handler) GetBoard(c *gin.Context) {
 	b, err := h.db.GetBoard(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "board not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", c.Param("id"))})
 		return
 	}
 	c.JSON(http.StatusOK, b)
@@ -214,7 +215,7 @@ func (h *Handler) GetBoard(c *gin.Context) {
 func (h *Handler) UpdateBoard(c *gin.Context) {
 	b, err := h.db.GetBoard(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "board not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", c.Param("id"))})
 		return
 	}
 	var req struct {
@@ -260,7 +261,7 @@ func (h *Handler) ListColumns(c *gin.Context) {
 func (h *Handler) CreateColumn(c *gin.Context) {
 	boardID := c.Param("id")
 	if _, err := h.db.GetBoard(boardID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "board not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", boardID)})
 		return
 	}
 	var req struct {
@@ -287,7 +288,7 @@ func (h *Handler) CreateColumn(c *gin.Context) {
 func (h *Handler) UpdateColumn(c *gin.Context) {
 	col, err := h.db.GetColumn(c.Param("cid"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "column not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("column %q not found", c.Param("cid"))})
 		return
 	}
 	var req struct {
@@ -333,7 +334,7 @@ func (h *Handler) ListCards(c *gin.Context) {
 func (h *Handler) CreateCard(c *gin.Context) {
 	boardID := c.Param("id")
 	if _, err := h.db.GetBoard(boardID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "board not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", boardID)})
 		return
 	}
 	var req struct {
@@ -375,7 +376,7 @@ func (h *Handler) CreateCard(c *gin.Context) {
 func (h *Handler) UpdateCard(c *gin.Context) {
 	card, err := h.db.GetCard(c.Param("cid"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", c.Param("cid"))})
 		return
 	}
 	oldAssigneeID := card.AssigneeID
@@ -447,7 +448,7 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 func (h *Handler) GetCard(c *gin.Context) {
 	card, err := h.db.GetCard(c.Param("cid"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", c.Param("cid"))})
 		return
 	}
 	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
@@ -476,7 +477,7 @@ func (h *Handler) CreateComment(c *gin.Context) {
 	cardID := c.Param("cid")
 	card, err := h.db.GetCard(cardID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", cardID)})
 		return
 	}
 	var req struct {
@@ -692,7 +693,7 @@ func (h *Handler) MCPListTasksByStatus(c *gin.Context) {
 	}
 	col, err := h.db.GetColumn(req.ColumnID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "status not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("status %q not found", req.ColumnID)})
 		return
 	}
 	cards, err := h.db.ListCardsByColumn(req.ColumnID)
@@ -725,7 +726,7 @@ func (h *Handler) MCPCreateTask(c *gin.Context) {
 		return
 	}
 	if _, err := h.db.GetBoard(req.BoardID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "board not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", req.BoardID)})
 		return
 	}
 	card := &storage.Card{
@@ -760,7 +761,7 @@ func (h *Handler) MCPSetTaskState(c *gin.Context) {
 	}
 	card, err := h.db.GetCard(req.CardID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", req.CardID)})
 		return
 	}
 	card.ColumnID = req.ColumnID
@@ -791,7 +792,7 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 	}
 	card, err := h.db.GetCard(req.CardID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", req.CardID)})
 		return
 	}
 	oldAssigneeID := card.AssigneeID
@@ -850,7 +851,7 @@ func (h *Handler) MCPAddComment(c *gin.Context) {
 	}
 	card, err := h.db.GetCard(req.CardID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "card not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", req.CardID)})
 		return
 	}
 	authorID := req.AuthorID

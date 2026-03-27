@@ -160,7 +160,7 @@ func (h *PluginHandler) GetManagedContainer(c *gin.Context) {
 
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("cid"))})
 		return
 	}
 	c.JSON(http.StatusOK, mc)
@@ -175,7 +175,7 @@ func (h *PluginHandler) DeleteManagedContainer(c *gin.Context) {
 
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("cid"))})
 		return
 	}
 
@@ -201,7 +201,7 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("cid"))})
 		return
 	}
 
@@ -255,7 +255,7 @@ func (h *PluginHandler) StartManagedContainer(c *gin.Context) {
 
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("cid"))})
 		return
 	}
 
@@ -291,7 +291,7 @@ func (h *PluginHandler) GetManagedContainerLogs(c *gin.Context) {
 
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("cid"))})
 		return
 	}
 
@@ -322,7 +322,7 @@ func (h *PluginHandler) ListAllManagedContainers(c *gin.Context) {
 func (h *PluginHandler) ForceDeleteManagedContainer(c *gin.Context) {
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ?", c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("id"))})
 		return
 	}
 
@@ -370,7 +370,7 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 
 	var mc models.ManagedContainer
 	if err := h.db().First(&mc, "id = ?", containerID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", containerID)})
 		return
 	}
 

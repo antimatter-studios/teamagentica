@@ -33,7 +33,7 @@ func (h *Handler) Me(c *gin.Context) {
 		}
 		user, err := h.db.GetUserByID(claims.UserID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("user %d not found", claims.UserID)})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -48,7 +48,7 @@ func (h *Handler) Me(c *gin.Context) {
 
 	user, err := h.db.GetUserByID(userID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("user %d not found", userID)})
 		return
 	}
 
@@ -81,7 +81,7 @@ func (h *Handler) GetUser(c *gin.Context) {
 	user, err := h.db.GetUserByID(uint(id))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("user %d not found", id)})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user"})
@@ -107,7 +107,7 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	user, err := h.db.GetUserByID(uint(id))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("user %d not found", id)})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user"})
@@ -163,7 +163,7 @@ func (h *Handler) BanUser(c *gin.Context) {
 	user, err := h.db.GetUserByID(uint(id))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("user %d not found", id)})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user"})
@@ -209,7 +209,7 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 
 	if err := h.db.DeleteUser(uint(id)); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("user %d not found", id)})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})

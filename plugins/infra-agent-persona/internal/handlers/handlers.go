@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -44,7 +45,7 @@ func (h *Handler) GetPersona(c *gin.Context) {
 	alias := c.Param("alias")
 	p, err := h.db.Get(alias)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
 		return
 	}
 	c.JSON(http.StatusOK, p)
@@ -98,7 +99,7 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 
 	// Verify it exists.
 	if _, err := h.db.Get(alias); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
 		return
 	}
 
@@ -179,7 +180,7 @@ func (h *Handler) GetDefaultPersona(c *gin.Context) {
 func (h *Handler) SetDefaultPersona(c *gin.Context) {
 	alias := c.Param("alias")
 	if _, err := h.db.Get(alias); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
 		return
 	}
 	if err := h.db.SetDefault(alias); err != nil {
@@ -228,7 +229,7 @@ func (h *Handler) GetRole(c *gin.Context) {
 	id := c.Param("id")
 	r, err := h.db.GetRole(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "role not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("role %q not found", id)})
 		return
 	}
 	c.JSON(http.StatusOK, r)
@@ -261,7 +262,7 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 	id := c.Param("id")
 
 	if _, err := h.db.GetRole(id); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "role not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("role %q not found", id)})
 		return
 	}
 
@@ -442,7 +443,7 @@ func (h *Handler) MCPGetPersona(c *gin.Context) {
 	}
 	p, err := h.db.Get(req.Alias)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", req.Alias)})
 		return
 	}
 	c.JSON(http.StatusOK, p)
@@ -502,7 +503,7 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 		return
 	}
 	if _, err := h.db.Get(alias); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
 		return
 	}
 
@@ -627,7 +628,7 @@ func (h *Handler) MCPSetDefaultPersona(c *gin.Context) {
 		return
 	}
 	if _, err := h.db.Get(req.Alias); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "persona not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", req.Alias)})
 		return
 	}
 	if err := h.db.SetDefault(req.Alias); err != nil {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -120,7 +121,7 @@ func (h *Handler) ListJobs(c *gin.Context) {
 func (h *Handler) GetJob(c *gin.Context) {
 	job, err := h.db.GetJob(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("job %q not found", c.Param("id"))})
 		return
 	}
 	c.JSON(http.StatusOK, job)
@@ -141,7 +142,7 @@ func (h *Handler) UpdateJob(c *gin.Context) {
 	id := c.Param("id")
 	job, err := h.db.GetJob(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("job %q not found", id)})
 		return
 	}
 
@@ -201,7 +202,7 @@ func (h *Handler) UpdateJob(c *gin.Context) {
 
 func (h *Handler) DeleteJob(c *gin.Context) {
 	if err := h.db.DeleteJob(c.Param("id")); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("job %q not found", c.Param("id"))})
 		return
 	}
 	h.sched.Reload()
@@ -379,7 +380,7 @@ func (h *Handler) MCPUpdateJob(c *gin.Context) {
 
 	job, err := h.db.GetJob(req.JobID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("job %q not found", req.JobID)})
 		return
 	}
 
@@ -429,7 +430,7 @@ func (h *Handler) MCPDeleteJob(c *gin.Context) {
 		return
 	}
 	if err := h.db.DeleteJob(req.JobID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("job %q not found", req.JobID)})
 		return
 	}
 	h.sched.Reload()
@@ -493,7 +494,7 @@ func (h *Handler) ListDispatchQueue(c *gin.Context) {
 func (h *Handler) GetDispatchEntry(c *gin.Context) {
 	entry, err := h.db.GetDispatchEntry(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "dispatch entry not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("dispatch entry %q not found", c.Param("id"))})
 		return
 	}
 	c.JSON(http.StatusOK, entry)
@@ -550,7 +551,7 @@ func (h *Handler) MCPRetryDispatch(c *gin.Context) {
 	}
 	entry, err := h.db.GetDispatchEntry(req.EntryID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "dispatch entry not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("dispatch entry %q not found", req.EntryID)})
 		return
 	}
 	if entry.Status != "failed" {

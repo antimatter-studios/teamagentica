@@ -393,7 +393,7 @@ func (h *Handler) GetWorkspace(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+	c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
 }
 
 // RenameWorkspace updates display name and volume directory slug.
@@ -440,7 +440,7 @@ func (h *Handler) RenameWorkspace(c *gin.Context) {
 		}
 	}
 	if found == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
 		return
 	}
 
@@ -607,7 +607,7 @@ func (h *Handler) PersistWorkspace(c *gin.Context) {
 		}
 	}
 	if volumeName == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
 		return
 	}
 
@@ -828,7 +828,7 @@ func (h *Handler) DeleteVolume(c *gin.Context) {
 
 	volumePath := filepath.Join(h.workspaceDir, "volumes", name)
 	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "volume not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("volume %q not found", name)})
 		return
 	}
 

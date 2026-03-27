@@ -44,7 +44,7 @@ func (h *Handler) broadcastAliasChange(action string, a *storage.Alias) {
 func (h *Handler) GetAlias(c *gin.Context) {
 	a, err := h.db.Get(c.Param("name"))
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "alias not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", c.Param("name"))})
 		return
 	}
 	if err != nil {
@@ -111,7 +111,7 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 	name := c.Param("name")
 	a, err := h.db.Get(name)
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "alias not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", name)})
 		return
 	}
 	if err != nil {
@@ -172,7 +172,7 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 func (h *Handler) DeleteAlias(c *gin.Context) {
 	err := h.db.Delete(c.Param("name"))
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "alias not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", c.Param("name"))})
 		return
 	}
 	if err != nil {
@@ -189,7 +189,7 @@ func (h *Handler) DeleteAlias(c *gin.Context) {
 func (h *Handler) GetPersona(c *gin.Context) {
 	a, err := h.db.Get(c.Param("alias"))
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", c.Param("alias"))})
 		return
 	}
 	if err != nil {
@@ -303,7 +303,7 @@ func (h *Handler) MCPGetAlias(c *gin.Context) {
 	}
 	a, err := h.db.Get(req.Name)
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusOK, gin.H{"error": "alias not found"})
+		c.JSON(http.StatusOK, gin.H{"error": fmt.Sprintf("alias %q not found", req.Name)})
 		return
 	}
 	if err != nil {
@@ -361,7 +361,7 @@ func (h *Handler) MCPUpdateAlias(c *gin.Context) {
 	}
 	a, err := h.db.Get(req.Name)
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusOK, gin.H{"error": "alias not found"})
+		c.JSON(http.StatusOK, gin.H{"error": fmt.Sprintf("alias %q not found", req.Name)})
 		return
 	}
 	if err != nil {
@@ -395,7 +395,7 @@ func (h *Handler) MCPDeleteAlias(c *gin.Context) {
 		return
 	}
 	if err := h.db.Delete(req.Name); errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusOK, gin.H{"error": "alias not found"})
+		c.JSON(http.StatusOK, gin.H{"error": fmt.Sprintf("alias %q not found", req.Name)})
 		return
 	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
