@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useFileStore } from "../stores/fileStore";
 import { useUploadStore } from "../stores/uploadStore";
 import { apiClient } from "../api/client";
+import ConfirmDialog from "./ConfirmDialog";
 import { formatBytes, filenameFromKey, folderName } from "@teamagentica/api-client";
 
 /** Simple file-type icon based on content_type or filename extension. */
@@ -607,94 +608,40 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
       )}
       <UploadQueue />
 
-      {/* Delete confirmation modal */}
       {deleteModal && (
-        <div className="modal-overlay" onClick={() => setDeleteModal(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
-            <div className="modal-header">
-              <div className="modal-title">{deleteModal.permanent ? "Permanently delete" : "Delete"}</div>
-            </div>
-            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
-              Are you sure you want to {deleteModal.permanent ? "permanently delete" : "delete"}{" "}
-              <strong>"{filenameFromKey(deleteModal.key)}"</strong>?
-              {deleteModal.permanent && " This cannot be undone."}
-            </p>
-            <div className="modal-actions">
-              <button className="modal-btn modal-btn--ghost" onClick={() => setDeleteModal(null)}>
-                No
-              </button>
-              <button
-                className="modal-btn modal-btn--danger"
-                onClick={() => {
-                  if (deleteModal.permanent) {
-                    emptyTrash(deleteModal.key);
-                  } else {
-                    deleteFile(deleteModal.key);
-                  }
-                  setDeleteModal(null);
-                }}
-              >
-                Yes
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title={deleteModal.permanent ? "Permanently delete" : "Delete"}
+          onConfirm={() => {
+            if (deleteModal.permanent) { emptyTrash(deleteModal.key); } else { deleteFile(deleteModal.key); }
+            setDeleteModal(null);
+          }}
+          onCancel={() => setDeleteModal(null)}
+        >
+          Are you sure you want to {deleteModal.permanent ? "permanently delete" : "delete"}{" "}
+          <strong>"{filenameFromKey(deleteModal.key)}"</strong>?
+          {deleteModal.permanent && " This cannot be undone."}
+        </ConfirmDialog>
       )}
 
-      {/* Empty trash confirmation modal */}
       {emptyTrashModal && (
-        <div className="modal-overlay" onClick={() => setEmptyTrashModal(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
-            <div className="modal-header">
-              <div className="modal-title">Empty Trash</div>
-            </div>
-            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
-              Are you sure you want to permanently delete all items in the trash? This cannot be undone.
-            </p>
-            <div className="modal-actions">
-              <button className="modal-btn modal-btn--ghost" onClick={() => setEmptyTrashModal(false)}>
-                No
-              </button>
-              <button
-                className="modal-btn modal-btn--danger"
-                onClick={() => {
-                  emptyTrash();
-                  setEmptyTrashModal(false);
-                }}
-              >
-                Yes
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Empty Trash"
+          onConfirm={() => { emptyTrash(); setEmptyTrashModal(false); }}
+          onCancel={() => setEmptyTrashModal(false)}
+        >
+          Are you sure you want to permanently delete all items in the trash? This cannot be undone.
+        </ConfirmDialog>
       )}
 
-      {/* Restore confirmation modal */}
       {restoreModal && (
-        <div className="modal-overlay" onClick={() => setRestoreModal(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
-            <div className="modal-header">
-              <div className="modal-title">Restore file</div>
-            </div>
-            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
-              Do you want to restore <strong>"{filenameFromKey(restoreModal)}"</strong>?
-            </p>
-            <div className="modal-actions">
-              <button className="modal-btn modal-btn--ghost" onClick={() => setRestoreModal(null)}>
-                No
-              </button>
-              <button
-                className="modal-btn modal-btn--primary"
-                onClick={() => {
-                  restoreFile(restoreModal);
-                  setRestoreModal(null);
-                }}
-              >
-                Yes
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Restore file"
+          variant="primary"
+          onConfirm={() => { restoreFile(restoreModal); setRestoreModal(null); }}
+          onCancel={() => setRestoreModal(null)}
+        >
+          Do you want to restore <strong>"{filenameFromKey(restoreModal)}"</strong>?
+        </ConfirmDialog>
       )}
     </div>
   );

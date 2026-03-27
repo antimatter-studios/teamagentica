@@ -33,6 +33,8 @@ export interface SchemaSection {
   fields: { key: string; value: string }[];
   /** Structured list items (e.g. DAGs) — present when the schema value is an array of objects. */
   items?: Record<string, unknown>[];
+  /** Table display: column keys to render from each item. */
+  columns?: string[];
 }
 
 export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
@@ -187,6 +189,12 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
           continue;
         }
         const kvMap = raw as Record<string, unknown>;
+        // Table display wrapper: { _display: "table", _columns: [...], items: [...] }
+        if (kvMap._display === "table" && Array.isArray(kvMap.items)) {
+          const columns = Array.isArray(kvMap._columns) ? (kvMap._columns as string[]) : undefined;
+          sections.push({ name: sectionName, fields: [], items: kvMap.items as Record<string, unknown>[], columns });
+          continue;
+        }
         const sectionFields = Object.entries(kvMap)
           .map(([k, v]) => ({
             key: k,

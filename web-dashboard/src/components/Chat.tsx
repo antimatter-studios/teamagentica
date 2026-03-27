@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useChatStore } from "../stores/chatStore";
 import { apiClient } from "../api/client";
 import type { Attachment } from "@teamagentica/api-client";
+import ConfirmDialog from "./ConfirmDialog";
 import ChatAttachmentPreview from "./ChatAttachmentPreview";
 
 function ElapsedTimer({ startedAt }: { startedAt: number }) {
@@ -501,30 +502,15 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
         )}
       </div>
       {deleteConfirm && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
-            <div className="modal-header">
-              <div className="modal-title">Delete conversation</div>
-            </div>
-            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
-              Delete <strong>"{deleteConfirm.title}"</strong>? This cannot be undone.
-            </p>
-            <div className="modal-actions">
-              <button className="modal-btn modal-btn--ghost" onClick={() => setDeleteConfirm(null)}>
-                Cancel
-              </button>
-              <button
-                className="modal-btn modal-btn--danger"
-                onClick={() => {
-                  removeConversation(deleteConfirm.id);
-                  setDeleteConfirm(null);
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Delete conversation"
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          onConfirm={() => { removeConversation(deleteConfirm.id); setDeleteConfirm(null); }}
+          onCancel={() => setDeleteConfirm(null)}
+        >
+          Delete <strong>"{deleteConfirm.title}"</strong>? This cannot be undone.
+        </ConfirmDialog>
       )}
     </div>
   );

@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
+import { useAgentStore } from "../../stores/agentStore";
 import { apiClient } from "../../api/client";
 import type { RegistryAlias, CreateAliasRequest, Plugin } from "@teamagentica/api-client";
+import ConfirmDialog from "../ConfirmDialog";
+import SaveButton from "../SaveButton";
 
 interface Props {
   alias?: RegistryAlias;
   plugins: Plugin[];
-  onSave: () => void;
+  onSave: (createdId?: string) => void;
   onCancel: () => void;
 }
 
 export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
+  const { createAlias, updateAlias, deleteAlias } = useAgentStore();
   const isEdit = !!alias;
   const [name, setName] = useState(alias?.name ?? "");
   const [plugin, setPlugin] = useState(alias?.plugin ?? "");
@@ -20,6 +24,7 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,7 +56,7 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
     setError(null);
     try {
       if (isEdit) {
-        await apiClient.agents.update(alias!.name, {
+        await updateAlias(alias!.name, {
           type: "agent",
           plugin: plugin.trim(),
           provider: provider || undefined,
@@ -65,29 +70,29 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
           model: model || undefined,
           system_prompt: systemPrompt || undefined,
         };
-        await apiClient.agents.create(req);
+        await createAlias(req);
       }
-      onSave();
+      onSave(isEdit ? undefined : name.trim());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
-  }, [name, plugin, provider, model, systemPrompt, isEdit, alias, onSave]);
+  }, [name, plugin, provider, model, systemPrompt, isEdit, alias, onSave, createAlias, updateAlias]);
 
   const remove = useCallback(async () => {
     if (!alias) return;
     setDeleting(true);
     setError(null);
     try {
-      await apiClient.agents.delete(alias.name);
+      await deleteAlias(alias.name);
       onSave();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     } finally {
       setDeleting(false);
     }
-  }, [alias, onSave]);
+  }, [alias, onSave, deleteAlias]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") onCancel();
@@ -96,24 +101,21 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
   return (
     <div className="agents-form" onKeyDown={handleKeyDown}>
       <h3 className="agents-form-title">
-        {isEdit ? <>Edit Agent: <span className="agents-name-val">@{alias!.name}</span></> : "Create Agent"}
+        {isEdit ? <>Edit Agent: <span className="agents-name-val">@{name}</span></> : "Create Agent"}
       </h3>
 
       {error && <div className="agents-error" style={{ marginBottom: 16 }}>{error}</div>}
 
       <div className="agents-form-field">
         <label className="agents-form-label">Name</label>
-        {isEdit ? (
-          <span className="agents-name-val">@{alias!.name}</span>
-        ) : (
-          <input
-            className="agents-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="alias name"
-            autoFocus
-          />
-        )}
+        <input
+          className="agents-input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="alias name"
+          autoFocus={!isEdit}
+        />
+        {name.trim() && <span className="agents-form-hint">use <strong>@{name.trim()}</strong> in your prompts</span>}
       </div>
 
       <div className="agents-form-field">
@@ -174,14 +176,12 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
       </div>
 
       <div className="agents-form-actions">
-        <button className="agents-save-btn" onClick={save} disabled={saving || !name.trim() || !plugin.trim()}>
-          {saving ? "..." : "Save"}
-        </button>
+        <SaveButton onClick={save} disabled={saving || !name.trim() || !plugin.trim()} className="agents-save-btn" />
         <button className="agents-cancel-btn" onClick={onCancel}>Cancel</button>
         {isEdit && (
           <button
             className="agents-delete-btn"
-            onClick={remove}
+            onClick={() => setConfirmDelete(true)}
             disabled={deleting}
             style={{ marginLeft: "auto" }}
           >
@@ -189,6 +189,18 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
           </button>
         )}
       </div>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete Agent"
+          onConfirm={() => { setConfirmDelete(false); remove(); }}
+          onCancel={() => setConfirmDelete(false)}
+          disabled={deleting}
+          confirmLabel={deleting ? "..." : "Yes"}
+        >
+          Are you sure you want to delete <strong>@{name}</strong>?
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

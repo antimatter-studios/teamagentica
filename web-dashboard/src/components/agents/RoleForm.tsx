@@ -1,63 +1,64 @@
 import { useState, useCallback } from "react";
 import { useAgentStore } from "../../stores/agentStore";
-import type { RegistryAlias, CreateAliasRequest, Plugin } from "@teamagentica/api-client";
+import type { PersonaRole } from "@teamagentica/api-client";
 import ConfirmDialog from "../ConfirmDialog";
 import SaveButton from "../SaveButton";
 
 interface Props {
-  alias?: RegistryAlias;
-  plugins: Plugin[];
+  role?: PersonaRole;
   onSave: (createdId?: string) => void;
   onCancel: () => void;
 }
 
-export default function ToolForm({ alias, plugins, onSave, onCancel }: Props) {
-  const { createAlias, updateAlias, deleteAlias } = useAgentStore();
-  const isEdit = !!alias;
-  const [name, setName] = useState(alias?.name ?? "");
-  const [plugin, setPlugin] = useState(alias?.plugin ?? "");
+export default function RoleForm({ role, onSave, onCancel }: Props) {
+  const { createRole, updateRole, deleteRole } = useAgentStore();
+  const isEdit = !!role;
+  const [id, setId] = useState(role?.id ?? "");
+  const [label, setLabel] = useState(role?.label ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(role?.system_prompt ?? "");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const save = useCallback(async () => {
-    if (!name.trim() || !plugin.trim()) return;
+    if (!id.trim() || !label.trim()) return;
     setSaving(true);
     setError(null);
     try {
       if (isEdit) {
-        await updateAlias(alias!.name, {
-          type: "tool",
-          plugin: plugin.trim(),
+        await updateRole(role!.id, {
+          label: label || undefined,
+          system_prompt: systemPrompt || undefined,
         });
       } else {
-        const req: CreateAliasRequest = {
-          name: name.trim(), type: "tool", plugin: plugin.trim(),
-        };
-        await createAlias(req);
+        await createRole({
+          id: id.trim(),
+          label: label.trim(),
+          system_prompt: systemPrompt || undefined,
+        });
       }
-      onSave(isEdit ? undefined : name.trim());
+      onSave(isEdit ? undefined : id.trim());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
-  }, [name, plugin, isEdit, alias, onSave, createAlias, updateAlias]);
+  }, [id, label, systemPrompt, isEdit, role, onSave, createRole, updateRole]);
 
   const remove = useCallback(async () => {
-    if (!alias) return;
+    if (!role) return;
     setDeleting(true);
     setError(null);
     try {
-      await deleteAlias(alias.name);
+      await deleteRole(role.id);
       onSave();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     } finally {
       setDeleting(false);
     }
-  }, [alias, onSave, deleteAlias]);
+  }, [role, onSave, deleteRole]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") onCancel();
@@ -66,39 +67,45 @@ export default function ToolForm({ alias, plugins, onSave, onCancel }: Props) {
   return (
     <div className="agents-form" onKeyDown={handleKeyDown}>
       <h3 className="agents-form-title">
-        {isEdit ? <>Edit Tool: <span className="agents-name-val">@{name}</span></> : "Create Tool"}
+        {isEdit ? <>Edit Role: <span className="agents-name-val">{id}</span></> : "Create Role"}
       </h3>
 
       {error && <div className="agents-error" style={{ marginBottom: 16 }}>{error}</div>}
 
       <div className="agents-form-field">
-        <label className="agents-form-label">Name</label>
+        <label className="agents-form-label">ID</label>
         <input
           className="agents-input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="alias name"
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          placeholder="role-id"
           autoFocus={!isEdit}
         />
-        {name.trim() && <span className="agents-form-hint">use <strong>@{name.trim()}</strong> in your prompts</span>}
       </div>
 
       <div className="agents-form-field">
-        <label className="agents-form-label">Plugin</label>
-        <select
-          className="agents-select"
-          value={plugin}
-          onChange={(e) => setPlugin(e.target.value)}
-        >
-          <option value="">Select plugin...</option>
-          {plugins.map((p) => (
-            <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
-          ))}
-        </select>
+        <label className="agents-form-label">Label</label>
+        <input
+          className="agents-input"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Display name"
+        />
+      </div>
+
+      <div className="agents-form-field agents-form-field--grow">
+        <label className="agents-form-label">System Prompt</label>
+        <textarea
+          className="agents-input"
+          value={systemPrompt}
+          onChange={(e) => setSystemPrompt(e.target.value)}
+          placeholder="Default system prompt for personas with this role..."
+          style={{ resize: "none", fontFamily: "inherit" }}
+        />
       </div>
 
       <div className="agents-form-actions">
-        <SaveButton onClick={save} disabled={saving || !name.trim() || !plugin.trim()} className="agents-save-btn" />
+        <SaveButton onClick={save} disabled={saving || !id.trim() || !label.trim()} className="agents-save-btn" />
         <button className="agents-cancel-btn" onClick={onCancel}>Cancel</button>
         {isEdit && (
           <button
@@ -114,13 +121,13 @@ export default function ToolForm({ alias, plugins, onSave, onCancel }: Props) {
 
       {confirmDelete && (
         <ConfirmDialog
-          title="Delete Tool"
+          title="Delete Role"
           onConfirm={() => { setConfirmDelete(false); remove(); }}
           onCancel={() => setConfirmDelete(false)}
           disabled={deleting}
           confirmLabel={deleting ? "..." : "Yes"}
         >
-          Are you sure you want to delete <strong>@{name}</strong>?
+          Are you sure you want to delete role <strong>{id}</strong>?
         </ConfirmDialog>
       )}
     </div>

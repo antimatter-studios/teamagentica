@@ -1,26 +1,20 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { apiClient } from "../api/client";
-import type { RegistryAlias, AgentType, Plugin, Persona } from "@teamagentica/api-client";
+import { useEffect, useMemo, useCallback } from "react";
+import { useAgentStore } from "../stores/agentStore";
+import type { AgentType, PersonaRole } from "@teamagentica/api-client";
 import PersonaForm from "./agents/PersonaForm";
+import RoleForm from "./agents/RoleForm";
 import AgentForm from "./agents/AgentForm";
 import ToolAgentForm from "./agents/ToolAgentForm";
 import ToolForm from "./agents/ToolForm";
 
-const CAPABILITY_MAP: Record<string, string[]> = {
-  agent: ["agent:chat"],
-  tool_agent: ["agent:tool"],
-  tool: ["tool:", "storage:", "infra:"],
-};
-
-const COORDINATOR_ALIAS = "coordinator";
-
 interface SidebarSection {
   key: string;
   label: string;
-  type?: AgentType; // undefined = personas
+  type?: AgentType;
 }
 
 const SIDEBAR_SECTIONS: SidebarSection[] = [
+  { key: "roles", label: "Roles" },
   { key: "personas", label: "Personas" },
   { key: "agents", label: "Agents", type: "agent" },
   { key: "tool-agents", label: "Tool Agents", type: "tool_agent" },
@@ -33,98 +27,63 @@ interface Props {
 }
 
 export default function Agents({ subpath, onNavigate }: Props) {
-  const [aliases, setAliases] = useState<RegistryAlias[]>([]);
-  const [personas, setPersonas] = useState<Persona[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [pluginsByType, setPluginsByType] = useState<Record<AgentType, Plugin[]>>({
-    agent: [], tool_agent: [], tool: [],
-  });
+  const {
+    aliases, personas, roles, pluginsByType,
+    loading, error,
+    byType, chatAliases,
+    fetch, fetchPlugins,
+  } = useAgentStore();
 
-  const load = useCallback(async () => {
-    try {
-      const [aliasData, personaData] = await Promise.all([
-        apiClient.agents.list(),
-        apiClient.personas.list().catch(() => [] as Persona[]),
-      ]);
-      setAliases(aliasData);
-      setPersonas(personaData);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load agents");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  useEffect(() => { fetch(); fetchPlugins(); }, [fetch, fetchPlugins]);
 
-  const loadPlugins = useCallback(async () => {
-    const result: Record<AgentType, Plugin[]> = { agent: [], tool_agent: [], tool: [] };
-    for (const [type, caps] of Object.entries(CAPABILITY_MAP)) {
-      const seen = new Set<string>();
-      for (const cap of caps) {
-        try {
-          const plugins = await apiClient.plugins.search(cap);
-          for (const p of plugins) {
-            if (!seen.has(p.id)) { seen.add(p.id); result[type as AgentType].push(p); }
-          }
-        } catch { /* ignore */ }
-      }
-    }
-    setPluginsByType(result);
-  }, []);
-
-  useEffect(() => { load(); loadPlugins(); }, [load, loadPlugins]);
-
-  // Parse subpath to determine what to show in main area.
   const route = useMemo(() => {
     if (!subpath) return null;
     const parts = subpath.split("/");
-    // e.g. "personas/create", "agents/edit/my-agent"
     const section = parts[0];
-    const action = parts[1]; // "create" or "edit"
-    const id = parts.slice(2).join("/"); // everything after action
+    const action = parts[1];
+    const id = parts.slice(2).join("/");
     if (action === "create") return { section, action: "create" as const, id: "" };
     if (action === "edit" && id) return { section, action: "edit" as const, id };
     return null;
   }, [subpath]);
 
-  const handleSave = useCallback(() => {
-    load();
-  }, [load]);
+  const handleSave = useCallback((createdId?: string) => {
+    if (createdId && route) {
+      onNavigate(`${route.section}/edit/${createdId}`);
+    }
+  }, [route, onNavigate]);
 
   const handleCancel = useCallback(() => {
     onNavigate("");
   }, [onNavigate]);
 
-  // Chat-capable aliases for persona backend_alias dropdown.
-  const agentPluginIds = useMemo(() => new Set(pluginsByType.agent.map((p) => p.id)), [pluginsByType]);
-  const chatAliases = useMemo(
-    () => aliases.filter((a) => agentPluginIds.has(a.plugin) || a.type === "agent"),
-    [aliases, agentPluginIds],
-  );
-
-  const byType = useCallback(
-    (type: AgentType) => aliases.filter((a) => a.type === type),
-    [aliases],
-  );
-
-  // Resolve the data item for edit routes.
   const renderContent = () => {
     if (loading) {
       return <div className="agents-main-empty">Loading agents...</div>;
     }
 
     if (!route) {
-      const hasCoordinator = personas.some((p) => p.alias === COORDINATOR_ALIAS);
       return (
         <div className="agents-main-empty">
-          {!hasCoordinator && (
-            <div className="agents-error" style={{ marginBottom: 16 }}>
-              No "{COORDINATOR_ALIAS}" persona configured — create one to enable task dispatch.
-            </div>
-          )}
           <p>Select an item from the sidebar or create a new one.</p>
         </div>
+      );
+    }
+
+    if (route.section === "roles") {
+      const role = route.action === "edit"
+        ? roles.find((r) => r.id === route.id)
+        : undefined;
+      if (route.action === "edit" && !role) {
+        return <div className="agents-main-empty">Role "{route.id}" not found.</div>;
+      }
+      return (
+        <RoleForm
+          key={route.action + (route.id || "new")}
+          role={role}
+          onSave={handleSave}
+          onCancel={handleCancel}
+        />
       );
     }
 
@@ -139,7 +98,6 @@ export default function Agents({ subpath, onNavigate }: Props) {
         <PersonaForm
           key={route.action + (route.id || "new")}
           persona={persona}
-          chatAliases={chatAliases}
           onSave={handleSave}
           onCancel={handleCancel}
         />
@@ -203,7 +161,6 @@ export default function Agents({ subpath, onNavigate }: Props) {
     return <div className="agents-main-empty">Unknown section.</div>;
   };
 
-  // Determine active sidebar item from route.
   const isActive = (section: string, name?: string) => {
     if (!route) return false;
     if (route.section !== section) return false;
@@ -215,20 +172,25 @@ export default function Agents({ subpath, onNavigate }: Props) {
     <div className="agents-layout">
       <div className="agents-sidebar">
         {SIDEBAR_SECTIONS.map((sec) => {
-          const items = sec.type ? byType(sec.type) : personas;
-          const nameKey = sec.type ? "name" : "alias";
+          const items = sec.key === "roles"
+            ? roles
+            : sec.type ? byType(sec.type) : personas;
+          const nameKey = sec.key === "roles" ? "id" : sec.type ? "name" : "alias";
           return (
             <div className="agents-sidebar-section" key={sec.key}>
               <div className="agents-sidebar-section-header">{sec.label}</div>
               {items.map((item) => {
                 const id = (item as any)[nameKey] as string;
+                const displayName = sec.key === "roles"
+                  ? (item as PersonaRole).label
+                  : `@${id}`;
                 return (
                   <button
                     key={id}
                     className={`agents-sidebar-item${isActive(sec.key, id) ? " active" : ""}`}
                     onClick={() => onNavigate(`${sec.key}/edit/${id}`)}
                   >
-                    @{id}
+                    {displayName}
                   </button>
                 );
               })}

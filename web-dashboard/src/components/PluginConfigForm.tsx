@@ -137,6 +137,28 @@ function ExpandableItem({ item, idx }: { item: Record<string, unknown>; idx: num
 
 import type { SchemaSection } from "../hooks/usePluginConfig";
 
+function ReadonlyTable({ items, columns }: { items: Record<string, unknown>[]; columns: string[] }) {
+  return (
+    <div className="schema-table-wrap">
+      <div className="schema-table-header" style={{ gridTemplateColumns: `repeat(${columns.length}, 1fr)` }}>
+        {columns.map((col) => (
+          <span key={col}>{col.replace(/_/g, " ").toUpperCase()}</span>
+        ))}
+      </div>
+      {items.map((item, idx) => (
+        <div className="schema-table-row" key={String(item.id || idx)} style={{ gridTemplateColumns: `repeat(${columns.length}, 1fr)` }}>
+          {columns.map((col) => (
+            <span key={col}>{item[col] == null ? "—" : String(item[col])}</span>
+          ))}
+        </div>
+      ))}
+      {items.length === 0 && (
+        <div className="schema-readonly-empty">No entries</div>
+      )}
+    </div>
+  );
+}
+
 function ReadonlySection({ section }: { section: SchemaSection }) {
   return (
     <div className="schema-readonly-section">
@@ -144,7 +166,9 @@ function ReadonlySection({ section }: { section: SchemaSection }) {
         {section.name.replace(/_/g, " ").toUpperCase()}
       </div>
       <div className="schema-readonly-fields">
-        {section.items ? (
+        {section.items && section.columns ? (
+          <ReadonlyTable items={section.items} columns={section.columns} />
+        ) : section.items ? (
           <>
             {section.items.map((item, idx) => (
               <ExpandableItem key={String(item.id || idx)} item={item} idx={idx} />
@@ -546,13 +570,15 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
 
   return (
     <div className="config-form">
-      {fields.length === 0 && (
+      {fields.filter((f) => f.key !== "PLUGIN_PORT" && f.key !== "PLUGIN_DATA_PATH").length === 0 && (
         <div className="config-empty">
           No configuration options available for this plugin.
         </div>
       )}
 
       {fields.map((field, index) => {
+        // Hide system-injected env vars that are not user-configurable.
+        if (field.key === "PLUGIN_PORT" || field.key === "PLUGIN_DATA_PATH") return null;
         if (field.schema?.visible_when) {
           const dep = fields.find(
             (f) => f.key === field.schema!.visible_when!.field

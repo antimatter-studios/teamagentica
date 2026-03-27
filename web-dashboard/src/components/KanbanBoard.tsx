@@ -19,6 +19,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { apiClient } from "../api/client";
 import type { Board, Column, Card, Comment, UserDetails, RegistryAlias } from "@teamagentica/api-client";
+import ConfirmDialog from "./ConfirmDialog";
 
 
 // ── Position helpers ──────────────────────────────────────────────────────────
@@ -792,26 +793,16 @@ function SidePanel({
         )}
 
         {confirmDeleteComment && (
-          <div className="kn-modal-overlay" onClick={() => setConfirmDeleteComment(null)}>
-            <div className="kn-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="kn-modal-title">Delete comment?</div>
-              <div className="kn-modal-body">
-                This comment may have been written by someone else. Are you sure you want to delete it?
-              </div>
-              <div className="kn-modal-actions">
-                <button
-                  className="kn-btn kn-btn--ghost"
-                  onClick={() => setConfirmDeleteComment(null)}
-                  disabled={deletingComment}
-                >Cancel</button>
-                <button
-                  className="kn-btn kn-btn--danger"
-                  onClick={handleDeleteComment}
-                  disabled={deletingComment}
-                >{deletingComment ? "Deleting..." : "Confirm"}</button>
-              </div>
-            </div>
-          </div>
+          <ConfirmDialog
+            title="Delete comment?"
+            confirmLabel={deletingComment ? "Deleting..." : "Confirm"}
+            cancelLabel="Cancel"
+            onConfirm={handleDeleteComment}
+            onCancel={() => setConfirmDeleteComment(null)}
+            disabled={deletingComment}
+          >
+            This comment may have been written by someone else. Are you sure you want to delete it?
+          </ConfirmDialog>
         )}
 
         <div className="kn-panel-footer">
