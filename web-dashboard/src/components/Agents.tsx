@@ -28,9 +28,9 @@ interface Props {
 
 export default function Agents({ subpath, onNavigate }: Props) {
   const {
-    aliases, personas, roles, pluginsByType,
+    personas, roles, pluginsByType,
     loading, error,
-    byType, chatAliases,
+    byType,
     fetch, fetchPlugins,
   } = useAgentStore();
 

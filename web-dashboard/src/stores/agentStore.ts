@@ -62,12 +62,13 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       set({ loading: true });
     }
     try {
+      const errors: string[] = [];
       const [aliases, personas, roles] = await Promise.all([
-        apiClient.agents.list(),
-        apiClient.personas.list().catch(() => [] as Persona[]),
-        apiClient.personas.listRoles().catch(() => [] as PersonaRole[]),
+        apiClient.agents.list().catch((e) => { errors.push(`aliases: ${e.message}`); return [] as RegistryAlias[]; }),
+        apiClient.personas.list().catch((e) => { errors.push(`personas: ${e.message}`); return [] as Persona[]; }),
+        apiClient.personas.listRoles().catch((e) => { errors.push(`roles: ${e.message}`); return [] as PersonaRole[]; }),
       ]);
-      set({ aliases, personas, roles, loading: false, error: null });
+      set({ aliases, personas, roles, loading: false, error: errors.length ? errors.join("; ") : null });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : "Failed to load agents" });
     }
@@ -75,6 +76,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   fetchPlugins: async () => {
     const result: Record<AgentType, Plugin[]> = { agent: [], tool_agent: [], tool: [] };
+    const errors: string[] = [];
     for (const [type, caps] of Object.entries(CAPABILITY_MAP)) {
       const seen = new Set<string>();
       for (const cap of caps) {
@@ -83,10 +85,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           for (const p of plugins) {
             if (!seen.has(p.id)) { seen.add(p.id); result[type as AgentType].push(p); }
           }
-        } catch { /* ignore */ }
+        } catch (e) { errors.push(`plugins(${cap}): ${e instanceof Error ? e.message : "failed"}`); }
       }
     }
-    set({ pluginsByType: result });
+    set({ pluginsByType: result, error: errors.length ? [get().error, ...errors].filter(Boolean).join("; ") : get().error });
   },
 
   // Persona CRUD

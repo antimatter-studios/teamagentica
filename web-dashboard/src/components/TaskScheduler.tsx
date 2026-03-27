@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { apiClient } from "../api/client";
+import { useState, useEffect } from "react";
+import { useSchedulerStore } from "../stores/schedulerStore";
 import { useEventStore } from "../stores/eventStore";
-import type { ScheduledEvent, EventLogEntry } from "@teamagentica/api-client";
+import type { ScheduledEvent } from "@teamagentica/api-client";
 
 function relativeTime(unixMs: number): string {
   if (!unixMs) return "—";
@@ -23,10 +23,12 @@ type View = "jobs" | "log" | "new-job" | "edit-job";
 const emptyForm = { name: "", text: "", type: "repeat" as "once" | "repeat", triggerType: "timer" as "timer" | "event", schedule: "", eventPattern: "" };
 
 export default function TaskScheduler() {
+  const {
+    jobs, logs, loading, error: storeError,
+    fetch, createJob, updateJob, deleteJob, toggleJob,
+  } = useSchedulerStore();
+
   const [view, setView] = useState<View>("jobs");
-  const [jobs, setJobs] = useState<ScheduledEvent[]>([]);
-  const [logs, setLogs] = useState<EventLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedJob, setSelectedJob] = useState<ScheduledEvent | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -34,31 +36,25 @@ export default function TaskScheduler() {
 
   const sseEvents = useEventStore((s) => s.eventLogEvents);
 
-  const refresh = useCallback(() => {
-    if (!apiClient.scheduler) return;
-    Promise.all([
-      apiClient.scheduler.listEvents(),
-      apiClient.scheduler.getLogs(50),
-    ])
-      .then(([evRes, logRes]) => {
-        setJobs(evRes.events || []);
-        setLogs(logRes.entries || []);
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { fetch(); }, [fetch]);
 
   useEffect(() => {
-    const id = setInterval(refresh, 10_000);
+    const id = setInterval(fetch, 10_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [fetch]);
 
   useEffect(() => {
     const schedulerEvents = sseEvents.filter((e) => e.event_type === "scheduler:fired");
-    if (schedulerEvents.length > 0) refresh();
-  }, [sseEvents, refresh]);
+    if (schedulerEvents.length > 0) fetch();
+  }, [sseEvents, fetch]);
+
+  // Keep selectedJob in sync with store
+  useEffect(() => {
+    if (selectedJob) {
+      const fresh = jobs.find((j) => j.id === selectedJob.id);
+      if (fresh) setSelectedJob(fresh);
+    }
+  }, [jobs, selectedJob?.id]);
 
   const canSubmitCreate = form.name && (form.triggerType === "timer" ? form.schedule : form.eventPattern);
 
@@ -67,7 +63,7 @@ export default function TaskScheduler() {
     setSaving(true);
     try {
       setError("");
-      await apiClient.scheduler.createEvent({
+      await createJob({
         name: form.name,
         text: form.text,
         type: form.type,
@@ -77,7 +73,6 @@ export default function TaskScheduler() {
       });
       setForm(emptyForm);
       setView("jobs");
-      refresh();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -90,16 +85,14 @@ export default function TaskScheduler() {
     setSaving(true);
     try {
       setError("");
-      await apiClient.scheduler.updateEvent(selectedJob.id, {
+      await updateJob(selectedJob.id, {
         name: form.name || undefined,
         text: form.text,
         schedule: form.schedule || undefined,
         event_pattern: form.eventPattern || undefined,
       });
       setView("jobs");
-      setSelectedJob(null);
       setForm(emptyForm);
-      refresh();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -109,8 +102,7 @@ export default function TaskScheduler() {
 
   const handleToggle = async (job: ScheduledEvent) => {
     try {
-      await apiClient.scheduler.updateEvent(job.id, { enabled: !job.enabled });
-      refresh();
+      await toggleJob(job);
     } catch (e: any) {
       setError(e.message);
     }
@@ -120,12 +112,11 @@ export default function TaskScheduler() {
     if (!confirm("Delete this job?")) return;
     try {
       setError("");
-      await apiClient.scheduler.deleteEvent(id);
+      await deleteJob(id);
       if (selectedJob?.id === id) {
         setSelectedJob(null);
         setView("jobs");
       }
-      refresh();
     } catch (e: any) {
       setError(e.message);
     }
@@ -141,6 +132,8 @@ export default function TaskScheduler() {
     setForm({ name: job.name, text: job.text, type: job.type, triggerType: job.trigger_type || "timer", schedule: job.schedule, eventPattern: job.event_pattern });
     setView("edit-job");
   };
+
+  const displayError = error || storeError || "";
 
   if (loading) {
     return (
@@ -203,9 +196,9 @@ export default function TaskScheduler() {
 
       {/* ===== CONTENT ===== */}
       <div className="um-content">
-        {error && (
+        {displayError && (
           <div className="um-panel" style={{ paddingBottom: 0 }}>
-            <div className="um-form-hint um-form-hint-error">{error}</div>
+            <div className="um-form-hint um-form-hint-error">{displayError}</div>
           </div>
         )}
 

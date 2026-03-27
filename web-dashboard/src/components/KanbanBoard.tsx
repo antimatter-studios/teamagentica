@@ -17,8 +17,10 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { apiClient } from "../api/client";
-import type { Board, Column, Card, Comment, UserDetails, RegistryAlias } from "@teamagentica/api-client";
+import { useKanbanStore } from "../stores/kanbanStore";
+import { useUserStore } from "../stores/userStore";
+import { useAgentStore } from "../stores/agentStore";
+import type { Column, Card, Comment, UserDetails, RegistryAlias } from "@teamagentica/api-client";
 import ConfirmDialog from "./ConfirmDialog";
 
 
@@ -241,7 +243,7 @@ function ColumnManager({
     if (!name) return;
     try {
       const pos = positionAfter(sorted);
-      const col = await apiClient.tasks.createColumn(boardId, { name, position: pos });
+      const col = await useKanbanStore.getState().createColumn(boardId, { name, position: pos });
       onColumnsChange([...columns, col]);
       setNewName("");
     } catch (e) {
@@ -253,7 +255,7 @@ function ColumnManager({
     const name = renameValue.trim();
     if (!name) return;
     try {
-      const updated = await apiClient.tasks.updateColumn(boardId, colId, { name });
+      const updated = await useKanbanStore.getState().updateColumn(boardId, colId, { name });
       onColumnsChange(columns.map((c) => (c.id === updated.id ? updated : c)));
       setRenaming(null);
     } catch (e) {
@@ -268,16 +270,17 @@ function ColumnManager({
     try {
       // Reassign cards first if needed
       if (count > 0 && reassignTarget) {
+        const store = useKanbanStore.getState();
         const colCards = cards.filter((c) => c.column_id === colId);
         for (const card of colCards) {
-          await apiClient.tasks.updateCard(boardId, card.id, { column_id: reassignTarget });
+          await store.updateCard(boardId, card.id, { column_id: reassignTarget });
         }
         onCardsChange(
           cards.map((c) => c.column_id === colId ? { ...c, column_id: reassignTarget } : c)
         );
       }
 
-      await apiClient.tasks.deleteColumn(boardId, colId);
+      await useKanbanStore.getState().deleteColumn(boardId, colId);
       onColumnsChange(columns.filter((c) => c.id !== colId));
       setDeleting(null);
       setReassignTarget("");
@@ -557,8 +560,8 @@ function SidePanel({
   const [submittingComment, setSubmittingComment] = useState(false);
   const [confirmDeleteComment, setConfirmDeleteComment] = useState<Comment | null>(null);
   const [deletingComment, setDeletingComment] = useState(false);
-  const [allUsers, setAllUsers] = useState<UserDetails[]>([]);
-  const [allAgents, setAllAgents] = useState<RegistryAlias[]>([]);
+  const allUsers = useUserStore((s) => s.users);
+  const allAgents = useAgentStore((s) => s.aliases);
   const [savedCountdown, setSavedCountdown] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -568,23 +571,13 @@ function SidePanel({
 
   useEffect(() => {
     if (panel.type === "edit-card") {
-      apiClient.tasks.listComments(panel.card.id)
+      useKanbanStore.getState().listComments(panel.card.id)
         .then(setComments)
         .catch(() => setComments([]));
     } else {
       setComments([]);
     }
   }, [panel]);
-
-  // Fetch users and agents for assignee autocomplete
-  useEffect(() => {
-    apiClient.users.listUsers()
-      .then(setAllUsers)
-      .catch(() => setAllUsers([]));
-    apiClient.agents.list()
-      .then(setAllAgents)
-      .catch(() => setAllAgents([]));
-  }, []);
 
   useEffect(() => {
     if (panel.type === "edit-card") {
@@ -634,7 +627,7 @@ function SidePanel({
     if (!newComment.trim() || panel.type !== "edit-card") return;
     setSubmittingComment(true);
     try {
-      const created = await apiClient.tasks.createComment(panel.card.id, newComment.trim());
+      const created = await useKanbanStore.getState().createComment(panel.card.id, newComment.trim());
       setComments((prev) => [...prev, created]);
       setNewComment("");
     } catch (err) {
@@ -648,7 +641,7 @@ function SidePanel({
     if (!confirmDeleteComment || panel.type !== "edit-card") return;
     setDeletingComment(true);
     try {
-      await apiClient.tasks.deleteComment(panel.card.id, confirmDeleteComment.id);
+      await useKanbanStore.getState().deleteComment(panel.card.id, confirmDeleteComment.id);
       setComments((prev) => prev.filter((c) => c.id !== confirmDeleteComment.id));
       setConfirmDeleteComment(null);
     } catch (err) {
@@ -840,15 +833,19 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
   const parsedSlug = initialSlug?.replace(/\/manage$/, "") || "";
   const isManageView = initialSlug?.endsWith("/manage") ?? false;
 
-  const [boards, setBoards] = useState<Board[]>([]);
-  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
-  const [columns, setColumns] = useState<Column[]>([]);
-  const [cards, setCards] = useState<Card[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    boards, columns, cards, activeBoardId, loading, error,
+    fetchBoards, fetchBoard, setActiveBoard,
+    createBoard: storeCreateBoard,
+    createCard: storeCreateCard, updateCard: storeUpdateCard, deleteCard: storeDeleteCard,
+    setCards, setColumns,
+  } = useKanbanStore();
+  const userFetch = useUserStore((s) => s.fetch);
+  const agentFetch = useAgentStore((s) => s.fetch);
 
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
+  const [_panelError, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(60);
   const countdownRef = useRef(60);
 
@@ -861,53 +858,36 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
-  const loadBoards = useCallback(async () => {
-    const bs = await apiClient.tasks.listBoards();
-    setBoards(bs);
-    return bs;
-  }, []);
-
-  const loadBoard = useCallback(async (boardId: string) => {
-    const [cols, crds] = await Promise.all([
-      apiClient.tasks.listColumns(boardId),
-      apiClient.tasks.listCards(boardId),
-    ]);
-    setColumns(cols);
-    setCards(crds);
-  }, []);
-
   useEffect(() => {
-    setLoading(true);
-    loadBoards()
+    userFetch(); agentFetch();
+    fetchBoards()
       .then((bs) => {
         if (bs.length === 0) return;
-        // Match URL slug to a board name, fallback to first board
         const match = parsedSlug
           ? bs.find((b) => slugify(b.name) === parsedSlug)
           : null;
         const target = match ?? bs[0];
-        setActiveBoardId(target.id);
+        setActiveBoard(target.id);
         const suffix = isManageView ? "/manage" : "";
         onBoardChange?.(slugify(target.name) + suffix);
-        return loadBoard(target.id);
+        return fetchBoard(target.id);
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (activeBoardId) loadBoard(activeBoardId).catch((e) => setError(String(e)));
+    if (activeBoardId) fetchBoard(activeBoardId).catch(() => {});
   }, [activeBoardId]);
 
   // Auto-refresh columns & cards with countdown
   const refreshBoard = useCallback(() => {
-    loadBoards().catch(() => {});
+    fetchBoards().catch(() => {});
     if (activeBoardId) {
-      loadBoard(activeBoardId).catch(() => {});
+      fetchBoard(activeBoardId).catch(() => {});
     }
     countdownRef.current = 60;
     setCountdown(60);
-  }, [activeBoardId, loadBoard, loadBoards]);
+  }, [activeBoardId, fetchBoard, fetchBoards]);
 
   useEffect(() => {
     if (!activeBoardId) return;
@@ -917,13 +897,13 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
       countdownRef.current -= 1;
       setCountdown(countdownRef.current);
       if (countdownRef.current <= 0) {
-        loadBoard(activeBoardId).catch(() => {});
+        fetchBoard(activeBoardId).catch(() => {});
         countdownRef.current = 60;
         setCountdown(60);
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [activeBoardId, loadBoard]);
+  }, [activeBoardId, fetchBoard]);
 
   // ── Navigation helpers ──────────────────────────────────────────────────────
 
@@ -995,14 +975,14 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
     );
 
     try {
-      await apiClient.tasks.updateCard(activeBoardId, draggedCard.id, {
+      await storeUpdateCard(activeBoardId, draggedCard.id, {
         column_id: targetColId,
         position: newPosition,
       });
     } catch {
-      loadBoard(activeBoardId);
+      fetchBoard(activeBoardId);
     }
-  }, [cards, activeBoardId, loadBoard]);
+  }, [cards, activeBoardId, fetchBoard, storeUpdateCard]);
 
   // ── Panel submit ─────────────────────────────────────────────────────────────
 
@@ -1015,9 +995,8 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
 
     try {
       if (panel.type === "new-board") {
-        const b = await apiClient.tasks.createBoard({ name: trimTitle, description: data.description.trim() });
-        setBoards((prev) => [...prev, b]);
-        setActiveBoardId(b.id);
+        const b = await storeCreateBoard({ name: trimTitle, description: data.description.trim() });
+        setActiveBoard(b.id);
         onBoardChange?.(slugify(b.name));
       }
 
@@ -1025,7 +1004,7 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
         const colCards = cards
           .filter((c) => c.column_id === panel.columnId)
           .sort((a, b) => a.position - b.position);
-        const card = await apiClient.tasks.createCard(activeBoardId, {
+        await storeCreateCard(activeBoardId, {
           column_id: panel.columnId,
           title: trimTitle,
           description: data.description.trim(),
@@ -1036,11 +1015,10 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
           due_date: dueDateMs,
           position: positionAfter(colCards),
         });
-        setCards((prev) => [...prev, card]);
       }
 
       if (panel.type === "edit-card" && activeBoardId) {
-        const updated = await apiClient.tasks.updateCard(activeBoardId, panel.card.id, {
+        await storeUpdateCard(activeBoardId, panel.card.id, {
           title: trimTitle,
           description: data.description.trim(),
           priority: data.priority,
@@ -1051,7 +1029,6 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
           due_date: dueDateMs ?? undefined,
           clear_due: !data.dueDate,
         });
-        setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       }
     } catch (e) {
       setError(String(e));
@@ -1067,10 +1044,9 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
 
   const deleteCard = useCallback(async (card: Card) => {
     if (!activeBoardId) return;
-    await apiClient.tasks.deleteCard(activeBoardId, card.id);
-    setCards((prev) => prev.filter((c) => c.id !== card.id));
+    await storeDeleteCard(activeBoardId, card.id);
     setPanel(null);
-  }, [activeBoardId]);
+  }, [activeBoardId, storeDeleteCard]);
 
   const onAddCard = useCallback((c: Column) =>
     setPanel({ type: "new-card", columnId: c.id, columnName: c.name }), []);
@@ -1116,7 +1092,7 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
             <button
               key={b.id}
               className={`kn-sidebar-item ${b.id === activeBoardId ? "kn-sidebar-item--active" : ""}`}
-              onClick={() => { setActiveBoardId(b.id); onBoardChange?.(slugify(b.name)); setPanel(null); }}
+              onClick={() => { setActiveBoard(b.id); onBoardChange?.(slugify(b.name)); setPanel(null); }}
             >
               <span className="kn-sidebar-item-name">{b.name}</span>
               <span className="kn-sidebar-item-count">
@@ -1172,8 +1148,8 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
             cards={cards}
             boardId={activeBoardId}
             onBack={navigateToBoard}
-            onColumnsChange={setColumns}
-            onCardsChange={setCards}
+            onColumnsChange={(cols) => setColumns(() => cols)}
+            onCardsChange={(crds) => setCards(() => crds)}
           />
         ) : !activeBoard ? (
           <div className="kn-empty">

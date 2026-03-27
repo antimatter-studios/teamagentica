@@ -57,6 +57,7 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
     try {
       if (isEdit) {
         await updateAlias(alias!.name, {
+          name: name.trim() !== alias!.name ? name.trim() : undefined,
           type: "agent",
           plugin: plugin.trim(),
           provider: provider || undefined,
@@ -111,7 +112,7 @@ export default function AgentForm({ alias, plugins, onSave, onCancel }: Props) {
         <input
           className="agents-input"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(e.target.value.toLowerCase())}
           placeholder="alias name"
           autoFocus={!isEdit}
         />

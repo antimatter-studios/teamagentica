@@ -33,6 +33,7 @@ export default function PersonaForm({ persona, onSave, onCancel }: Props) {
     try {
       if (isEdit) {
         await updatePersona(persona!.alias, {
+          alias: alias.trim() !== persona!.alias ? alias.trim() : undefined,
           system_prompt: systemPrompt || undefined,
           backend_alias: backendAlias || undefined,
           role: role || undefined,
@@ -104,7 +105,7 @@ export default function PersonaForm({ persona, onSave, onCancel }: Props) {
         <input
           className="agents-input"
           value={alias}
-          onChange={(e) => setAlias(e.target.value)}
+          onChange={(e) => setAlias(e.target.value.toLowerCase())}
           placeholder="persona name"
           autoFocus={!isEdit}
         />

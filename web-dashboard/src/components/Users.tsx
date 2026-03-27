@@ -1,16 +1,18 @@
-import { useEffect, useState, useCallback } from "react";
-import { apiClient } from "../api/client";
-import type { UserDetails, ServiceToken, AuditLogEntry } from "@teamagentica/api-client";
+import { useEffect, useState } from "react";
+import { useUserStore } from "../stores/userStore";
+import type { UserDetails, ServiceToken } from "@teamagentica/api-client";
 
 type View = "users" | "tokens" | "audit" | "new-user" | "new-token" | "edit-user" | "user-detail";
 
 export default function Users() {
+  const {
+    users, tokens, auditLogs, auditTotal, loading, error: storeError,
+    fetch, fetchAudit,
+    updateUser, banUser, deleteUser, createUser,
+    createToken, revokeToken,
+  } = useUserStore();
+
   const [view, setView] = useState<View>("users");
-  const [users, setUsers] = useState<UserDetails[]>([]);
-  const [tokens, setTokens] = useState<ServiceToken[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [auditTotal, setAuditTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   // --- Selected items ---
@@ -36,38 +38,15 @@ export default function Users() {
   const [banTarget, setBanTarget] = useState<UserDetails | null>(null);
   const [banReason, setBanReason] = useState("");
 
-  const fetchUsers = useCallback(async () => {
-    try {
-      const list = await apiClient.users.listUsers();
-      setUsers(list);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
+  useEffect(() => { fetch(); }, [fetch]);
 
-  const fetchTokens = useCallback(async () => {
-    try {
-      const list = await apiClient.users.listServiceTokens();
-      setTokens(list);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
-
-  const fetchAudit = useCallback(async () => {
-    try {
-      const res = await apiClient.users.listAuditLogs({ limit: 100 });
-      setAuditLogs(res.logs);
-      setAuditTotal(res.total);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
-
+  // Keep selectedUser in sync with store data
   useEffect(() => {
-    setLoading(true);
-    Promise.all([fetchUsers(), fetchTokens(), fetchAudit()]).finally(() => setLoading(false));
-  }, [fetchUsers, fetchTokens, fetchAudit]);
+    if (selectedUser) {
+      const fresh = users.find((u) => u.id === selectedUser.id);
+      if (fresh) setSelectedUser(fresh);
+    }
+  }, [users, selectedUser?.id]);
 
   // --- User actions ---
   const handleEditUser = (u: UserDetails) => {
@@ -81,13 +60,11 @@ export default function Users() {
     if (!selectedUser) return;
     try {
       setError("");
-      await apiClient.users.updateUser(Number(selectedUser.id), {
+      await updateUser(Number(selectedUser.id), {
         display_name: editDisplayName,
         role: editRole,
       });
-      setView("users");
-      setSelectedUser(null);
-      fetchUsers();
+      setView("user-detail");
     } catch (e: any) {
       setError(e.message);
     }
@@ -97,10 +74,9 @@ export default function Users() {
     if (!banTarget) return;
     try {
       setError("");
-      await apiClient.users.banUser(Number(banTarget.id), !banTarget.banned, banReason);
+      await banUser(Number(banTarget.id), !banTarget.banned, banReason);
       setBanTarget(null);
       setBanReason("");
-      fetchUsers();
     } catch (e: any) {
       setError(e.message);
     }
@@ -110,12 +86,11 @@ export default function Users() {
     if (!confirm(`Delete user ${u.email}? This cannot be undone.`)) return;
     try {
       setError("");
-      await apiClient.users.deleteUser(Number(u.id));
+      await deleteUser(Number(u.id));
       if (selectedUser?.id === u.id) {
         setSelectedUser(null);
         setView("users");
       }
-      fetchUsers();
     } catch (e: any) {
       setError(e.message);
     }
@@ -124,12 +99,11 @@ export default function Users() {
   const handleCreateUser = async () => {
     try {
       setError("");
-      await apiClient.auth.register(newEmail, newPassword, newDisplayName);
+      await createUser(newEmail, newPassword, newDisplayName);
       setNewEmail("");
       setNewPassword("");
       setNewDisplayName("");
       setView("users");
-      fetchUsers();
     } catch (e: any) {
       setError(e.message);
     }
@@ -139,10 +113,9 @@ export default function Users() {
   const handleCreateToken = async () => {
     try {
       setError("");
-      const res = await apiClient.users.createServiceToken(tokenName, tokenCaps, tokenDays);
-      setCreatedToken(res.token);
+      const token = await createToken(tokenName, tokenCaps, tokenDays);
+      setCreatedToken(token);
       setTokenName("");
-      fetchTokens();
     } catch (e: any) {
       setError(e.message);
     }
@@ -152,8 +125,7 @@ export default function Users() {
     if (!confirm("Revoke this service token?")) return;
     try {
       setError("");
-      await apiClient.users.revokeServiceToken(id);
-      fetchTokens();
+      await revokeToken(id);
     } catch (e: any) {
       setError(e.message);
     }
@@ -169,6 +141,8 @@ export default function Users() {
     setSelectedUser(u);
     setView("user-detail");
   };
+
+  const displayError = error || storeError || "";
 
   if (loading) {
     return (
@@ -259,7 +233,7 @@ export default function Users() {
 
       {/* ===== MAIN CONTENT ===== */}
       <div className="um-content">
-        {error && <div className="plugin-error" style={{ margin: "16px 24px 0" }}>{error}</div>}
+        {displayError && <div className="plugin-error" style={{ margin: "16px 24px 0" }}>{displayError}</div>}
 
         {/* --- Users list (default) --- */}
         {view === "users" && (

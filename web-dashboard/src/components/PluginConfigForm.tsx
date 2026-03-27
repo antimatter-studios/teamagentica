@@ -14,11 +14,6 @@ function optLabel(opt: SelectOption): string {
   return typeof opt === "string" ? opt : opt.label;
 }
 
-/** Truncate text to maxLen characters with ellipsis. */
-function truncate(text: string, maxLen: number): string {
-  return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
-}
-
 /** Format milliseconds as a human-readable duration. */
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -203,7 +198,6 @@ interface Props {
 export default function PluginConfigForm({ plugin, onSaved }: Props) {
   const {
     fields,
-    dirty,
     loading,
     saving,
     error,

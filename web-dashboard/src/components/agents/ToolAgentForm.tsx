@@ -49,6 +49,7 @@ export default function ToolAgentForm({ alias, plugins, onSave, onCancel }: Prop
     try {
       if (isEdit) {
         await updateAlias(alias!.name, {
+          name: name.trim() !== alias!.name ? name.trim() : undefined,
           type: "tool_agent",
           plugin: plugin.trim(),
           model: model || undefined,
@@ -101,7 +102,7 @@ export default function ToolAgentForm({ alias, plugins, onSave, onCancel }: Prop
         <input
           className="agents-input"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(e.target.value.toLowerCase())}
           placeholder="alias name"
           autoFocus={!isEdit}
         />
