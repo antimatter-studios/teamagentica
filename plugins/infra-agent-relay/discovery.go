@@ -137,6 +137,7 @@ type tmplAnonTool struct {
 }
 
 type promptContextData struct {
+	CurrentAlias string
 	Agents       []tmplAgent
 	AliasedTools []tmplAliasedTool
 	Storage      []tmplStorage
@@ -146,10 +147,10 @@ type promptContextData struct {
 
 // buildPromptContext renders a persona's system prompt template,
 // populated with alias and tool discovery data.
-func buildPromptContext(personaPrompt string, aliases *alias.AliasMap, discoveredTools []alias.ToolInfo) string {
+func buildPromptContext(currentAlias, personaPrompt string, aliases *alias.AliasMap, discoveredTools []alias.ToolInfo) string {
 	entries := aliases.List()
 
-	data := promptContextData{}
+	data := promptContextData{CurrentAlias: currentAlias}
 
 	// Classify aliases.
 	aliasedPlugins := make(map[string]bool)
@@ -270,7 +271,7 @@ func toolParamSummary(params map[string]interface{}) string {
 
 // enrichSystemPrompt renders the full system prompt by combining
 // the persona prompt with alias/tool context via the template.
-func (r *relay) enrichSystemPrompt(personaPrompt string, aliases *alias.AliasMap) string {
+func (r *relay) enrichSystemPrompt(currentAlias, personaPrompt string, aliases *alias.AliasMap) string {
 	tools := discoverTools(r.sdk)
-	return buildPromptContext(personaPrompt, aliases, tools)
+	return buildPromptContext(currentAlias, personaPrompt, aliases, tools)
 }

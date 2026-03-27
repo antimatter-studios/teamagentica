@@ -514,7 +514,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			fmt.Sprintf("Asking @%s...", resolved.Alias), nil)
 
 		callStart := time.Now()
-		enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
+		enrichedPrompt := r.enrichSystemPrompt(resolved.Alias, resolved.SystemPrompt, aliases)
 		cb := streamCallback{
 			SourcePlugin: req.SourcePlugin,
 			ChannelID:    req.ChannelID,
@@ -575,7 +575,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		fmt.Sprintf("Asking @%s...", defaultAgent.Alias), nil)
 
 	callStart := time.Now()
-	enrichedPrompt := r.enrichSystemPrompt(defaultAgent.SystemPrompt, aliases)
+	enrichedPrompt := r.enrichSystemPrompt(defaultAgent.Alias, defaultAgent.SystemPrompt, aliases)
 	cb := streamCallback{
 		SourcePlugin: req.SourcePlugin,
 		ChannelID:    req.ChannelID,
@@ -1082,7 +1082,7 @@ func (r *relay) handleChatToAgent(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
+	enrichedPrompt := r.enrichSystemPrompt(resolved.Alias, resolved.SystemPrompt, aliases)
 
 	// No conversation history for delegated calls — each delegation is stateless.
 	// Propagate incremented call depth to prevent infinite recursion.
