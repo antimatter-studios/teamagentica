@@ -276,7 +276,7 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
               {g.plugins.map((p) => (
                 <div
                   key={p.id}
-                  className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}${!p.enabled ? " disabled" : ""}`}
+                  className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}${!p.enabled ? " disabled" : ""}${p.enabled && (p.status === "error" || p.status === "unhealthy") ? " errored" : ""}`}
                   onClick={() => {
                     selectPlugin(p.id);
                     setConfirmUninstall(null);
