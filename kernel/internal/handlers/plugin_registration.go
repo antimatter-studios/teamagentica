@@ -138,7 +138,7 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", req.ID); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found in registry"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found in registry", req.ID)})
 		return
 	}
 
@@ -278,7 +278,7 @@ func (h *PluginHandler) Heartbeat(c *gin.Context) {
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", req.ID); result.Error != nil {
 		database.CheckError(result.Error)
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", req.ID)})
 		return
 	}
 
@@ -312,7 +312,7 @@ func (h *PluginHandler) Deregister(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", req.ID); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", req.ID)})
 		return
 	}
 
@@ -652,7 +652,7 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", pluginID); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", pluginID)})
 		return
 	}
 

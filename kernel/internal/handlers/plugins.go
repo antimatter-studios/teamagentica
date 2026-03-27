@@ -151,7 +151,7 @@ func (h *PluginHandler) GetPlugin(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -164,7 +164,7 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -221,7 +221,7 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -344,7 +344,7 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -401,7 +401,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -483,7 +483,7 @@ func (h *PluginHandler) GetPluginLogs(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -577,7 +577,7 @@ func (h *PluginHandler) GetSelfConfig(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -601,7 +601,7 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -720,7 +720,7 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -841,7 +841,7 @@ func (h *PluginHandler) DeletePluginConfigKey(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -898,7 +898,7 @@ func (h *PluginHandler) GetPluginSchema(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -928,7 +928,7 @@ func (h *PluginHandler) GetPluginSchemaSection(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 

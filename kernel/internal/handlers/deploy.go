@@ -29,7 +29,7 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -110,7 +110,7 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
@@ -175,7 +175,7 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 
 	var plugin models.Plugin
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
 
