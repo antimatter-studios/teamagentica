@@ -1,44 +1,78 @@
 version: '3'
 
+vars:
+  IMAGE_NAME: teamagentica-web-dashboard
+  CONTAINER_PROD: teamagentica-web-dashboard
+  CONTAINER_DEV: teamagentica-web-dashboard-dev
+  APP_NAME: '{{.APP_NAME | default "TeamAgentica"}}'
+  KERNEL_HOST: '{{.TEAMAGENTICA_KERNEL_HOST | default "api.teamagentica.localhost"}}'
+  KERNEL_PORT: '{{.TEAMAGENTICA_KERNEL_PORT | default "9741"}}'
+
 tasks:
   build:
-    desc: Build production UI image via Docker Compose
+    desc: Build production web dashboard image
     cmds:
-      - docker compose -f docker-compose.yml --profile prod build
+      - docker build -t {{.IMAGE_NAME}}:latest --target prod -f Dockerfile ..
 
   start:
-    desc: Start production UI container
+    desc: Start production web dashboard container
     cmds:
-      - docker compose -f docker-compose.yml --profile prod up -d
+      - >-
+        docker run -d
+        --name {{.CONTAINER_PROD}}
+        --restart unless-stopped
+        --label com.docker.compose.project=teamagentica
+        --label com.docker.compose.service=web-dashboard
+        --label docker-proxy.teamagentica-web-dashboard.host=ui.teamagentica.localhost
+        --label docker-proxy.teamagentica-web-dashboard.port=3000
+        -p 3000:3000
+        -e VITE_APP_NAME={{.APP_NAME}}
+        -e VITE_TEAMAGENTICA_KERNEL_HOST={{.KERNEL_HOST}}
+        -e VITE_TEAMAGENTICA_KERNEL_PORT={{.KERNEL_PORT}}
+        {{.IMAGE_NAME}}:latest
 
   stop:
-    desc: Stop production UI container
+    desc: Stop production web dashboard container
     cmds:
-      - docker compose -f docker-compose.yml --profile prod down
+      - docker rm -f {{.CONTAINER_PROD}} 2>/dev/null || true
 
   restart:
-    desc: Restart production UI container
+    desc: Restart production web dashboard container
     cmds:
       - task: stop
       - task: start
 
   dev:build:
-    desc: Build dev UI image via Docker Compose
+    desc: Build dev web dashboard image
     cmds:
-      - docker compose -f docker-compose.yml --profile dev build
+      - docker build -t {{.IMAGE_NAME}}:dev --target dev -f Dockerfile ..
 
   dev:start:
-    desc: Start dev UI container (hot reload on port 3000)
+    desc: Start dev web dashboard container (hot reload on port 3000)
     cmds:
-      - docker compose -f docker-compose.yml --profile dev up -d
+      - >-
+        docker run -d
+        --name {{.CONTAINER_DEV}}
+        --label com.docker.compose.project=teamagentica
+        --label com.docker.compose.service=web-dashboard-dev
+        --label docker-proxy.teamagentica-web-dashboard.host=ui.teamagentica.localhost
+        --label docker-proxy.teamagentica-web-dashboard.port=3000
+        -p 127.0.0.1:3000:3000
+        -v $PWD:/app
+        -v $PWD/../packages:/packages
+        -v /app/node_modules
+        -e VITE_APP_NAME={{.APP_NAME}}
+        -e VITE_TEAMAGENTICA_KERNEL_HOST={{.KERNEL_HOST}}
+        -e VITE_TEAMAGENTICA_KERNEL_PORT={{.KERNEL_PORT}}
+        {{.IMAGE_NAME}}:dev
 
   dev:stop:
-    desc: Stop dev UI container
+    desc: Stop dev web dashboard container
     cmds:
-      - docker compose -f docker-compose.yml --profile dev down
+      - docker rm -f {{.CONTAINER_DEV}} 2>/dev/null || true
 
   dev:restart:
-    desc: Rebuild and restart dev UI container (picks up new dependencies)
+    desc: Rebuild and restart dev web dashboard container (picks up new dependencies)
     cmds:
       - task: dev:stop
       - task: dev:build
