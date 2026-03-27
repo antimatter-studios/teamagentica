@@ -429,7 +429,9 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 						if remainder != "" {
 							ch <- StreamEvent{Text: remainder}
 						}
-					} else if lastText == "" {
+					} else {
+						// No deltas for this result (first message without deltas,
+						// or a subsequent message after internal tool execution).
 						ch <- StreamEvent{Text: event.Result}
 					}
 				}
