@@ -19,13 +19,10 @@ type Recorder struct {
 
 // Row types written to the traces table.
 const (
-	TypeRequest             = "request"
-	TypeCoordinatorCall     = "coordinator_call"
-	TypeCoordinatorResponse = "coordinator_response"
-	TypeDAGPlan             = "dag_plan"
-	TypeTaskCall            = "task_call"
-	TypeTaskResponse        = "task_response"
-	TypeFinalResponse       = "final_response"
+	TypeRequest       = "request"
+	TypeTaskCall      = "task_call"
+	TypeTaskResponse  = "task_response"
+	TypeFinalResponse = "final_response"
 )
 
 // Attachment holds mime type and base64 data or URL for storage in traces.

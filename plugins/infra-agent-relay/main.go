@@ -19,27 +19,22 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/bridge"
-	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/daglog"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/debugtrace"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/router"
 	"github.com/gin-gonic/gin"
 )
 
-// relay is the central message routing and orchestration service.
-// Messaging plugins send messages here; the relay resolves the coordinator
-// persona at request time, which returns a JSON DAG plan; the relay
-// executes the plan and returns the final result.
+// relay is the central message routing service.
+// Messaging plugins send messages here; the relay resolves the target agent
+// (via @mention or the default persona) and streams the response back.
 type relay struct {
 	mu                    sync.RWMutex
 	conns                 map[string]*bridge.Client // workspaceID → TCP connection
 	routes                *router.Table
 	sdk                   *pluginsdk.Client
-	orchestrationMode     string // "direct" (default) or "coordinator"
-	maxOrchestrationTasks int
 	taskTimeoutSeconds    int
 	debug                 bool
 	tracer                *debugtrace.Recorder
-	dags                  *daglog.Log
 	personas              *personaCache
 	memoryPluginID        string // cached plugin ID for infra-agent-memory (empty = not available)
 	memoryMu              sync.RWMutex
@@ -52,7 +47,7 @@ type relay struct {
 	lastChannelID     string
 
 	// Pending async tasks — maps plugin task ID → waiter info.
-	// Used by the DAG executor to wait for async plugin completion.
+	// Used to wait for async plugin completion (e.g. video generation).
 	asyncMu      sync.Mutex
 	asyncWaiters map[string]*asyncWaiter
 }
@@ -64,6 +59,7 @@ type personaInfo struct {
 	BackendAlias string `json:"backend_alias"`
 	Model        string `json:"model"`
 	Role         string `json:"role"`
+	IsDefault    *bool  `json:"is_default"`
 }
 
 // personaCache caches all persona definitions with a TTL.
@@ -80,10 +76,7 @@ func newRelay(sdk *pluginsdk.Client) *relay {
 		conns:                 make(map[string]*bridge.Client),
 		routes:                router.NewTable(),
 		sdk:                   sdk,
-		orchestrationMode:     "direct",
-		maxOrchestrationTasks: 20,
 		taskTimeoutSeconds:    120,
-		dags:                  daglog.New(),
 		personas:              &personaCache{ttl: 60 * time.Second},
 		asyncWaiters:          make(map[string]*asyncWaiter),
 	}
@@ -130,7 +123,7 @@ func (r *relay) lookupAsyncWaiter(taskID string) (taskGroupID, sourcePlugin, cha
 	return w.taskGroupID, w.sourcePlugin, w.channelID, true
 }
 
-// resolveAsyncWaiter delivers a result to a waiting DAG task.
+// resolveAsyncWaiter delivers a result to a waiting async task.
 // Returns true if a waiter was found and notified.
 func (r *relay) resolveAsyncWaiter(taskID string, resp *agentChatResponse) bool {
 	r.asyncMu.Lock()
@@ -227,10 +220,10 @@ type resolvedTarget struct {
 	Alias        string // the name that was resolved
 }
 
-// resolvePersonaOrAlias looks up a name as a persona first (using its
-// backend_alias to find the plugin), falling back to a raw alias lookup.
-func (r *relay) resolvePersonaOrAlias(name string, aliases *alias.AliasMap) *resolvedTarget {
-	// 1. Persona lookup.
+// resolvePersona looks up a name as a persona and resolves its backend alias
+// to a concrete plugin + model. Returns nil if no persona exists for the name.
+// Bare aliases without personas are not chattable — they are infrastructure-only.
+func (r *relay) resolvePersona(name string, aliases *alias.AliasMap) *resolvedTarget {
 	if p := r.lookupPersona(name); p != nil && p.BackendAlias != "" {
 		target := aliases.Resolve(p.BackendAlias)
 		if target != nil {
@@ -246,21 +239,23 @@ func (r *relay) resolvePersonaOrAlias(name string, aliases *alias.AliasMap) *res
 			}
 		}
 	}
-	// 2. Raw alias fallback — allow agent and direct-callable tool types
-	//    (TargetImage/TargetVideo have /chat endpoints).
-	if aliases != nil {
-		target := aliases.Resolve(name)
-		if target != nil && (target.Type == alias.TargetAgent ||
-			target.Type == alias.TargetImage ||
-			target.Type == alias.TargetVideo) {
-			return &resolvedTarget{
-				PluginID: target.PluginID,
-				Model:    target.Model,
-				Alias:    name,
-			}
-		}
-	}
 	return nil
+}
+
+// resolveAlias looks up a bare alias for non-chat routing (e.g. tool calls).
+func (r *relay) resolveAlias(name string, aliases *alias.AliasMap) *resolvedTarget {
+	if aliases == nil {
+		return nil
+	}
+	target := aliases.Resolve(name)
+	if target == nil {
+		return nil
+	}
+	return &resolvedTarget{
+		PluginID: target.PluginID,
+		Model:    target.Model,
+		Alias:    name,
+	}
 }
 
 // parseAtPrefix extracts an @name prefix from a message.
@@ -361,25 +356,16 @@ func (r *relay) memoryStore(sessionID, role, content, responder string) {
 	}
 }
 
-// lookupPersonaByRole returns the first persona matching the given role, or nil.
-func (r *relay) lookupPersonaByRole(role string) *personaInfo {
+// resolveDefault finds the persona marked as is_default and
+// resolves its backend alias to a concrete plugin + model.
+func (r *relay) resolveDefault(aliases *alias.AliasMap) *resolvedTarget {
 	personas := r.fetchPersonas()
 	for _, p := range personas {
-		if p.Role == role {
-			return &p
+		if p.IsDefault != nil && *p.IsDefault {
+			return r.resolvePersona(p.Alias, aliases)
 		}
 	}
 	return nil
-}
-
-// resolveCoordinator finds the persona with the "coordinator" role and
-// resolves its backend alias to a concrete plugin + model.
-func (r *relay) resolveCoordinator(aliases *alias.AliasMap) *resolvedTarget {
-	p := r.lookupPersonaByRole("coordinator")
-	if p == nil {
-		return nil
-	}
-	return r.resolvePersonaOrAlias(p.Alias, aliases)
 }
 
 // --- Chat endpoint: the main entry point for all messaging plugins ---
@@ -502,137 +488,70 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			nil, "", 0, "")
 	}
 
-	// 2. Check for @name prefix — persona-first, alias-fallback direct routing.
+	// 2. Check for @name prefix — persona direct routing.
 	aliases := r.routes.Aliases()
 	if name, remainder, ok := parseAtPrefix(req.Message); ok {
-		resolved := r.resolvePersonaOrAlias(name, aliases)
-		if resolved != nil {
-			if remainder == "" {
-				rr := &relayResponse{
-					Response:  fmt.Sprintf("Usage: @%s <message>", resolved.Alias),
-					Responder: resolved.Alias,
-				}
-				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
-				return
-			}
-
-			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
-				fmt.Sprintf("Asking @%s...", resolved.Alias), nil)
-
-			// Log direct call as a single-node DAG for visibility.
-			dagEntry := r.dags.Start(taskGroupID, remainder, resolved.Alias,
-				[]daglog.TaskDef{{ID: "direct", Alias: resolved.Alias}})
-			r.dags.NodeStarted(dagEntry, "direct", remainder)
-
-			callStart := time.Now()
-			enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
-			cb := streamCallback{
-				SourcePlugin: req.SourcePlugin,
-				ChannelID:    req.ChannelID,
-				TaskGroupID:  taskGroupID,
-				Responder:    resolved.Alias,
-			}
-			agentResp, err := r.callAgentStream(ctx, resolved.PluginID, resolved.Model,
-				remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt, cb)
-			if err != nil {
-				r.dags.NodeFailed(dagEntry, "direct", err.Error())
-				r.dags.Fail(dagEntry)
-				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-					fmt.Sprintf("Agent error: %v", err), nil)
-				return
-			}
-
-			// Handle async tool response (e.g. video generation).
-			if agentResp.Status == "processing" && agentResp.TaskID != "" {
-				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
-					fmt.Sprintf("@%s started async task %s...", resolved.Alias, agentResp.TaskID), nil)
-				asyncResp, asyncErr := r.waitForAsync(agentResp.TaskID, taskGroupID, req.SourcePlugin, req.ChannelID)
-				if asyncErr != nil {
-					r.dags.NodeFailed(dagEntry, "direct", asyncErr.Error())
-					r.dags.Fail(dagEntry)
-					r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-						fmt.Sprintf("Agent error: %v", asyncErr), nil)
-					return
-				}
-				agentResp = asyncResp
-			}
-
-			if r.debug {
-				r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, resolved.Alias, resolved.PluginID, "",
-					agentResp.Response, toTraceAttachments(agentResp.Attachments), agentResp.Model,
-					time.Since(callStart).Milliseconds(), "")
-			}
-			r.dags.NodeCompleted(dagEntry, "direct")
-			r.dags.Complete(dagEntry)
-			go r.memoryStore(sessionID, "assistant", agentResp.Response, resolved.Alias)
-
+		resolved := r.resolvePersona(name, aliases)
+		if resolved == nil {
+			// @prefix was used but no persona exists — tell the user.
 			rr := &relayResponse{
-				Response:    agentResp.Response,
-				Responder:   resolved.Alias,
-				Model:       agentResp.Model,
-				Backend:     agentResp.Backend,
-				Usage:       agentResp.Usage,
-				CostUSD:     agentResp.CostUSD,
-				DurationMs:  time.Since(processStart).Milliseconds(),
-				Attachments: agentResp.Attachments,
+				Response:  fmt.Sprintf("@%s has no persona — create a persona to enable chat", name),
+				Responder: "system",
 			}
 			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
 			return
 		}
-	}
-
-	// 3. Route based on orchestration mode.
-	r.mu.RLock()
-	orchMode := r.orchestrationMode
-	r.mu.RUnlock()
-
-	if orchMode == "direct" {
-		// Direct mode — route to the default agent with streaming, no coordinator/DAG.
-		// Use the coordinator persona's backend agent as the default target.
-		coord := r.resolveCoordinator(aliases)
-		if coord == nil {
-			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-				"no default agent found — assign the coordinator role to a persona in the persona manager", nil)
+		if remainder == "" {
+			rr := &relayResponse{
+				Response:  fmt.Sprintf("Usage: @%s <message>", resolved.Alias),
+				Responder: resolved.Alias,
+			}
+			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
 			return
 		}
 
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
-			fmt.Sprintf("Asking @%s...", coord.Alias), nil)
-
-		dagEntry := r.dags.Start(taskGroupID, req.Message, coord.Alias,
-			[]daglog.TaskDef{{ID: "direct", Alias: coord.Alias}})
-		r.dags.NodeStarted(dagEntry, "direct", req.Message)
+			fmt.Sprintf("Asking @%s...", resolved.Alias), nil)
 
 		callStart := time.Now()
-		enrichedPrompt := r.enrichSystemPrompt(coord.SystemPrompt, aliases)
+		enrichedPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
 		cb := streamCallback{
 			SourcePlugin: req.SourcePlugin,
 			ChannelID:    req.ChannelID,
 			TaskGroupID:  taskGroupID,
-			Responder:    coord.Alias,
+			Responder:    resolved.Alias,
 		}
-		agentResp, err := r.callAgentStream(ctx, coord.PluginID, coord.Model,
-			req.Message, req.ImageURLs, history, coord.Alias, enrichedPrompt, cb)
+		agentResp, err := r.callAgentStream(ctx, resolved.PluginID, resolved.Model,
+			remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt, cb)
 		if err != nil {
-			r.dags.NodeFailed(dagEntry, "direct", err.Error())
-			r.dags.Fail(dagEntry)
 			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
 				fmt.Sprintf("Agent error: %v", err), nil)
 			return
 		}
 
+		// Handle async tool response (e.g. video generation).
+		if agentResp.Status == "processing" && agentResp.TaskID != "" {
+			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
+				fmt.Sprintf("@%s started async task %s...", resolved.Alias, agentResp.TaskID), nil)
+			asyncResp, asyncErr := r.waitForAsync(agentResp.TaskID, taskGroupID, req.SourcePlugin, req.ChannelID)
+			if asyncErr != nil {
+				r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
+					fmt.Sprintf("Agent error: %v", asyncErr), nil)
+				return
+			}
+			agentResp = asyncResp
+		}
+
 		if r.debug {
-			r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, coord.Alias, coord.PluginID, "",
+			r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, resolved.Alias, resolved.PluginID, "",
 				agentResp.Response, toTraceAttachments(agentResp.Attachments), agentResp.Model,
 				time.Since(callStart).Milliseconds(), "")
 		}
-		r.dags.NodeCompleted(dagEntry, "direct")
-		r.dags.Complete(dagEntry)
-		go r.memoryStore(sessionID, "assistant", agentResp.Response, coord.Alias)
+		go r.memoryStore(sessionID, "assistant", agentResp.Response, resolved.Alias)
 
 		rr := &relayResponse{
 			Response:    agentResp.Response,
-			Responder:   coord.Alias,
+			Responder:   resolved.Alias,
 			Model:       agentResp.Model,
 			Backend:     agentResp.Backend,
 			Usage:       agentResp.Usage,
@@ -644,559 +563,54 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		return
 	}
 
-	// Coordinator mode — DAG orchestration (original path).
-	coord := r.resolveCoordinator(aliases)
-	if coord == nil {
+	// 3. Route to the default agent.
+	defaultAgent := r.resolveDefault(aliases)
+	if defaultAgent == nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-			"no persona with coordinator role found, or it is missing a backend_alias — assign the coordinator role to a persona in the persona manager", nil)
+			"no default agent found — assign the 'default' role to a persona in the persona manager", nil)
 		return
 	}
 
-	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "planning", "Planning tasks...", nil)
+	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
+		fmt.Sprintf("Asking @%s...", defaultAgent.Alias), nil)
 
-	coordPrompt := r.enrichSystemPrompt(coord.SystemPrompt, aliases)
-	// Worker prompt for "self" tasks — fetched from the worker role and rendered with IsSelfWorker=true.
-	selfWorkerPrompt := r.getSelfWorkerPrompt(coord.Alias)
-
-	// Progress callback for the orchestration loop.
-	emitOrchProgress := func(status, message string) {
-		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, status, message, nil)
+	callStart := time.Now()
+	enrichedPrompt := r.enrichSystemPrompt(defaultAgent.SystemPrompt, aliases)
+	cb := streamCallback{
+		SourcePlugin: req.SourcePlugin,
+		ChannelID:    req.ChannelID,
+		TaskGroupID:  taskGroupID,
+		Responder:    defaultAgent.Alias,
 	}
-
-	sess := sessionCtx{taskGroupID: taskGroupID, sourcePlugin: req.SourcePlugin, channelID: req.ChannelID}
-	response, responder, orchResp, err := r.orchestrate(ctx, coord.PluginID, coord.Model, coord.Alias, coordPrompt, selfWorkerPrompt, req.Message, req.ImageURLs, aliases, reqTraceID, sess, emitOrchProgress)
+	agentResp, err := r.callAgentStream(ctx, defaultAgent.PluginID, defaultAgent.Model,
+		req.Message, req.ImageURLs, history, defaultAgent.Alias, enrichedPrompt, cb)
 	if err != nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-			fmt.Sprintf("Orchestration error: %v", err), nil)
+			fmt.Sprintf("Agent error: %v", err), nil)
 		return
 	}
 
 	if r.debug {
-		var finalAttach []debugtrace.Attachment
-		if orchResp != nil {
-			finalAttach = toTraceAttachments(orchResp.Attachments)
-		}
-		r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, responder, "", "",
-			response, finalAttach, "", 0, "")
+		r.tracer.Record(reqTraceID, "", debugtrace.TypeFinalResponse, defaultAgent.Alias, defaultAgent.PluginID, "",
+			agentResp.Response, toTraceAttachments(agentResp.Attachments), agentResp.Model,
+			time.Since(callStart).Milliseconds(), "")
 	}
+	go r.memoryStore(sessionID, "assistant", agentResp.Response, defaultAgent.Alias)
 
 	rr := &relayResponse{
-		Response:   response,
-		Responder:  responder,
-		DurationMs: time.Since(processStart).Milliseconds(),
-	}
-	if orchResp != nil {
-		rr.Model = orchResp.Model
-		rr.Backend = orchResp.Backend
-		rr.Usage = orchResp.Usage
-		rr.CostUSD = orchResp.CostUSD
-		rr.Attachments = orchResp.Attachments
+		Response:    agentResp.Response,
+		Responder:   defaultAgent.Alias,
+		Model:       agentResp.Model,
+		Backend:     agentResp.Backend,
+		Usage:       agentResp.Usage,
+		CostUSD:     agentResp.CostUSD,
+		DurationMs:  time.Since(processStart).Milliseconds(),
+		Attachments: agentResp.Attachments,
 	}
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
 }
 
-// --- DAG Orchestration ---
-
-// taskPlan is the JSON structure the coordinator outputs.
-type taskPlan struct {
-	Tasks []dagTask `json:"tasks"`
-}
-
-// dagTask is a single task in the coordinator's plan.
-type dagTask struct {
-	ID         string                 `json:"id"`
-	Alias      string                 `json:"alias"`
-	Prompt     string                 `json:"prompt"`
-	Tool       string                 `json:"tool,omitempty"`       // specific tool name (skips /chat, calls tool endpoint)
-	Parameters map[string]interface{} `json:"parameters,omitempty"` // parameters for the tool call
-	DependsOn  []string               `json:"depends_on"`
-}
-
-// parseCoordinatorPlan extracts a taskPlan from a coordinator response.
-// Handles raw JSON, ```json fenced blocks, or JSON embedded in surrounding text.
-// Recovers known malformations: bare arrays and unwrapped single task objects.
-// Returns (nil, false) if the response is a plain text answer with no plan.
-func parseCoordinatorPlan(response string) (*taskPlan, bool) {
-	s := strings.TrimSpace(response)
-
-	// Extract from ```json ... ``` fence if present.
-	if idx := strings.Index(s, "```json"); idx >= 0 {
-		start := idx + len("```json")
-		rest := s[start:]
-		if end := strings.Index(rest, "```"); end >= 0 {
-			s = strings.TrimSpace(rest[:end])
-		}
-	}
-
-	jsonStr := extractJSON(s)
-	if jsonStr == "" {
-		return nil, false
-	}
-
-	// 1. Canonical format: {"tasks": [...]}
-	var plan taskPlan
-	if json.Unmarshal([]byte(jsonStr), &plan) == nil && len(plan.Tasks) > 0 {
-		if validateTasks(plan.Tasks) {
-			return &plan, true
-		}
-	}
-
-	// 2. Bare array: [{...}, ...]
-	var tasks []dagTask
-	if json.Unmarshal([]byte(jsonStr), &tasks) == nil && len(tasks) > 0 {
-		if validateTasks(tasks) {
-			return &taskPlan{Tasks: tasks}, true
-		}
-	}
-
-	// 3. Single unwrapped task: {"id": "t1", "alias": "self", ...}
-	var single dagTask
-	if json.Unmarshal([]byte(jsonStr), &single) == nil && single.ID != "" && single.Alias != "" {
-		if validateTasks([]dagTask{single}) {
-			return &taskPlan{Tasks: []dagTask{single}}, true
-		}
-	}
-
-	return nil, false
-}
-
-// extractJSON finds the outermost JSON structure (object or array) in s.
-// Returns the extracted JSON string or "" if none found.
-func extractJSON(s string) string {
-	braceIdx := strings.Index(s, "{")
-	bracketIdx := strings.Index(s, "[")
-
-	// Pick whichever delimiter comes first.
-	var startIdx int
-	var open, close byte
-	switch {
-	case braceIdx >= 0 && (bracketIdx < 0 || braceIdx < bracketIdx):
-		startIdx, open, close = braceIdx, '{', '}'
-	case bracketIdx >= 0:
-		startIdx, open, close = bracketIdx, '[', ']'
-	default:
-		return ""
-	}
-
-	// Find the matching close by scanning from the end.
-	sub := s[startIdx:]
-	lastIdx := strings.LastIndexByte(sub, close)
-	if lastIdx < 0 {
-		return ""
-	}
-
-	candidate := sub[:lastIdx+1]
-
-	// Quick sanity: must start with the expected delimiter.
-	if len(candidate) == 0 || candidate[0] != open {
-		return ""
-	}
-	return candidate
-}
-
-// validateTasks checks that every task has the minimum required fields.
-func validateTasks(tasks []dagTask) bool {
-	for _, t := range tasks {
-		if t.ID == "" || t.Alias == "" || t.Prompt == "" {
-			return false
-		}
-	}
-	return true
-}
-
-// interpolate substitutes {taskID} placeholders with completed task results.
-func interpolate(prompt string, results map[string]string) string {
-	for id, result := range results {
-		prompt = strings.ReplaceAll(prompt, "{"+id+"}", result)
-	}
-	return prompt
-}
-
-// interpolateParams substitutes {taskID} placeholders in tool parameter values.
-func interpolateParams(params map[string]interface{}, results map[string]string) map[string]interface{} {
-	if len(params) == 0 || len(results) == 0 {
-		return params
-	}
-	out := make(map[string]interface{}, len(params))
-	for k, v := range params {
-		if s, ok := v.(string); ok {
-			out[k] = interpolate(s, results)
-		} else {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-// detectCycle returns true if the task DAG contains a circular dependency.
-func detectCycle(tasks []dagTask) bool {
-	deps := make(map[string][]string, len(tasks))
-	for _, t := range tasks {
-		deps[t.ID] = t.DependsOn
-	}
-
-	visited := make(map[string]bool, len(tasks))
-	inStack := make(map[string]bool, len(tasks))
-
-	var hasCycle func(id string) bool
-	hasCycle = func(id string) bool {
-		visited[id] = true
-		inStack[id] = true
-		for _, dep := range deps[id] {
-			if !visited[dep] {
-				if hasCycle(dep) {
-					return true
-				}
-			} else if inStack[dep] {
-				return true
-			}
-		}
-		inStack[id] = false
-		return false
-	}
-
-	for _, t := range tasks {
-		if !visited[t.ID] {
-			if hasCycle(t.ID) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// progressFn is a callback to emit progress updates during orchestration.
-type progressFn func(status, message string)
-
-// sessionCtx carries the messaging session identity through the orchestration
-// pipeline so async waiters can be associated with the correct task group.
-type sessionCtx struct {
-	taskGroupID  string
-	sourcePlugin string
-	channelID    string
-}
-
-// orchestrate calls the coordinator, parses its JSON DAG plan, executes tasks
-// in topological order (parallel where possible), and returns the final result.
-func (r *relay) orchestrate(
-	ctx context.Context,
-	coordPluginID string,
-	coordModel string,
-	coordAlias string,
-	coordPrompt string,
-	selfWorkerPrompt string,
-	message string,
-	imageURLs []string,
-	aliases *alias.AliasMap,
-	reqTraceID string,
-	session sessionCtx,
-	progress progressFn,
-) (string, string, *agentChatResponse, error) {
-
-	// Call coordinator in orchestration mode.
-	progress("planning", "Analyzing request...")
-	coordStart := time.Now()
-	if r.debug {
-		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorCall, coordAlias, coordPluginID, "",
-			message, nil, coordModel, 0, "")
-	}
-	coordResp, err := r.callAgent(ctx, coordPluginID, coordModel,
-		message, imageURLs, nil, coordAlias, coordPrompt)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("coordinator: %w", err)
-	}
-
-	if r.debug {
-		r.tracer.Record(reqTraceID, "", debugtrace.TypeCoordinatorResponse, coordAlias, coordPluginID, "",
-			coordResp.Response, toTraceAttachments(coordResp.Attachments), coordResp.Model,
-			time.Since(coordStart).Milliseconds(), "")
-	}
-
-	// Parse plan — if no JSON DAG, coordinator answered directly.
-	plan, isDag := parseCoordinatorPlan(coordResp.Response)
-	if !isDag {
-		if r.debug {
-			log.Printf("relay: coordinator answered directly (no DAG), response length=%d", len(coordResp.Response))
-		}
-		return coordResp.Response, coordAlias, coordResp, nil
-	}
-
-	// Emit plan summary.
-	var taskNames []string
-	for _, t := range plan.Tasks {
-		taskNames = append(taskNames, "@"+t.Alias)
-	}
-	progress("running", fmt.Sprintf("Executing %d tasks: %s", len(plan.Tasks), strings.Join(taskNames, ", ")))
-
-	if r.debug {
-		planJSON, _ := json.MarshalIndent(plan, "", "  ")
-		log.Printf("relay: coordinator DAG plan (%d tasks):\n%s", len(plan.Tasks), planJSON)
-		r.tracer.Record(reqTraceID, "", debugtrace.TypeDAGPlan, coordAlias, "", "",
-			string(planJSON), nil, "", 0, "")
-	}
-
-	// Record DAG in the live log.
-	dagTasks := make([]daglog.TaskDef, len(plan.Tasks))
-	for i, t := range plan.Tasks {
-		dagTasks[i] = daglog.TaskDef{ID: t.ID, Alias: t.Alias, Tool: t.Tool}
-	}
-	dagEntry := r.dags.Start(session.taskGroupID, message, coordAlias, dagTasks)
-
-	// Validate plan.
-	if len(plan.Tasks) > r.maxOrchestrationTasks {
-		r.dags.Fail(dagEntry)
-		return "", "", nil, fmt.Errorf("plan has %d tasks, exceeds maximum of %d", len(plan.Tasks), r.maxOrchestrationTasks)
-	}
-	if detectCycle(plan.Tasks) {
-		r.dags.Fail(dagEntry)
-		return "", "", nil, fmt.Errorf("circular dependency detected in task plan")
-	}
-
-	// Execute DAG — internally we only need the text for interpolation.
-	// Track the last agentChatResponse for terminal task metadata.
-	results := make(map[string]string, len(plan.Tasks))
-	agentResps := make(map[string]*agentChatResponse, len(plan.Tasks))
-	completed := make(map[string]bool, len(plan.Tasks))
-	failed := make(map[string]string) // taskID → error message
-	var mu sync.Mutex
-
-	for len(completed) < len(plan.Tasks) {
-		// Check if remaining tasks depend on a failed task — abort early.
-		mu.Lock()
-		if len(failed) > 0 {
-			for _, t := range plan.Tasks {
-				if completed[t.ID] {
-					continue
-				}
-				for _, dep := range t.DependsOn {
-					if errMsg, ok := failed[dep]; ok {
-						mu.Unlock()
-						if r.debug {
-							log.Printf("relay: DAG aborted — task %s depends on failed task %s", t.ID, dep)
-						}
-						r.dags.Fail(dagEntry)
-						return fmt.Sprintf("Task @%s failed: %s", dep, errMsg), dep, nil, nil
-					}
-				}
-			}
-		}
-		mu.Unlock()
-
-		// Find tasks whose dependencies are all satisfied.
-		var ready []dagTask
-		for _, t := range plan.Tasks {
-			if completed[t.ID] {
-				continue
-			}
-			allDone := true
-			for _, dep := range t.DependsOn {
-				if !completed[dep] {
-					allDone = false
-					break
-				}
-			}
-			if allDone {
-				ready = append(ready, t)
-			}
-		}
-
-		if len(ready) == 0 {
-			r.dags.Fail(dagEntry)
-			return "", "", nil, fmt.Errorf("no tasks ready but %d incomplete — possible cycle missed", len(plan.Tasks)-len(completed))
-		}
-
-		// Snapshot results for interpolation before spawning goroutines.
-		// All deps are complete so this snapshot is valid for all ready tasks.
-		snapshot := make(map[string]string, len(results))
-		for k, v := range results {
-			snapshot[k] = v
-		}
-
-		// Run ready tasks in parallel.
-		var wg sync.WaitGroup
-		for _, task := range ready {
-			wg.Add(1)
-			go func(t dagTask) {
-				defer wg.Done()
-
-				prompt := interpolate(t.Prompt, snapshot)
-				t.Parameters = interpolateParams(t.Parameters, snapshot)
-
-				// Build the full instruction text for DAG visibility.
-				nodePrompt := prompt
-				if len(t.Parameters) > 0 {
-					if pj, err := json.Marshal(t.Parameters); err == nil {
-						if nodePrompt != "" {
-							nodePrompt += "\n\nparameters: " + string(pj)
-						} else {
-							nodePrompt = string(pj)
-						}
-					}
-				}
-				r.dags.NodeStarted(dagEntry, t.ID, nodePrompt)
-				progress("running", fmt.Sprintf("Running @%s...", t.Alias))
-
-				var callTraceID string
-				taskStart := time.Now()
-				targetPluginID := ""
-
-				if r.debug {
-					callTraceID = r.tracer.Record(reqTraceID, "", debugtrace.TypeTaskCall, t.Alias, "", t.ID,
-						prompt, nil, "", 0, "")
-				}
-
-				taskCtx, cancel := context.WithTimeout(ctx, time.Duration(r.taskTimeoutSeconds)*time.Second)
-				defer cancel()
-
-				var taskErr error
-				var result string
-				var resp *agentChatResponse
-				if t.Alias == "self" {
-					targetPluginID = coordPluginID
-					// Call coordinator back in worker mode — use the persona's base
-					// prompt without routing instructions (which would produce another JSON plan).
-					resp, taskErr = r.callAgent(taskCtx, coordPluginID, coordModel,
-						prompt, nil, nil, coordAlias, selfWorkerPrompt)
-					if taskErr != nil {
-						result = fmt.Sprintf("[error from self: %v]", taskErr)
-					} else {
-						result = resp.Response
-					}
-				} else if t.Tool != "" {
-					// Direct tool call — route to the tool endpoint on the plugin.
-					resolved := r.resolvePersonaOrAlias(t.Alias, aliases)
-					if resolved == nil {
-						taskErr = fmt.Errorf("@%s not found as persona or alias", t.Alias)
-						result = fmt.Sprintf("[error: %v]", taskErr)
-					} else {
-						targetPluginID = resolved.PluginID
-						toolResult, toolErr := r.callTool(taskCtx, resolved.PluginID, t.Tool, t.Parameters)
-						if toolErr != nil {
-							taskErr = toolErr
-							result = fmt.Sprintf("[error from @%s tool %s: %v]", t.Alias, t.Tool, toolErr)
-						} else {
-							// Parse as agentChatResponse if possible, fall back to raw JSON.
-							if err := json.Unmarshal(toolResult, &resp); err != nil || resp.Response == "" {
-								resp = &agentChatResponse{Response: string(toolResult)}
-							}
-							result = resp.Response
-						}
-					}
-				} else {
-					// Persona-first, alias-fallback resolution.
-					resolved := r.resolvePersonaOrAlias(t.Alias, aliases)
-					if resolved == nil {
-						taskErr = fmt.Errorf("@%s not found as persona or alias", t.Alias)
-						result = fmt.Sprintf("[error: %v]", taskErr)
-					} else {
-						targetPluginID = resolved.PluginID
-						agentPrompt := r.enrichSystemPrompt(resolved.SystemPrompt, aliases)
-						resp, taskErr = r.callAgent(taskCtx, resolved.PluginID, resolved.Model,
-							prompt, nil, nil, resolved.Alias, agentPrompt)
-						if taskErr != nil {
-							result = fmt.Sprintf("[error from @%s: %v]", t.Alias, taskErr)
-						} else {
-							result = resp.Response
-						}
-					}
-				}
-
-				// If the tool returned an async response, emit a started event
-				// and block until the async task completes via event bus.
-				if resp != nil && resp.Status == "processing" && resp.TaskID != "" {
-					progress("running", fmt.Sprintf("@%s started async task %s...", t.Alias, resp.TaskID))
-					asyncResp, asyncErr := r.waitForAsync(resp.TaskID, session.taskGroupID, session.sourcePlugin, session.channelID)
-					if asyncErr != nil {
-						taskErr = asyncErr
-						result = fmt.Sprintf("[error from @%s: %v]", t.Alias, asyncErr)
-						resp = nil
-					} else {
-						resp = asyncResp
-						result = asyncResp.Response
-					}
-				}
-
-				if r.debug {
-					var traceErr string
-					if taskErr != nil {
-						traceErr = taskErr.Error()
-					}
-					var respAttach []debugtrace.Attachment
-					respModel := ""
-					if resp != nil {
-						respAttach = toTraceAttachments(resp.Attachments)
-						respModel = resp.Model
-					}
-					r.tracer.Record(reqTraceID, callTraceID, debugtrace.TypeTaskResponse, t.Alias, targetPluginID, t.ID,
-						result, respAttach, respModel, time.Since(taskStart).Milliseconds(), traceErr)
-				}
-
-				mu.Lock()
-				results[t.ID] = result
-				if resp != nil {
-					agentResps[t.ID] = resp
-				}
-				completed[t.ID] = true
-				if taskErr != nil {
-					failed[t.ID] = taskErr.Error()
-					r.dags.NodeFailed(dagEntry, t.ID, taskErr.Error())
-					progress("running", fmt.Sprintf("@%s failed: %v", t.Alias, taskErr))
-				} else {
-					r.dags.NodeCompleted(dagEntry, t.ID)
-					elapsed := time.Since(taskStart)
-					progress("running", fmt.Sprintf("@%s completed (%.1fs)", t.Alias, elapsed.Seconds()))
-				}
-				mu.Unlock()
-			}(task)
-		}
-		wg.Wait()
-	}
-
-	// Collect all attachments from every task in the DAG.
-	var allAttachments []agentAttachment
-	for _, t := range plan.Tasks {
-		if resp := agentResps[t.ID]; resp != nil && len(resp.Attachments) > 0 {
-			allAttachments = append(allAttachments, resp.Attachments...)
-		}
-	}
-
-	// Build a summary of all task results for synthesis.
-	var summaryParts strings.Builder
-	for _, t := range plan.Tasks {
-		fmt.Fprintf(&summaryParts, "[%s @%s]: %s\n\n", t.ID, t.Alias, results[t.ID])
-	}
-
-	progress("synthesizing", "Combining results...")
-
-	// Call the coordinator one final time to synthesize a user-friendly summary.
-	synthesisPrompt := fmt.Sprintf(
-		"The user asked: %s\n\nThe following tasks were executed and produced these results:\n\n%s"+
-			"Summarize the outcome for the user in natural, conversational language. "+
-			"Be concise. Do not mention task IDs, aliases, or internal details. "+
-			"If a task produced an image or file, mention it naturally.",
-		message, summaryParts.String())
-
-	synthCtx, synthCancel := context.WithTimeout(ctx, time.Duration(r.taskTimeoutSeconds)*time.Second)
-	defer synthCancel()
-
-	synthResp, synthErr := r.callAgent(synthCtx, coordPluginID, coordModel,
-		synthesisPrompt, nil, nil, coordAlias, selfWorkerPrompt)
-	if synthErr != nil {
-		// Fallback: return raw concatenation if synthesis fails.
-		log.Printf("relay: synthesis call failed: %v, using raw results", synthErr)
-		r.dags.Complete(dagEntry)
-		fallback := &agentChatResponse{Attachments: allAttachments}
-		return strings.TrimSpace(summaryParts.String()), coordAlias, fallback, nil
-	}
-
-	// Carry forward all attachments from the DAG into the synthesis response.
-	if len(allAttachments) > 0 {
-		synthResp.Attachments = append(synthResp.Attachments, allAttachments...)
-	}
-
-	r.dags.Complete(dagEntry)
-	return synthResp.Response, coordAlias, synthResp, nil
-}
+// --- Agent routing ---
 
 // toTraceAttachments converts agent attachments to trace attachment format.
 func toTraceAttachments(attachments []agentAttachment) []debugtrace.Attachment {
@@ -1657,10 +1071,10 @@ func (r *relay) handleChatToAgent(c *gin.Context) {
 	}
 
 	aliases := r.routes.Aliases()
-	resolved := r.resolvePersonaOrAlias(req.AgentAlias, aliases)
+	resolved := r.resolvePersona(req.AgentAlias, aliases)
 	if resolved == nil {
 		c.JSON(http.StatusOK, gin.H{
-			"error": fmt.Sprintf("agent %q not found — available agents may have changed", req.AgentAlias),
+			"error": fmt.Sprintf("agent %q has no persona — create a persona to enable chat", req.AgentAlias),
 		})
 		return
 	}
@@ -1783,7 +1197,6 @@ func main() {
 			}
 			if relayRef != nil {
 				schema["route_map"] = relayRef.routeMapSchema()
-				schema["agent_dag_list"] = relayRef.dags.AllDags()
 			}
 			return schema
 		},
@@ -1874,15 +1287,6 @@ func main() {
 		log.Printf("Failed to fetch relay config: %v (using defaults)", err)
 	}
 
-	if v := pluginConfig["ORCHESTRATION_MODE"]; v == "coordinator" || v == "direct" {
-		r.orchestrationMode = v
-		log.Printf("Orchestration mode: %s", v)
-	}
-	if v := pluginConfig["MAX_ORCHESTRATION_TASKS"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			r.maxOrchestrationTasks = n
-		}
-	}
 	if v := pluginConfig["TASK_TIMEOUT_SECONDS"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			r.taskTimeoutSeconds = n
@@ -1906,22 +1310,6 @@ func main() {
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
 			log.Printf("config:update parse error: %v", err)
 			return
-		}
-
-		if v, ok := detail.Config["ORCHESTRATION_MODE"]; ok && (v == "direct" || v == "coordinator") {
-			r.mu.Lock()
-			r.orchestrationMode = v
-			r.mu.Unlock()
-			log.Printf("ORCHESTRATION_MODE updated: %s", v)
-		}
-
-		if v, ok := detail.Config["MAX_ORCHESTRATION_TASKS"]; ok {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				r.mu.Lock()
-				r.maxOrchestrationTasks = n
-				r.mu.Unlock()
-				log.Printf("MAX_ORCHESTRATION_TASKS updated: %d", n)
-			}
 		}
 
 		if v, ok := detail.Config["TASK_TIMEOUT_SECONDS"]; ok {
@@ -1954,7 +1342,7 @@ func main() {
 	}))
 
 	// Handle progress updates from async plugins (e.g. seedance webhook callbacks).
-	// Forward to the source messaging plugin and resolve any waiting DAG tasks.
+	// Forward to the source messaging plugin and resolve any waiting async tasks.
 	sdkClient.OnEvent("relay:task:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var update struct {
 			TaskID      string `json:"task_id"`
@@ -1975,7 +1363,7 @@ func main() {
 
 		log.Printf("relay: progress update task=%s status=%s message=%s", update.TaskID, update.Status, update.Message)
 
-		// If a DAG task is waiting for this async result, deliver it.
+		// If an async task is waiting for this result, deliver it.
 		if update.Status == "completed" || update.Status == "failed" {
 			resp := &agentChatResponse{
 				Response: update.Message,
@@ -2014,7 +1402,7 @@ func main() {
 		// Forward as a "running" progress update so the UI shows it as an
 		// intermediate status — not "completed"/"failed", which would cause
 		// the messaging plugin to store a final message prematurely.
-		// The real final response comes from the DAG synthesis step.
+		// The real final response comes from the agent's streamed reply.
 		forwardStatus := "running"
 		forwardMessage := update.Message
 		if update.Status == "completed" {

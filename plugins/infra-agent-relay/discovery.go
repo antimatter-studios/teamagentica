@@ -15,49 +15,6 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-// workerTemplateData is the data passed when rendering a worker persona's system prompt.
-type workerTemplateData struct {
-	Alias        string
-	IsSelfWorker bool
-}
-
-// getSelfWorkerPrompt looks up the worker role's system prompt from the persona plugin
-// and renders it with IsSelfWorker=true. Falls back to a basic prompt if unavailable.
-func (r *relay) getSelfWorkerPrompt(coordAlias string) string {
-	if r.sdk != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		body, err := r.sdk.RouteToPlugin(ctx, "infra-agent-persona", "GET", "/roles/worker", nil)
-		if err == nil {
-			var role struct {
-				SystemPrompt string `json:"system_prompt"`
-			}
-			if json.Unmarshal(body, &role) == nil && role.SystemPrompt != "" {
-				return renderWorkerPrompt(role.SystemPrompt, workerTemplateData{
-					Alias:        coordAlias,
-					IsSelfWorker: true,
-				})
-			}
-		}
-	}
-	// Fallback if persona plugin is unavailable.
-	return "You have been delegated a task by the coordinator. Respond with your answer in plain text or Markdown. NEVER output a JSON task plan."
-}
-
-// renderWorkerPrompt renders a worker persona's system prompt as a Go template.
-// If the prompt contains no template syntax, it's returned as-is.
-func renderWorkerPrompt(promptTemplate string, data workerTemplateData) string {
-	tmpl, err := template.New("worker").Parse(promptTemplate)
-	if err != nil {
-		return promptTemplate
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return promptTemplate
-	}
-	return strings.TrimSpace(buf.String())
-}
-
 // toolDiscovery caches discovered tools from tool:* plugins.
 type toolDiscovery struct {
 	mu        sync.RWMutex
@@ -179,20 +136,20 @@ type tmplAnonTool struct {
 	Description string
 }
 
-type coordinatorContextData struct {
-	Agents []tmplAgent
-	AliasedTools  []tmplAliasedTool
-	Storage       []tmplStorage
-	MCPTools      []tmplMCPTool
-	AnonTools     []tmplAnonTool
+type promptContextData struct {
+	Agents       []tmplAgent
+	AliasedTools []tmplAliasedTool
+	Storage      []tmplStorage
+	MCPTools     []tmplMCPTool
+	AnonTools    []tmplAnonTool
 }
 
-// buildCoordinatorContext renders the coordinator system prompt from the template,
-// populated with persona prompt, alias, and tool discovery data.
-func buildCoordinatorContext(personaPrompt string, aliases *alias.AliasMap, discoveredTools []alias.ToolInfo) string {
+// buildPromptContext renders a persona's system prompt template,
+// populated with alias and tool discovery data.
+func buildPromptContext(personaPrompt string, aliases *alias.AliasMap, discoveredTools []alias.ToolInfo) string {
 	entries := aliases.List()
 
-	data := coordinatorContextData{}
+	data := promptContextData{}
 
 	// Classify aliases.
 	aliasedPlugins := make(map[string]bool)
@@ -255,16 +212,16 @@ func buildCoordinatorContext(personaPrompt string, aliases *alias.AliasMap, disc
 		}
 	}
 
-	// Parse the persona prompt as a Go template — it contains {{.Agents}}, {{.Tools}}, etc.
-	tmpl, err := template.New("coordinator").Parse(personaPrompt)
+	// Parse the persona prompt as a Go template — it may contain {{.Agents}}, {{.Tools}}, etc.
+	tmpl, err := template.New("prompt").Parse(personaPrompt)
 	if err != nil {
-		log.Printf("relay: failed to parse coordinator prompt as template: %v", err)
+		log.Printf("relay: failed to parse persona prompt as template: %v", err)
 		return personaPrompt // Fall back to raw prompt if template syntax is invalid.
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		log.Printf("relay: failed to render coordinator context template: %v", err)
+		log.Printf("relay: failed to render persona prompt template: %v", err)
 		return personaPrompt
 	}
 	return strings.TrimSpace(buf.String())
@@ -311,9 +268,9 @@ func toolParamSummary(params map[string]interface{}) string {
 	return strings.Join(parts, ", ")
 }
 
-// enrichSystemPrompt renders the full coordinator system prompt by combining
+// enrichSystemPrompt renders the full system prompt by combining
 // the persona prompt with alias/tool context via the template.
 func (r *relay) enrichSystemPrompt(personaPrompt string, aliases *alias.AliasMap) string {
 	tools := discoverTools(r.sdk)
-	return buildCoordinatorContext(personaPrompt, aliases, tools)
+	return buildPromptContext(personaPrompt, aliases, tools)
 }
