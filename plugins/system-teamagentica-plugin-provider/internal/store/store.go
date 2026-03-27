@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // Manifest stores a versioned plugin manifest in the catalog database.
@@ -63,18 +63,12 @@ type Store struct {
 
 // Open creates or opens the catalog SQLite database.
 func Open(path string) (*Store, error) {
-	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	dir := filepath.Dir(path)
+	name := filepath.Base(path)
+	db, err := pluginsdk.OpenDatabase(dir, name, &Manifest{})
 	if err != nil {
 		return nil, fmt.Errorf("open catalog db: %w", err)
 	}
-
-	if err := db.AutoMigrate(&Manifest{}); err != nil {
-		return nil, fmt.Errorf("migrate catalog db: %w", err)
-	}
-
 	return &Store{db: db}, nil
 }
 

@@ -18,7 +18,7 @@ import (
 //	db, err := pluginsdk.OpenDatabase("/data", "mydb.db", &User{}, &Token{})
 func OpenDatabase(dataPath, filename string, models ...interface{}) (*gorm.DB, error) {
 	dbPath := filepath.Join(dataPath, filename)
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
 
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),

@@ -3,12 +3,12 @@ package debugtrace
 import (
 	"encoding/json"
 	"log"
+	"path/filepath"
 	"time"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/google/uuid"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // Recorder writes structured trace rows to SQLite when debug mode is on.
@@ -54,19 +54,11 @@ type Trace struct {
 }
 
 // Open creates or opens the trace database at the given path.
-// Uses the same DSN parameters as the kernel: WAL mode, 5s busy timeout,
-// normal sync, foreign keys on.
 func Open(dbPath string) (*Recorder, error) {
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
-
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	dir := filepath.Dir(dbPath)
+	name := filepath.Base(dbPath)
+	db, err := pluginsdk.OpenDatabase(dir, name, &Trace{})
 	if err != nil {
-		return nil, err
-	}
-
-	if err := db.AutoMigrate(&Trace{}); err != nil {
 		return nil, err
 	}
 

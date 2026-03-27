@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
@@ -33,7 +33,7 @@ func Get() *gorm.DB { return DB }
 func Init(path string) {
 	dbPath = path
 	// SQLite pragmas via DSN: WAL mode, 5s busy timeout, normal sync (safe for WAL).
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
 
 	var err error
 	DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -62,7 +62,7 @@ func Reinit() error {
 		sqlDB.Close()
 	}
 
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_foreign_keys=ON"
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
 	DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
