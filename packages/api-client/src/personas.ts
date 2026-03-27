@@ -8,6 +8,7 @@ export interface Persona {
   model: string;
   backend_alias: string;
   role: string;
+  is_default?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -15,7 +16,6 @@ export interface Persona {
 export interface PersonaRole {
   id: string;
   label: string;
-  max_count: number;
   system_prompt: string;
 }
 
@@ -25,6 +25,7 @@ export interface CreatePersonaRequest {
   model?: string;
   backend_alias?: string;
   role?: string;
+  is_default?: boolean;
 }
 
 export interface UpdatePersonaRequest {
@@ -32,6 +33,18 @@ export interface UpdatePersonaRequest {
   model?: string;
   backend_alias?: string;
   role?: string;
+  is_default?: boolean;
+}
+
+export interface CreateRoleRequest {
+  id: string;
+  label: string;
+  system_prompt?: string;
+}
+
+export interface UpdateRoleRequest {
+  label?: string;
+  system_prompt?: string;
 }
 
 export class PersonaAPI {
@@ -68,11 +81,11 @@ export class PersonaAPI {
     return this.http.get<PersonaRole>(`${ROUTE}/roles/${encodeURIComponent(id)}`);
   }
 
-  async createRole(req: { id: string; label: string; max_count: number; system_prompt?: string }): Promise<PersonaRole> {
+  async createRole(req: CreateRoleRequest): Promise<PersonaRole> {
     return this.http.post<PersonaRole>(`${ROUTE}/roles`, req);
   }
 
-  async updateRole(id: string, req: { label?: string; max_count?: number; system_prompt?: string }): Promise<PersonaRole> {
+  async updateRole(id: string, req: UpdateRoleRequest): Promise<PersonaRole> {
     return this.http.put<PersonaRole>(`${ROUTE}/roles/${encodeURIComponent(id)}`, req);
   }
 
@@ -80,8 +93,12 @@ export class PersonaAPI {
     await this.http.delete(`${ROUTE}/roles/${encodeURIComponent(id)}`);
   }
 
-  async resetRolePrompts(): Promise<{ message: string }> {
-    return this.http.post<{ message: string }>(`${ROUTE}/roles/reset-prompts`, {});
+  async getDefault(): Promise<Persona> {
+    return this.http.get<Persona>(`${ROUTE}/personas/default`);
+  }
+
+  async setDefault(alias: string): Promise<Persona> {
+    return this.http.post<Persona>(`${ROUTE}/personas/${encodeURIComponent(alias)}/set-default`, {});
   }
 
   async getPersonasByRole(role: string): Promise<Persona[]> {
