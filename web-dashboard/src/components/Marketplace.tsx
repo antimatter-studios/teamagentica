@@ -23,7 +23,6 @@ export default function Marketplace() {
   const fetch = useMarketplaceStore((s) => s.fetch);
   const fetchProviders = useMarketplaceStore((s) => s.fetchProviders);
   const install = useMarketplaceStore((s) => s.install);
-  const upgrade = useMarketplaceStore((s) => s.upgrade);
   const plugins = usePluginStore((s) => s.plugins);
   const fetchPlugins = usePluginStore((s) => s.fetch);
 
