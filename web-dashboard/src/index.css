@@ -1684,6 +1684,11 @@ body::after {
   background: #6b7280;
 }
 
+.plugin-status-dot.status-disabled {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+}
+
 @keyframes statusPulse {
   0%, 100% { opacity: 0.7; }
   50% { opacity: 1; }
@@ -1720,6 +1725,13 @@ body::after {
   color: #6b7280;
   background: rgba(107, 114, 128, 0.1);
   border: 1px solid rgba(107, 114, 128, 0.2);
+}
+
+.plugin-status-label.status-disabled,
+.plugin-sidebar-status.status-disabled {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
 /* ─── Capability tags ─── */
@@ -2365,9 +2377,15 @@ body::after {
 }
 
 .marketplace-row-update .marketplace-installed-badge {
-  background: rgba(0, 0, 0, 0.1);
-  border-color: rgba(0, 0, 0, 0.2);
-  color: #000;
+  background: #000;
+  border-color: #000;
+  color: #f97316;
+  cursor: pointer;
+}
+
+.marketplace-row-update .marketplace-installed-badge:hover {
+  background: #1a1a1a;
+  color: #fb923c;
 }
 
 .marketplace-install-btn {
@@ -2535,6 +2553,20 @@ body::after {
   background: rgba(124, 106, 246, 0.1);
   border-left-color: var(--accent);
   color: var(--text-primary);
+}
+
+.plugin-sidebar-item.disabled {
+  background: rgba(239, 68, 68, 0.08);
+  border-left-color: #ef4444;
+}
+
+.plugin-sidebar-item.disabled:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.plugin-sidebar-item.disabled.active {
+  background: rgba(239, 68, 68, 0.15);
+  border-left-color: #ef4444;
 }
 
 .plugin-sidebar-name {

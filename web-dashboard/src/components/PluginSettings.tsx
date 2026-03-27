@@ -276,14 +276,14 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
               {g.plugins.map((p) => (
                 <div
                   key={p.id}
-                  className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}`}
+                  className={`plugin-sidebar-item${selectedId === p.id ? " active" : ""}${!p.enabled ? " disabled" : ""}`}
                   onClick={() => {
                     selectPlugin(p.id);
                     setConfirmUninstall(null);
                     setActionError("");
                   }}
                 >
-                  <span className={`plugin-status-dot ${statusClass(p.status)}`} />
+                  <span className={`plugin-status-dot ${!p.enabled ? "status-disabled" : statusClass(p.status)}`} />
                   <span className="plugin-sidebar-name">{p.name}</span>
                   {p.status === "running" && (
                     <button
@@ -297,8 +297,8 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
                       ↻
                     </button>
                   )}
-                  <span className={`plugin-sidebar-status ${statusClass(p.status)}`}>
-                    {p.status.toUpperCase()}
+                  <span className={`plugin-sidebar-status ${!p.enabled ? "status-disabled" : statusClass(p.status)}`}>
+                    {!p.enabled ? "DISABLED" : p.status.toUpperCase()}
                   </span>
                 </div>
               ))}
@@ -322,11 +322,11 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
             {/* ── Plugin header ── */}
             <div className="plugin-detail-header">
               <div className="plugin-detail-title-row">
-                <span className={`plugin-status-dot large ${statusClass(selected.status)}`} />
+                <span className={`plugin-status-dot large ${!selected.enabled ? "status-disabled" : statusClass(selected.status)}`} />
                 <h2 className="plugin-detail-name">{selected.name}</h2>
                 <span className="plugin-version">v{selected.version}</span>
-                <span className={`plugin-status-label ${statusClass(selected.status)}`}>
-                  {selected.status.toUpperCase()}
+                <span className={`plugin-status-label ${!selected.enabled ? "status-disabled" : statusClass(selected.status)}`}>
+                  {!selected.enabled ? "DISABLED" : selected.status.toUpperCase()}
                 </span>
               </div>
 
