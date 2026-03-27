@@ -28,3 +28,4 @@ agentbridge/
 portpilot/
 dist/
 .vite
+.claude/settings.json
