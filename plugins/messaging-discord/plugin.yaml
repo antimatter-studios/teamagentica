@@ -2,7 +2,7 @@ id: messaging-discord
 name: "Discord Bot"
 description: "Discord bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.21"
+version: "1.0.22"
 image: "teamagentica-messaging-discord:latest"
 author: teamagentica
 tags: [chat, discord, bot]

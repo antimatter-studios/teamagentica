@@ -2,7 +2,7 @@ id: agent-openai
 name: "OpenAI Agent"
 description: "AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities"
 group: agents
-version: "1.0.26"
+version: "1.0.27"
 image: "teamagentica-agent-openai:latest"
 author: teamagentica
 tags: [chat, ai, agent, codex]

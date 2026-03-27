@@ -2,7 +2,7 @@ id: network-webhook
 name: "Webhooks"
 description: "Webhook route registry and reverse proxy. Routes external webhook traffic from the ingress to internal plugins."
 group: network
-version: "1.0.8"
+version: "1.0.9"
 image: "teamagentica-network-webhook:latest"
 author: TeamAgentica
 tags: [webhook, networking, routing]
