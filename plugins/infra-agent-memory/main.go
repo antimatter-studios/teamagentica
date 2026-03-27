@@ -93,11 +93,6 @@ func main() {
 	}
 
 	port := defaultPort
-	if v := pluginConfig["PLUGIN_PORT"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
 
 	mem0Port := 8010
 	if v := pluginConfig["MEM0_PORT"]; v != "" {

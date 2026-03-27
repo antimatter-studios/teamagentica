@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -64,6 +65,11 @@ func (h *Handler) MemoryList() (interface{}, int, int) {
 		PageSize: 1000,
 	})
 	total := len(allMems)
+	// Sort memories by created_at descending (newest first).
+	sort.Slice(mems, func(i, j int) bool {
+		return mems[i].CreatedAt > mems[j].CreatedAt
+	})
+
 	type item struct {
 		Time    string   `json:"time"`
 		Message string   `json:"message"`
@@ -80,8 +86,15 @@ func (h *Handler) MemoryList() (interface{}, int, int) {
 		if len(text) > 120 {
 			text = text[:117] + "..."
 		}
+		// Format datetime for display: "2026-03-27 14:30"
+		displayTime := m.CreatedAt
+		if t, err := time.Parse(time.RFC3339Nano, m.CreatedAt); err == nil {
+			displayTime = t.Format("2006-01-02 15:04")
+		} else if t, err := time.Parse(time.RFC3339, m.CreatedAt); err == nil {
+			displayTime = t.Format("2006-01-02 15:04")
+		}
 		result[i] = item{
-			Time:    m.CreatedAt,
+			Time:    displayTime,
 			Message: text,
 			Summary: m.ID,
 			ID:      m.ID,

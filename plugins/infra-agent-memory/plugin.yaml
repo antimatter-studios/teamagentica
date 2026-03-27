@@ -2,7 +2,7 @@ id: infra-agent-memory
 name: "Agent Memory"
 description: "Persistent semantic memory for agents — powered by Mem0 with embedded Qdrant vector store"
 group: infrastructure
-version: "0.3.25"
+version: "0.3.27"
 image: "teamagentica-infra-agent-memory:latest"
 author: teamagentica
 tags: [memory, agents, semantic, facts, mem0]
