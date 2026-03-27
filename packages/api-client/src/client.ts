@@ -36,6 +36,19 @@ export class HttpTransport {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
+  /** Wrap fetch to turn network errors into actionable messages. */
+  private async doFetch(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      const base = this.config.baseUrl;
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
+        throw new Error(`Cannot reach server at ${base} — is it running?`);
+      }
+      throw new Error(`Network error contacting ${base}: ${(err as Error).message}`);
+    }
+  }
+
   private async handleResponse<T>(res: Response): Promise<T> {
     if (res.status === 401) {
       this.config.onUnauthorized?.();
@@ -50,7 +63,7 @@ export class HttpTransport {
   }
 
   async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "GET",
       headers: this.authHeaders(),
     });
@@ -58,7 +71,7 @@ export class HttpTransport {
   }
 
   async getText(path: string): Promise<string> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "GET",
       headers: this.authHeaders(),
     });
@@ -74,7 +87,7 @@ export class HttpTransport {
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...this.authHeaders() },
       body: JSON.stringify(body),
@@ -83,7 +96,7 @@ export class HttpTransport {
   }
 
   async put<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...this.authHeaders() },
       body: JSON.stringify(body),
@@ -92,7 +105,7 @@ export class HttpTransport {
   }
 
   async patch<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...this.authHeaders() },
       body: JSON.stringify(body),
@@ -101,7 +114,7 @@ export class HttpTransport {
   }
 
   async delete<T = void>(path: string): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "DELETE",
       headers: this.authHeaders(),
     });
@@ -109,7 +122,7 @@ export class HttpTransport {
   }
 
   async putRaw(path: string, body: BodyInit, contentType: string): Promise<void> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "PUT",
       headers: { "Content-Type": contentType, ...this.authHeaders() },
       body,
@@ -118,7 +131,7 @@ export class HttpTransport {
   }
 
   async getRaw(path: string): Promise<Response> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "GET",
       headers: this.authHeaders(),
       cache: "no-store",
@@ -128,7 +141,7 @@ export class HttpTransport {
   }
 
   async deleteRaw(path: string): Promise<void> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "DELETE",
       headers: this.authHeaders(),
     });
@@ -136,7 +149,7 @@ export class HttpTransport {
   }
 
   async postFormData<T>(path: string, formData: FormData): Promise<T> {
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "POST",
       headers: this.authHeaders(),
       body: formData,
