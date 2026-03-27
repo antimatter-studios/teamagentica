@@ -668,7 +668,10 @@ func (h *PluginHandler) GetPluginConfig(c *gin.Context) {
 			seen[key] = true
 			val := ""
 			isSecret := field.Secret
-			if cfg, ok := stored[key]; ok {
+			if field.Virtual {
+				// Virtual fields are never persisted — always show the default.
+				val = field.Default
+			} else if cfg, ok := stored[key]; ok {
 				if cfg.IsSecret || isSecret {
 					if cfg.Value != "" {
 						val = "********"
@@ -727,20 +730,21 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		return
 	}
 
-	// Fetch live schema from plugin to check for readonly fields.
-	var readonlyKeys map[string]bool
+	// Fetch live schema from plugin to check for readonly/virtual fields.
+	var skipPersist map[string]bool
 	if plugin.Status == "running" && plugin.Host != "" {
 		if schemaBody, err := h.fetchPluginSchema(plugin); err == nil {
 			var schema struct {
 				Config map[string]struct {
 					ReadOnly bool `json:"readonly"`
+					Virtual  bool `json:"virtual"`
 				} `json:"config"`
 			}
 			if json.Unmarshal(schemaBody, &schema) == nil {
-				readonlyKeys = make(map[string]bool)
+				skipPersist = make(map[string]bool)
 				for k, f := range schema.Config {
-					if f.ReadOnly {
-						readonlyKeys[k] = true
+					if f.ReadOnly || f.Virtual {
+						skipPersist[k] = true
 					}
 				}
 			}
@@ -750,8 +754,9 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 	const maxConfigValueSize = 128 * 1024 // 128 KB
 
 	for key, entry := range req.Config {
-		// Skip readonly fields — they are set by the plugin, not the user.
-		if readonlyKeys[key] {
+		// Skip readonly/virtual fields — don't persist to DB.
+		// Virtual fields are still included in the config:update event.
+		if skipPersist[key] {
 			continue
 		}
 

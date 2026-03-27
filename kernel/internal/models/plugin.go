@@ -95,6 +95,7 @@ type ConfigSchemaField struct {
 	Required    bool         `json:"required,omitempty"`      // Whether the field must be set
 	Secret      bool         `json:"secret,omitempty"`        // Whether to mask the value in UI
 	ReadOnly    bool         `json:"readonly,omitempty"`      // Display-only; cannot be changed by the user
+	Virtual     bool         `json:"virtual,omitempty"`       // Pass-through only; value is never persisted
 	Default     string       `json:"default,omitempty"`       // Default value
 	Options     []string     `json:"options,omitempty"`       // For "select" type
 	Dynamic     bool         `json:"dynamic,omitempty"`       // Fetch options at runtime from plugin
