@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -340,11 +341,19 @@ func (h *Handler) SendMessage(c *gin.Context) {
 	// The actual response arrives via relay:progress events.
 	accepted, err := h.relay.Chat(channelID, messageText, imageURLs)
 	if err != nil {
-		log.Printf("[chat] relay error: %v", err)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error":        "agent request failed: " + err.Error(),
-			"user_message": userMsg,
-		})
+		var ue *relay.UserError
+		if errors.As(err, &ue) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error":        ue.Message,
+				"user_message": userMsg,
+			})
+		} else {
+			log.Printf("[chat] relay error: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":        "agent request failed: " + err.Error(),
+				"user_message": userMsg,
+			})
+		}
 		return
 	}
 

@@ -28,10 +28,18 @@ type Request struct {
 	ImageURLs    []string `json:"image_urls,omitempty"`
 }
 
+// UserError is returned when the relay rejects a message with a user-facing reason.
+type UserError struct {
+	Message string
+}
+
+func (e *UserError) Error() string { return e.Message }
+
 // Response is the relay's reply.
 type Response struct {
-	Response  string `json:"response"`
-	Responder string `json:"responder,omitempty"`
+	Response    string `json:"response"`
+	Responder   string `json:"responder,omitempty"`
+	UserMessage string `json:"user_message,omitempty"`
 }
 
 // Chat sends a message through the relay and returns the response.
@@ -56,6 +64,10 @@ func (c *Client) Chat(channelID, message string, imageURLs []string) (*Response,
 	var resp Response
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	if resp.UserMessage != "" {
+		return nil, &UserError{Message: resp.UserMessage}
 	}
 
 	if resp.Response == "" {

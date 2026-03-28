@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -138,9 +139,14 @@ func (b *Bot) handleMessage(msg waClient.Message, senderName string) {
 	// coordinator resolution, persona injection, and conversation memory.
 	resp, err := b.relay.Chat(chatID, text, imageURLs)
 	if err != nil {
-		log.Printf("[message] relay error: %v", err)
-		b.emitEvent("error", fmt.Sprintf("relay error: %v", err))
-		b.wa.SendText(chatID, "Sorry, I encountered an error processing your message.")
+		var ue *relay.UserError
+		if errors.As(err, &ue) {
+			b.wa.SendText(chatID, ue.Message)
+		} else {
+			log.Printf("[message] relay error: %v", err)
+			b.emitEvent("error", fmt.Sprintf("relay error: %v", err))
+			b.wa.SendText(chatID, "Sorry, I encountered an error processing your message.")
+		}
 		return
 	}
 

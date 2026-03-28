@@ -55,9 +55,17 @@ type Response struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
+// UserError is returned when the relay rejects a message with a user-facing reason.
+type UserError struct {
+	Message string
+}
+
+func (e *UserError) Error() string { return e.Message }
+
 // AcceptedResponse is the immediate return from POST /chat.
 type AcceptedResponse struct {
 	TaskGroupID string `json:"task_group_id"`
+	UserMessage string `json:"user_message,omitempty"`
 }
 
 // Chat sends a message to the relay. Returns a task_group_id immediately.
@@ -83,6 +91,10 @@ func (c *Client) Chat(channelID, message string, imageURLs []string) (*AcceptedR
 	var resp AcceptedResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	if resp.UserMessage != "" {
+		return nil, &UserError{Message: resp.UserMessage}
 	}
 
 	if resp.TaskGroupID == "" {
