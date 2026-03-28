@@ -138,6 +138,7 @@ type tmplAnonTool struct {
 
 type promptContextData struct {
 	CurrentAlias string
+	Alias        string // Synonym for CurrentAlias — templates may use {{.Alias}}.
 	Agents       []tmplAgent
 	AliasedTools []tmplAliasedTool
 	Storage      []tmplStorage
@@ -150,7 +151,7 @@ type promptContextData struct {
 func buildPromptContext(currentAlias, personaPrompt string, aliases *alias.AliasMap, discoveredTools []alias.ToolInfo) string {
 	entries := aliases.List()
 
-	data := promptContextData{CurrentAlias: currentAlias}
+	data := promptContextData{CurrentAlias: currentAlias, Alias: currentAlias}
 
 	// Classify aliases.
 	aliasedPlugins := make(map[string]bool)

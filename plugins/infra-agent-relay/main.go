@@ -62,13 +62,11 @@ type personaInfo struct {
 	IsDefault    *bool  `json:"is_default"`
 }
 
-// personaCache caches all persona definitions with a TTL.
+// personaCache holds all persona definitions, loaded on startup and patched
+// reactively via persona:update events. No TTL polling.
 type personaCache struct {
-	mu          sync.RWMutex
-	pluginID    string
-	personas    map[string]personaInfo
-	fetchedAt   time.Time
-	ttl         time.Duration
+	mu       sync.RWMutex
+	personas map[string]personaInfo
 }
 
 func newRelay(sdk *pluginsdk.Client) *relay {
@@ -77,7 +75,7 @@ func newRelay(sdk *pluginsdk.Client) *relay {
 		routes:                router.NewTable(),
 		sdk:                   sdk,
 		taskTimeoutSeconds:    120,
-		personas:              &personaCache{ttl: 60 * time.Second},
+		personas:              &personaCache{},
 		asyncWaiters:          make(map[string]*asyncWaiter),
 	}
 }
@@ -136,34 +134,17 @@ func (r *relay) resolveAsyncWaiter(taskID string, resp *agentChatResponse) bool 
 	return false
 }
 
-// fetchPersonas returns all personas from infra-alias-registry, using a TTL cache.
-// Returns an empty map if the plugin is not installed or unavailable.
-func (r *relay) fetchPersonas() map[string]personaInfo {
-	cache := r.personas
-
-	cache.mu.RLock()
-	if time.Since(cache.fetchedAt) < cache.ttl && cache.personas != nil {
-		p := cache.personas
-		cache.mu.RUnlock()
-		return p
+// refreshPersonas fetches all personas from infra-agent-persona and replaces
+// the cache. On failure, the existing cache is preserved (never overwrite good
+// data with empty). Called once on startup and reactively from persona:update events.
+func (r *relay) refreshPersonas() {
+	if r.sdk == nil {
+		return
 	}
-	cache.mu.RUnlock()
-
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-
-	// Double-check after acquiring write lock.
-	if time.Since(cache.fetchedAt) < cache.ttl && cache.personas != nil {
-		return cache.personas
-	}
-
-	empty := map[string]personaInfo{}
 
 	plugins, err := r.sdk.SearchPlugins("tool:personas")
 	if err != nil || len(plugins) == 0 {
-		cache.personas = empty
-		cache.fetchedAt = time.Now()
-		return empty
+		return
 	}
 
 	pluginID := plugins[0].ID
@@ -172,32 +153,42 @@ func (r *relay) fetchPersonas() map[string]personaInfo {
 
 	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET", "/personas", nil)
 	if err != nil {
-		log.Printf("relay: persona fetch from %s failed: %v", pluginID, err)
-		cache.personas = empty
-		cache.fetchedAt = time.Now()
-		return empty
+		log.Printf("relay: persona fetch from %s failed (keeping cached): %v", pluginID, err)
+		return
 	}
 
 	var resp struct {
 		Personas []personaInfo `json:"personas"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		cache.personas = empty
-		cache.fetchedAt = time.Now()
-		return empty
+		log.Printf("relay: persona parse failed (keeping cached): %v", err)
+		return
 	}
 
 	personas := make(map[string]personaInfo, len(resp.Personas))
 	for _, p := range resp.Personas {
 		personas[p.Alias] = p
 	}
-	cache.personas = personas
-	cache.fetchedAt = time.Now()
+
+	r.personas.mu.Lock()
+	r.personas.personas = personas
+	r.personas.mu.Unlock()
 
 	if len(personas) > 0 {
 		log.Printf("relay: loaded %d personas from %s", len(personas), pluginID)
 	}
-	return personas
+}
+
+// fetchPersonas returns the current persona cache. The cache is populated on
+// startup and kept fresh by persona:update events — no polling.
+func (r *relay) fetchPersonas() map[string]personaInfo {
+	r.personas.mu.RLock()
+	p := r.personas.personas
+	r.personas.mu.RUnlock()
+	if p != nil {
+		return p
+	}
+	return map[string]personaInfo{}
 }
 
 // lookupPersona returns the persona for agentAlias, or nil if not found.
@@ -291,7 +282,7 @@ func (r *relay) memoryPlugin() string {
 		return r.memoryPluginID
 	}
 
-	plugins, err := r.sdk.SearchPlugins("tool:memory")
+	plugins, err := r.sdk.SearchPlugins("^tool:memory$")
 	if err != nil || len(plugins) == 0 {
 		r.memoryPluginID = ""
 	} else {
@@ -301,7 +292,8 @@ func (r *relay) memoryPlugin() string {
 	return r.memoryPluginID
 }
 
-// memoryGetHistory fetches conversation history for a session from infra-agent-memory.
+// memoryGetHistory fetches conversation context from the memory gateway.
+// Uses LCM's get_context endpoint to retrieve recent messages + DAG summaries.
 // Returns nil if the memory plugin is unavailable.
 func (r *relay) memoryGetHistory(ctx context.Context, sessionID string) []conversationMsg {
 	pluginID := r.memoryPlugin()
@@ -309,31 +301,49 @@ func (r *relay) memoryGetHistory(ctx context.Context, sessionID string) []conver
 		return nil
 	}
 
-	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET",
-		"/sessions/"+sessionID+"/messages", nil)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"session_id": sessionID,
+		"max_tokens": 100000,
+	})
+
+	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST",
+		"/mcp/get_context", bytes.NewReader(payload))
 	if err != nil {
-		log.Printf("relay: memory fetch history failed: %v", err)
+		log.Printf("relay: memory get_context failed: %v", err)
 		return nil
 	}
 
 	var resp struct {
 		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role    string      `json:"role"`
+			Content interface{} `json:"content"` // can be string or []block
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
+		log.Printf("relay: memory get_context parse failed: %v", err)
 		return nil
 	}
 
-	msgs := make([]conversationMsg, len(resp.Messages))
-	for i, m := range resp.Messages {
-		msgs[i] = conversationMsg{Role: m.Role, Content: m.Content}
+	msgs := make([]conversationMsg, 0, len(resp.Messages))
+	for _, m := range resp.Messages {
+		content := ""
+		switch v := m.Content.(type) {
+		case string:
+			content = v
+		default:
+			// LCM returns structured content blocks for assistant messages — flatten.
+			if b, err := json.Marshal(v); err == nil {
+				content = string(b)
+			}
+		}
+		if content != "" {
+			msgs = append(msgs, conversationMsg{Role: m.Role, Content: content})
+		}
 	}
 	return msgs
 }
 
-// memoryStore appends a message to a session in infra-agent-memory.
+// memoryStore saves messages to the episodic memory (LCM) via the gateway.
 // Fire-and-forget: errors are logged but not returned.
 func (r *relay) memoryStore(sessionID, role, content, responder string) {
 	pluginID := r.memoryPlugin()
@@ -341,18 +351,89 @@ func (r *relay) memoryStore(sessionID, role, content, responder string) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"role":      role,
-		"content":   content,
-		"responder": responder,
+	payload, _ := json.Marshal(map[string]interface{}{
+		"session_id": sessionID,
+		"messages": []map[string]string{
+			{"role": role, "content": content},
+		},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if _, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST",
-		"/sessions/"+sessionID+"/messages", bytes.NewReader(payload)); err != nil {
-		log.Printf("relay: memory store failed: %v", err)
+		"/mcp/store_messages", bytes.NewReader(payload)); err != nil {
+		log.Printf("relay: memory store_messages failed: %v", err)
+	}
+}
+
+// memorySearchFacts searches semantic memory (Mem0) for facts relevant to the query.
+// Returns a formatted string of relevant facts for injection into the system prompt.
+func (r *relay) memorySearchFacts(ctx context.Context, query string) string {
+	pluginID := r.memoryPlugin()
+	if pluginID == "" {
+		return ""
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"query":  query,
+		"top_k":  10,
+		"user_id": "global",
+	})
+
+	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST",
+		"/mcp/search_memories", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("relay: memory search_memories failed: %v", err)
+		return ""
+	}
+
+	var resp struct {
+		Results []struct {
+			Text  string  `json:"memory"`
+			Score float64 `json:"score"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || len(resp.Results) == 0 {
+		return ""
+	}
+
+	var facts []string
+	for _, r := range resp.Results {
+		if r.Text != "" {
+			facts = append(facts, "- "+r.Text)
+		}
+	}
+	if len(facts) == 0 {
+		return ""
+	}
+	return "## What you know about this user\n" + strings.Join(facts, "\n")
+}
+
+// memoryExtractFacts sends messages to Mem0 for semantic fact extraction.
+// Fire-and-forget: runs async, errors are logged.
+func (r *relay) memoryExtractFacts(sessionID string, messages []conversationMsg) {
+	pluginID := r.memoryPlugin()
+	if pluginID == "" {
+		return
+	}
+
+	mem0Messages := make([]map[string]string, len(messages))
+	for i, m := range messages {
+		mem0Messages[i] = map[string]string{"role": m.Role, "content": m.Content}
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"messages": mem0Messages,
+		"user_id":  "global",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := r.sdk.RouteToPlugin(ctx, pluginID, "POST",
+		"/mcp/add_memory", bytes.NewReader(payload)); err != nil {
+		log.Printf("relay: memory add_memory (fact extraction) failed: %v", err)
 	}
 }
 
@@ -446,6 +527,24 @@ func (r *relay) handleChat(c *gin.Context) {
 		return
 	}
 
+	// Validate @alias synchronously before accepting the task.
+	// The async goroutine would catch this too, but the "completed" event
+	// races with task registration in the messaging plugin and gets dropped.
+	if name, remainder, ok := parseAtPrefix(req.Message); ok {
+		aliases := r.routes.Aliases()
+		if resolved := r.resolvePersona(name, aliases); resolved == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"user_message": fmt.Sprintf("@%s has no persona — create a persona to enable chat", name),
+			})
+			return
+		} else if remainder == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"user_message": fmt.Sprintf("Usage: @%s <message>", resolved.Alias),
+			})
+			return
+		}
+	}
+
 	// Generate task group ID and return immediately.
 	taskGroupID := "tg-" + uuid.New().String()[:8]
 
@@ -474,11 +573,14 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	}
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", thinkingMsg, nil)
 
-	// Fetch conversation history from memory plugin (if available).
+	// Store the incoming user message in episodic memory (LCM).
+	r.memoryStore(sessionID, "user", req.Message, "")
+
+	// Fetch conversation history from episodic memory (LCM).
 	history := r.memoryGetHistory(ctx, sessionID)
 
-	// Store the incoming user message.
-	go r.memoryStore(sessionID, "user", req.Message, "")
+	// Search semantic memory (Mem0) for relevant facts about the user/topic.
+	memoryFacts := r.memorySearchFacts(ctx, req.Message)
 
 	var reqTraceID string
 	if r.debug {
@@ -515,6 +617,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 
 		callStart := time.Now()
 		enrichedPrompt := r.enrichSystemPrompt(resolved.Alias, resolved.SystemPrompt, aliases)
+		if memoryFacts != "" {
+			enrichedPrompt = enrichedPrompt + "\n\n" + memoryFacts
+		}
 		cb := streamCallback{
 			SourcePlugin: req.SourcePlugin,
 			ChannelID:    req.ChannelID,
@@ -548,6 +653,10 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 				time.Since(callStart).Milliseconds(), "")
 		}
 		go r.memoryStore(sessionID, "assistant", agentResp.Response, resolved.Alias)
+		go r.memoryExtractFacts(sessionID, []conversationMsg{
+			{Role: "user", Content: remainder},
+			{Role: "assistant", Content: agentResp.Response},
+		})
 
 		rr := &relayResponse{
 			Response:    agentResp.Response,
@@ -567,7 +676,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	defaultAgent := r.resolveDefault(aliases)
 	if defaultAgent == nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-			"no default agent found — assign the 'default' role to a persona in the persona manager", nil)
+			"no default persona found — no persona is assigned as the default in the persona manager, use @aliases to speak to a specific persona", nil)
 		return
 	}
 
@@ -576,6 +685,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 
 	callStart := time.Now()
 	enrichedPrompt := r.enrichSystemPrompt(defaultAgent.Alias, defaultAgent.SystemPrompt, aliases)
+	if memoryFacts != "" {
+		enrichedPrompt = enrichedPrompt + "\n\n" + memoryFacts
+	}
 	cb := streamCallback{
 		SourcePlugin: req.SourcePlugin,
 		ChannelID:    req.ChannelID,
@@ -596,6 +708,10 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			time.Since(callStart).Milliseconds(), "")
 	}
 	go r.memoryStore(sessionID, "assistant", agentResp.Response, defaultAgent.Alias)
+	go r.memoryExtractFacts(sessionID, []conversationMsg{
+		{Role: "user", Content: req.Message},
+		{Role: "assistant", Content: agentResp.Response},
+	})
 
 	rr := &relayResponse{
 		Response:    agentResp.Response,
@@ -1214,13 +1330,11 @@ func main() {
 		r.routes.SetAliases(alias.NewAliasMap(entries))
 		log.Printf("Aliases refreshed: %d entries", len(entries))
 
-		r.personas.mu.Lock()
-		r.personas.fetchedAt = time.Time{}
-		r.personas.mu.Unlock()
+		go r.refreshPersonas()
 	}
 
 	// Patch a single alias on create/update/delete events.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Action string `json:"action"`
 			Alias  struct {
@@ -1262,9 +1376,12 @@ func main() {
 			log.Printf("Alias %s: %s → %s", detail.Action, detail.Alias.Name, target)
 		}
 
-		r.personas.mu.Lock()
-		r.personas.fetchedAt = time.Time{}
-		r.personas.mu.Unlock()
+		go r.refreshPersonas()
+	}))
+
+	// Refresh persona cache when the persona plugin signals a change.
+	sdkClient.OnEvent("persona:update", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
+		r.refreshPersonas()
 	}))
 
 	// Re-fetch aliases when the registry signals it's ready (handles startup ordering).
@@ -1281,6 +1398,9 @@ func main() {
 		r.routes.SetAliases(alias.NewAliasMap(entries))
 		log.Printf("Loaded %d aliases", len(entries))
 	}
+
+	// Load personas on startup; kept fresh by persona:update events.
+	r.refreshPersonas()
 
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
