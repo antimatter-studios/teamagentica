@@ -77,8 +77,9 @@ function calculateCosts(
   const dayMap = new Map<string, CostRecord>();
 
   for (const rec of records) {
-    const date = bucketKey(rec.ts, granularity);
     const provider = providerMap[rec.model] || "";
+    if (!provider || !rec.model) continue; // skip records with missing provider/model
+    const date = bucketKey(rec.ts, granularity);
     const key = `${date}|${provider}|${rec.model}`;
 
     let entry = dayMap.get(key);
@@ -98,22 +99,64 @@ function calculateCosts(
 
     entry.requests++;
 
-    const price = findEffectivePrice(allPrices, provider, rec.model, rec.ts);
-    if (!price) continue;
-
+    // Always accumulate token counts regardless of pricing availability.
     if (isTokenRecord(rec)) {
-      const inputCost = ((rec.input_tokens - (rec.cached_tokens || 0)) / 1_000_000) * price.input_per_1m;
-      const outputCost = (rec.output_tokens / 1_000_000) * price.output_per_1m;
-      const cachedCost = ((rec.cached_tokens || 0) / 1_000_000) * price.cached_per_1m;
-      entry.cost += inputCost + outputCost + cachedCost;
       entry.inputTokens += rec.input_tokens;
       entry.outputTokens += rec.output_tokens;
       entry.cachedTokens += rec.cached_tokens || 0;
-    } else {
-      // Video/image tools: per-request pricing.
-      if (rec.status === "completed" || rec.status === "submitted") {
-        entry.cost += price.per_request;
+    }
+
+    // Only calculate per-usage costs when pricing is available and not subscription-based.
+    const price = findEffectivePrice(allPrices, provider, rec.model, rec.ts);
+    if (price && !price.subscription) {
+      if (isTokenRecord(rec)) {
+        const inputCost = ((rec.input_tokens - (rec.cached_tokens || 0)) / 1_000_000) * price.input_per_1m;
+        const outputCost = (rec.output_tokens / 1_000_000) * price.output_per_1m;
+        const cachedCost = ((rec.cached_tokens || 0) / 1_000_000) * price.cached_per_1m;
+        entry.cost += inputCost + outputCost + cachedCost;
+      } else {
+        // Video/image tools: per-request pricing.
+        if (rec.status === "completed" || rec.status === "submitted") {
+          entry.cost += price.per_request;
+        }
       }
+    }
+  }
+
+  // Add subscription costs: flat monthly fee per provider+model price window.
+  // Each month that falls within a subscription price window gets the flat cost once.
+  const subSeen = new Set<string>();
+  for (const price of allPrices) {
+    if (!price.subscription) continue;
+    const from = new Date(price.effective_from);
+    const to = price.effective_to ? new Date(price.effective_to) : new Date();
+    // Walk each month in the window.
+    const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
+    while (cursor <= end) {
+      const monthKey = cursor.toISOString().substring(0, 7); // YYYY-MM
+      const date = granularity === "monthly" ? monthKey : bucketKey(cursor.toISOString(), granularity);
+      const dedupKey = `${monthKey}|${price.provider}|${price.model}`;
+      if (!subSeen.has(dedupKey)) {
+        subSeen.add(dedupKey);
+        const key = `${date}|${price.provider}|${price.model}`;
+        let entry = dayMap.get(key);
+        if (!entry) {
+          entry = {
+            date,
+            provider: price.provider,
+            model: price.model,
+            cost: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedTokens: 0,
+            requests: 0,
+          };
+          dayMap.set(key, entry);
+        }
+        entry.cost += price.subscription;
+      }
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
     }
   }
 

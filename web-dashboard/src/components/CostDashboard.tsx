@@ -14,6 +14,7 @@ import { useCostStore, selectCostRecords, type Granularity } from "../stores/cos
 import PricingTable from "./PricingTable";
 import ExternalUserMapping from "./ExternalUserMapping";
 
+
 const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
   { value: "hourly", label: "Hourly" },
   { value: "daily", label: "Daily" },
@@ -21,18 +22,26 @@ const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
   { value: "monthly", label: "Monthly" },
 ];
 
-const PROVIDER_COLORS: Record<string, string> = {
-  openai: "#7c6af6",
-  gemini: "#34d399",
-  veo: "#fbbf24",
-  seedance: "#f87171",
-};
+// Assign evenly-spaced hues to providers so colors are always distinct.
+const _providerColorCache = new Map<string, string>();
+let _providerColorIndex = 0;
+const GOLDEN_ANGLE = 137.508; // degrees — maximally spreads hues
+
+function providerColor(name: string): string {
+  let color = _providerColorCache.get(name);
+  if (!color) {
+    const hue = (_providerColorIndex * GOLDEN_ANGLE) % 360;
+    color = `hsl(${Math.round(hue)}, 70%, 60%)`;
+    _providerColorCache.set(name, color);
+    _providerColorIndex++;
+  }
+  return color;
+}
 
 export default function CostDashboard() {
   const costRecords = useCostStore(selectCostRecords);
-  const { prices, granularity, selectedUserID, users, loading, error } = useCostStore(
+  const { granularity, selectedUserID, users, loading, error } = useCostStore(
     useShallow((s) => ({
-      prices: s.prices,
       granularity: s.granularity,
       selectedUserID: s.selectedUserID,
       users: s.users,
@@ -46,7 +55,6 @@ export default function CostDashboard() {
   const setGranularity = useCostStore((s) => s.setGranularity);
   const setUserFilter = useCostStore((s) => s.setUserFilter);
 
-  const [showPricing, setShowPricing] = useState(false);
   const [showUserMapping, setShowUserMapping] = useState(false);
 
   useEffect(() => {
@@ -159,15 +167,11 @@ export default function CostDashboard() {
         <div className="cost-card cost-card-action">
           <button
             className="cost-edit-pricing-btn"
-            onClick={() => setShowPricing(true)}
+            style={{ fontSize: 11, padding: "4px 10px" }}
+            onClick={() => setShowUserMapping(true)}
           >
-            EDIT PRICING
+            USER MAPPING
           </button>
-          <div className="cost-card-sublabel">
-            {prices.length} model{prices.length !== 1 ? "s" : ""} configured
-            <br />
-            <span className="cost-card-hint">Per-plugin pricing in Plugin Settings</span>
-          </div>
         </div>
       </div>
 
@@ -246,8 +250,8 @@ export default function CostDashboard() {
                   type="monotone"
                   dataKey={p}
                   stackId="1"
-                  stroke={PROVIDER_COLORS[p] || "#7c6af6"}
-                  fill={PROVIDER_COLORS[p] || "#7c6af6"}
+                  stroke={providerColor(p)}
+                  fill={providerColor(p)}
                   fillOpacity={0.3}
                 />
               ))}
@@ -277,16 +281,7 @@ export default function CostDashboard() {
       {/* Model breakdown table */}
       {breakdown.length > 0 && (
         <div className="cost-breakdown">
-          <div className="cost-breakdown-header">
-            <h3 className="cost-section-title">MODEL BREAKDOWN</h3>
-            <button
-              className="cost-edit-pricing-btn"
-              style={{ fontSize: 11, padding: "4px 10px" }}
-              onClick={() => setShowUserMapping(true)}
-            >
-              USER MAPPING
-            </button>
-          </div>
+          <h3 className="cost-section-title">MODEL BREAKDOWN</h3>
           <div className="cost-table-wrapper">
             <table className="cost-table">
               <thead>
@@ -308,7 +303,7 @@ export default function CostDashboard() {
                         className="cost-provider-dot"
                         style={{
                           background:
-                            PROVIDER_COLORS[row.provider] || "#7c6af6",
+                            providerColor(row.provider),
                         }}
                       />
                       {row.provider}
@@ -327,15 +322,15 @@ export default function CostDashboard() {
         </div>
       )}
 
+      {/* Pricing table (inline) */}
+      <PricingTable />
+
       {costRecords.length === 0 && !loading && (
         <div className="cost-empty">
           No usage data yet. Costs will appear here as you use the AI agents and
           video tools.
         </div>
       )}
-
-      {/* Pricing modal */}
-      {showPricing && <PricingTable onClose={() => setShowPricing(false)} />}
 
       {/* External user mapping modal */}
       {showUserMapping && <ExternalUserMapping onClose={() => setShowUserMapping(false)} />}
