@@ -359,9 +359,18 @@ func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, t
 	})
 }
 
-// SystemPrompt returns the system prompt.
+// SystemPrompt returns the system prompt, plus rendered previews for
+// every persona/alias that routes through this plugin.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"default_prompt": h.defaultPrompt})
+	resp := gin.H{"default_prompt": h.defaultPrompt}
+
+	if h.sdk != nil {
+		if previews, err := h.sdk.SystemPromptPreview(h.sdk.PluginID(), h.defaultPrompt); err == nil && len(previews) > 0 {
+			resp["aliases"] = previews
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // DiscoveredTools returns tools this agent has discovered.

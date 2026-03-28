@@ -205,10 +205,11 @@ func (h *Handler) Chat(c *gin.Context) {
 			fc := resp.FunctionCall
 			h.emitEvent("tool_call", fmt.Sprintf("tool=%s", fc.Name))
 
-			// Append model's function call to conversation.
+			// Append model's function call to conversation (with thought signature for Gemini round-trip).
 			messages = append(messages, gemini.Message{
 				FunctionCallName: fc.Name,
 				FunctionCallArgs: fc.Args,
+				ThoughtSignature: resp.ThoughtSignature,
 			})
 
 			result, execErr := executeToolCall(h.sdk, tools, fc.Name, fc.Args)
@@ -313,11 +314,18 @@ func (h *Handler) Chat(c *gin.Context) {
 	})
 }
 
-// SystemPrompt returns the system prompt this agent would use.
+// SystemPrompt returns the system prompt this agent would use, plus
+// rendered previews for every persona/alias that routes through this plugin.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"default_prompt": h.defaultPrompt,
-	})
+	resp := gin.H{"default_prompt": h.defaultPrompt}
+
+	if h.sdk != nil {
+		if previews, err := h.sdk.SystemPromptPreview(h.sdk.PluginID(), h.defaultPrompt); err == nil && len(previews) > 0 {
+			resp["aliases"] = previews
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // DiscoveredTools returns the tools this agent has discovered from tool:* plugins.

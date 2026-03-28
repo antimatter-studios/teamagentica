@@ -465,11 +465,20 @@ func isValidWorkspaceID(id string) bool {
 	return true
 }
 
-// SystemPrompt returns the system prompt this agent would use.
+// SystemPrompt returns the system prompt this agent would use, plus
+// rendered previews for every persona/alias that routes through this plugin.
 func (h *Handler) SystemPrompt(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"default_prompt": h.defaultPrompt,
-	})
+	resp := gin.H{"default_prompt": h.defaultPrompt}
+
+	if h.sdk != nil {
+		if previews, err := h.sdk.SystemPromptPreview(h.sdk.PluginID(), h.defaultPrompt); err != nil {
+			log.Printf("system-prompt preview: %v", err)
+		} else if len(previews) > 0 {
+			resp["aliases"] = previews
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // DiscoveredTools returns the tools this agent has discovered from tool:* plugins.

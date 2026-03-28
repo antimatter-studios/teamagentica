@@ -283,6 +283,11 @@ type Client struct {
 	storageMu       sync.RWMutex
 }
 
+// PluginID returns the plugin's registered ID.
+func (c *Client) PluginID() string {
+	return c.registration.ID
+}
+
 // NewClient creates a new SDK client.
 // If TLS is enabled and cert/key/CA paths are set, configures mTLS on the HTTP client.
 func NewClient(cfg Config, reg Registration) *Client {
