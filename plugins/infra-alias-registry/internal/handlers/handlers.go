@@ -14,6 +14,11 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/infra-alias-registry/internal/storage"
 )
 
+// sanitizeName normalises an alias name: lowercase, trimmed, @ prefix stripped.
+func sanitizeName(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "@", "")
+}
+
 // Handler serves REST + MCP endpoints for alias management.
 type Handler struct {
 	db  *storage.DB
@@ -42,7 +47,7 @@ func (h *Handler) broadcastAliasChange(action string, a *storage.Alias) {
 
 // GetAlias handles GET /alias/:name — used by the relay for fast lookup.
 func (h *Handler) GetAlias(c *gin.Context) {
-	a, err := h.db.Get(c.Param("name"))
+	a, err := h.db.Get(sanitizeName(c.Param("name")))
 	if errors.Is(err, storage.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", c.Param("name"))})
 		return
@@ -86,7 +91,7 @@ func (h *Handler) CreateAlias(c *gin.Context) {
 		return
 	}
 
-	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
+	req.Name = sanitizeName(req.Name)
 	a := &storage.Alias{
 		Name:         req.Name,
 		Type:         req.Type,
@@ -108,7 +113,7 @@ func (h *Handler) CreateAlias(c *gin.Context) {
 
 // UpdateAlias handles PUT /aliases/:name.
 func (h *Handler) UpdateAlias(c *gin.Context) {
-	name := c.Param("name")
+	name := sanitizeName(c.Param("name"))
 	a, err := h.db.Get(name)
 	if errors.Is(err, storage.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", name)})
@@ -155,8 +160,8 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 
 	// Handle rename (must be last — changes the primary key).
 	if req.Name != nil && *req.Name != "" && *req.Name != name {
-		lowered := strings.ToLower(strings.TrimSpace(*req.Name))
-		req.Name = &lowered
+		clean := sanitizeName(*req.Name)
+		req.Name = &clean
 		if err := h.db.Rename(name, *req.Name); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "rename failed: " + err.Error()})
 			return
@@ -170,16 +175,17 @@ func (h *Handler) UpdateAlias(c *gin.Context) {
 
 // DeleteAlias handles DELETE /aliases/:name.
 func (h *Handler) DeleteAlias(c *gin.Context) {
-	err := h.db.Delete(c.Param("name"))
+	name := sanitizeName(c.Param("name"))
+	err := h.db.Delete(name)
 	if errors.Is(err, storage.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", c.Param("name"))})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", name)})
 		return
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.broadcastAliasChange("deleted", &storage.Alias{Name: c.Param("name")})
+	h.broadcastAliasChange("deleted", &storage.Alias{Name: name})
 	c.Status(http.StatusNoContent)
 }
 
@@ -187,7 +193,7 @@ func (h *Handler) DeleteAlias(c *gin.Context) {
 
 // GetPersona handles GET /persona/:alias — relay uses this for fast persona lookup.
 func (h *Handler) GetPersona(c *gin.Context) {
-	a, err := h.db.Get(c.Param("alias"))
+	a, err := h.db.Get(sanitizeName(c.Param("alias")))
 	if errors.Is(err, storage.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("alias %q not found", c.Param("alias"))})
 		return
@@ -326,7 +332,7 @@ func (h *Handler) MCPCreateAlias(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
+	req.Name = sanitizeName(req.Name)
 	a := &storage.Alias{
 		Name:         req.Name,
 		Type:         req.Type,
@@ -425,7 +431,7 @@ func parseKernelAlias(info alias.AliasInfo) *storage.Alias {
 	}
 
 	a := &storage.Alias{
-		Name:   strings.ToLower(strings.TrimSpace(info.Name)),
+		Name:   sanitizeName(info.Name),
 		Type:   aliasType,
 		Plugin: plugin,
 		Model:  model,

@@ -1,4 +1,5 @@
 import type { HttpTransport } from "./client.js";
+import { sanitizeAlias } from "./sanitize.js";
 
 const ROUTE = "/api/route/infra-agent-persona";
 
@@ -62,10 +63,12 @@ export class PersonaAPI {
   }
 
   async create(req: CreatePersonaRequest): Promise<Persona> {
+    req.alias = sanitizeAlias(req.alias);
     return this.http.post<Persona>(`${ROUTE}/personas`, req);
   }
 
   async update(alias: string, req: UpdatePersonaRequest): Promise<Persona> {
+    if (req.alias) req.alias = sanitizeAlias(req.alias);
     return this.http.put<Persona>(`${ROUTE}/personas/${encodeURIComponent(alias)}`, req);
   }
 

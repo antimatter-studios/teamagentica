@@ -1,4 +1,5 @@
 import type { HttpTransport } from "./client.js";
+import { sanitizeAlias } from "./sanitize.js";
 
 const ROUTE = "/api/route/infra-alias-registry";
 
@@ -49,10 +50,12 @@ export class AgentRegistryAPI {
   }
 
   async create(req: CreateAliasRequest): Promise<RegistryAlias> {
+    req.name = sanitizeAlias(req.name);
     return this.http.post<RegistryAlias>(`${ROUTE}/aliases`, req);
   }
 
   async update(name: string, req: UpdateAliasRequest): Promise<RegistryAlias> {
+    if (req.name) req.name = sanitizeAlias(req.name);
     return this.http.put<RegistryAlias>(`${ROUTE}/aliases/${encodeURIComponent(name)}`, req);
   }
 
