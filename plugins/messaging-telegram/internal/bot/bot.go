@@ -5,13 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -663,11 +665,19 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 		accepted, err := b.relayClient.Chat(channelID, text, imageURLs)
 		if err != nil {
 			msgCancel()
-			log.Printf("Relay error: %v", err)
-			b.emitEvent("error", fmt.Sprintf("relay: %v", err))
-			b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
+			var ue *relay.UserError
+			if errors.As(err, &ue) {
+				log.Printf("[relay] user error chat=%d: %s", chatID, ue.Message)
+				b.sendResponse(chatID, ue.Message)
+			} else {
+				log.Printf("Relay error: %v", err)
+				b.emitEvent("error", fmt.Sprintf("relay: %v", err))
+				b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
+			}
 			return
 		}
+
+		log.Printf("[relay] accepted task_group=%s channel=%s", accepted.TaskGroupID, channelID)
 
 		// Send initial "Thinking..." message and track it for progress updates.
 		thinkMsg := tgbotapi.NewMessage(chatID, "Thinking...")
@@ -687,6 +697,11 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 			Cancel:    msgCancel,
 		}
 		b.tasksMu.Unlock()
+		log.Printf("[relay] registered task_group=%s chat=%d msg=%d", accepted.TaskGroupID, chatID, sent.MessageID)
+
+		// Cycle the "Thinking..." message with random phrases.
+		b.wg.Add(1)
+		go b.thinkingCycleLoop(msgCtx, chatID, sent.MessageID)
 
 		b.emitEvent("task_accepted", fmt.Sprintf("task_group=%s chat=%d", accepted.TaskGroupID, chatID))
 		// Don't cancel msgCtx here — the typing loop continues until
@@ -970,6 +985,48 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		if _, err := b.api.Send(edit); err != nil {
 			// Telegram may reject edits if content hasn't changed — ignore.
 			log.Printf("[progress] edit message error (may be duplicate): %v", err)
+		}
+	}
+}
+
+// thinkingPhrases are cycled randomly on the "Thinking..." bubble while waiting.
+var thinkingPhrases = []string{
+	"Thinking...",
+	"Pondering...",
+	"Mumbling...",
+	"Scribbling notes...",
+	"Consulting the oracle...",
+	"Rummaging through memories...",
+	"Brewing ideas...",
+	"Connecting the dots...",
+	"Having a eureka moment...",
+	"Staring into the void...",
+	"Doing mental gymnastics...",
+	"Channelling wisdom...",
+	"Crunching thoughts...",
+	"Doodling in the margins...",
+	"Reading between the lines...",
+	"Lost in thought...",
+	"Assembling neurons...",
+	"Warming up the brain...",
+	"Tuning the frequencies...",
+	"Summoning inspiration...",
+}
+
+// thinkingCycleLoop edits the "Thinking..." message with a random phrase every 4s.
+// Caller must call b.wg.Add(1) before spawning this goroutine.
+func (b *Bot) thinkingCycleLoop(ctx context.Context, chatID int64, messageID int) {
+	defer b.wg.Done()
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			phrase := thinkingPhrases[rand.IntN(len(thinkingPhrases))]
+			edit := tgbotapi.NewEditMessageText(chatID, messageID, phrase)
+			b.api.Send(edit) // ignore duplicate-content errors
 		}
 	}
 }

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,30 @@ import (
 )
 
 const maxMessageLength = 2000
+
+// thinkingPhrases are cycled randomly on the "Thinking..." bubble while waiting.
+var thinkingPhrases = []string{
+	"Thinking...",
+	"Pondering...",
+	"Mumbling...",
+	"Scribbling notes...",
+	"Consulting the oracle...",
+	"Rummaging through memories...",
+	"Brewing ideas...",
+	"Connecting the dots...",
+	"Having a eureka moment...",
+	"Staring into the void...",
+	"Doing mental gymnastics...",
+	"Channelling wisdom...",
+	"Crunching thoughts...",
+	"Doodling in the margins...",
+	"Reading between the lines...",
+	"Lost in thought...",
+	"Assembling neurons...",
+	"Warming up the brain...",
+	"Tuning the frequencies...",
+	"Summoning inspiration...",
+}
 
 // Bot manages the Discord bot session.
 type Bot struct {
@@ -485,9 +511,14 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 	if b.relayClient != nil {
 		accepted, err := b.relayClient.Chat(channelID, text, mediaURLs)
 		if err != nil {
-			log.Printf("Relay error: %v", err)
-			b.emitEvent("error", fmt.Sprintf("relay: %v", err))
-			s.ChannelMessageSend(channelID, "Sorry, I encountered an error processing your message.")
+			var ue *relay.UserError
+			if errors.As(err, &ue) {
+				s.ChannelMessageSend(channelID, ue.Message)
+			} else {
+				log.Printf("Relay error: %v", err)
+				b.emitEvent("error", fmt.Sprintf("relay: %v", err))
+				s.ChannelMessageSend(channelID, "Sorry, I encountered an error processing your message.")
+			}
 			return
 		}
 
@@ -498,7 +529,7 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 			return
 		}
 
-		// Start typing indicator loop.
+		// Start typing indicator loop with rotating status phrases.
 		go func() {
 			ticker := time.NewTicker(8 * time.Second)
 			defer ticker.Stop()
@@ -511,6 +542,8 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 					return
 				}
 				s.ChannelTyping(channelID)
+				phrase := thinkingPhrases[rand.IntN(len(thinkingPhrases))]
+				s.ChannelMessageEdit(channelID, sent.ID, phrase)
 				<-ticker.C
 			}
 		}()
