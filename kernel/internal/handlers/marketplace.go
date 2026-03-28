@@ -594,6 +594,10 @@ func applyManifest(plugin *models.Plugin, manifest map[string]interface{}, db *g
 		updates["version"] = v
 		plugin.Version = v
 	}
+	if name, ok := manifest["name"].(string); ok && name != "" {
+		updates["name"] = name
+		plugin.Name = name
+	}
 	if img, ok := manifest["image"].(string); ok && img != "" {
 		updates["image"] = img
 		plugin.Image = img

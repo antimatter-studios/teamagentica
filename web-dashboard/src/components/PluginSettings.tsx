@@ -57,12 +57,14 @@ function groupedPlugins(plugins: Plugin[]): { id: string; name: string; plugins:
   for (const gm of GROUP_META) {
     const entries = byGroup.get(gm.id);
     if (entries && entries.length > 0) {
+      entries.sort((a, b) => a.name.localeCompare(b.name));
       sections.push({ id: gm.id, name: gm.name, plugins: entries });
       byGroup.delete(gm.id);
     }
   }
   // Any remaining groups not in metadata.
   for (const [id, entries] of byGroup) {
+    entries.sort((a, b) => a.name.localeCompare(b.name));
     sections.push({ id, name: id.charAt(0).toUpperCase() + id.slice(1), plugins: entries });
   }
   return sections;
@@ -338,6 +340,7 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
 
               {parseCapabilities(selected).length > 0 && (
                 <div className="plugin-capabilities">
+                  <span className="plugin-capabilities-label">CAPABILITIES</span>
                   {parseCapabilities(selected).map((cap) => (
                     <span className="capability-tag" key={cap}>{cap}</span>
                   ))}

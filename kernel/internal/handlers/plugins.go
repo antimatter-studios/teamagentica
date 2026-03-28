@@ -861,13 +861,25 @@ func (h *PluginHandler) DeletePluginConfigKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "config key deleted"})
 }
 
-// SearchPlugins handles GET /api/plugins/search?capability=<prefix>.
-// Returns enabled plugins whose capabilities match the given prefix.
+// SearchPlugins handles GET /api/plugins/search?capability=<pattern>.
+// Returns enabled plugins whose capabilities match the given regex pattern.
+// Examples:
+//   - "tool:memory"        — substring match (matches tool:memory, tool:memory:bank:semantic, etc.)
+//   - "^tool:memory$"      — exact match (only tool:memory)
+//   - "^tool:memory:bank:" — prefix match (tool:memory:bank:semantic, tool:memory:bank:episodic)
+//   - "memory$"            — suffix match (tool:memory, agent:memory)
+//
 // Accessible by both admin users and plugin service tokens.
 func (h *PluginHandler) SearchPlugins(c *gin.Context) {
 	capability := c.Query("capability")
 	if capability == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "capability query parameter required"})
+		return
+	}
+
+	re, err := regexp.Compile(capability)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid capability pattern: " + err.Error()})
 		return
 	}
 
@@ -881,7 +893,7 @@ func (h *PluginHandler) SearchPlugins(c *gin.Context) {
 	var matched []models.Plugin
 	for _, p := range allPlugins {
 		for _, cap := range p.GetCapabilities() {
-			if strings.HasPrefix(cap, capability) {
+			if re.MatchString(cap) {
 				matched = append(matched, p)
 				break
 			}

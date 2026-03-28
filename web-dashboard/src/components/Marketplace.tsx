@@ -87,12 +87,14 @@ export default function Marketplace() {
     for (const gm of sortedGroups) {
       const entries = byGroup.get(gm.id);
       if (entries && entries.length > 0) {
+        entries.sort((a, b) => a.name.localeCompare(b.name));
         sections.push({ group: gm, plugins: entries });
         byGroup.delete(gm.id);
       }
     }
     // Any remaining groups not in the metadata
     for (const [id, entries] of byGroup) {
+      entries.sort((a, b) => a.name.localeCompare(b.name));
       sections.push({
         group: { id, name: id.charAt(0).toUpperCase() + id.slice(1), description: "", order: 999 },
         plugins: entries,
