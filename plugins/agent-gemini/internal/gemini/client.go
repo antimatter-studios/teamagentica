@@ -1,7 +1,9 @@
 package gemini
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -18,12 +20,13 @@ const baseURL = "https://generativelanguage.googleapis.com/v1beta"
 // FunctionCall/FunctionResp fields are used internally for tool-call
 // round-trips and are excluded from JSON serialisation.
 type Message struct {
-	Role             string                 `json:"role"`
-	Content          string                 `json:"content"`
-	FunctionCallName string                 `json:"-"`
-	FunctionCallArgs map[string]interface{} `json:"-"`
-	FunctionRespName string                 `json:"-"`
-	FunctionRespData map[string]interface{} `json:"-"`
+	Role               string                 `json:"role"`
+	Content            string                 `json:"content"`
+	FunctionCallName   string                 `json:"-"`
+	FunctionCallArgs   map[string]interface{} `json:"-"`
+	ThoughtSignature   string                 `json:"-"` // Gemini thought_signature for function call round-trips.
+	FunctionRespName   string                 `json:"-"`
+	FunctionRespData   map[string]interface{} `json:"-"`
 }
 
 // FunctionDeclaration describes a tool for function calling.
@@ -44,6 +47,7 @@ type FunctionCall struct {
 	Args map[string]interface{} `json:"args"`
 }
 
+
 // functionResponse sends tool results back to the model.
 type functionResponse struct {
 	Name     string                 `json:"name"`
@@ -60,18 +64,21 @@ type Usage struct {
 
 // ChatResponse is the parsed result of a generateContent call.
 type ChatResponse struct {
-	Content      string
-	FunctionCall *FunctionCall
-	Usage        Usage
-	Headers      http.Header
+	Content          string
+	FunctionCall     *FunctionCall
+	ThoughtSignature string // Gemini thought signature to include in function call round-trips.
+	Usage            Usage
+	Headers          http.Header
 }
 
 // part is a piece of content in the Gemini API.
+// thoughtSignature is a part-level field required by Gemini for function call round-trips.
 type part struct {
 	Text             string            `json:"text,omitempty"`
 	InlineData       *inlineData       `json:"inlineData,omitempty"`
 	FunctionCall     *FunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *functionResponse `json:"functionResponse,omitempty"`
+	ThoughtSignature string            `json:"thoughtSignature,omitempty"`
 }
 
 // inlineData holds base64-encoded image data for the Gemini API.
@@ -130,6 +137,7 @@ func buildContents(messages []Message) ([]content, *content) {
 						Name: m.FunctionCallName,
 						Args: m.FunctionCallArgs,
 					},
+					ThoughtSignature: m.ThoughtSignature,
 				}},
 			})
 		case m.FunctionRespName != "":
@@ -162,8 +170,9 @@ type generateContentResponse struct {
 	Candidates []struct {
 		Content struct {
 			Parts []struct {
-				Text         string        `json:"text"`
-				FunctionCall *FunctionCall `json:"functionCall,omitempty"`
+				Text         string              `json:"text"`
+				FunctionCall     *FunctionCall `json:"functionCall,omitempty"`
+				ThoughtSignature string        `json:"thoughtSignature,omitempty"`
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
@@ -179,6 +188,7 @@ type generateContentResponse struct {
 func parseGenerateResponse(result *generateContentResponse, headers http.Header) *ChatResponse {
 	responseText := ""
 	var funcCall *FunctionCall
+	var thoughtSig string
 
 	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
 		for _, p := range result.Candidates[0].Content.Parts {
@@ -190,13 +200,15 @@ func parseGenerateResponse(result *generateContentResponse, headers http.Header)
 					Name: p.FunctionCall.Name,
 					Args: p.FunctionCall.Args,
 				}
+				thoughtSig = p.ThoughtSignature
 			}
 		}
 	}
 
 	return &ChatResponse{
-		Content:      responseText,
-		FunctionCall: funcCall,
+		Content:          responseText,
+		FunctionCall:     funcCall,
+		ThoughtSignature: thoughtSig,
 		Usage: Usage{
 			PromptTokens:     result.UsageMetadata.PromptTokenCount,
 			CompletionTokens: result.UsageMetadata.CandidatesTokenCount,
@@ -340,6 +352,169 @@ func (c *Client) downloadImagePart(imageURL string) (*part, error) {
 			Data:     base64.StdEncoding.EncodeToString(data),
 		},
 	}, nil
+}
+
+// StreamEvent represents a single chunk from a streaming generateContent response.
+type StreamEvent struct {
+	Text             string        // Incremental text content.
+	FunctionCall     *FunctionCall // Function call if the model wants to invoke a tool.
+	ThoughtSignature string        // Gemini thought signature for function call round-trips.
+	Usage            *Usage        // Token usage (usually in the final chunk).
+	Err              error         // Non-nil if the stream encountered an error.
+}
+
+// StreamGenerateContent performs a streaming generateContent call.
+// It returns a channel of StreamEvents. The caller should range over the channel.
+func (c *Client) StreamGenerateContent(ctx context.Context, model string, reqBody generateRequest) <-chan StreamEvent {
+	ch := make(chan StreamEvent, 32)
+
+	go func() {
+		defer close(ch)
+
+		jsonBody, err := json.Marshal(reqBody)
+		if err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("marshal request: %w", err)}
+			return
+		}
+
+		url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", baseURL, model)
+
+		if c.debug {
+			log.Printf("[gemini] POST %s (streaming)", url)
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+		if err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("create request: %w", err)}
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-goog-api-key", c.apiKey)
+
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("http request: %w", err)}
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			ch <- StreamEvent{Err: fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(body))}
+			return
+		}
+
+		// Parse SSE stream from Gemini.
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := line[6:]
+
+			var chunk generateContentResponse
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				if c.debug {
+					log.Printf("[gemini] failed to parse stream chunk: %v", err)
+				}
+				continue
+			}
+
+			ev := StreamEvent{}
+
+			// Extract text and function calls from candidates.
+			if len(chunk.Candidates) > 0 && len(chunk.Candidates[0].Content.Parts) > 0 {
+				for _, p := range chunk.Candidates[0].Content.Parts {
+					if p.Text != "" {
+						ev.Text += p.Text
+					}
+					if p.FunctionCall != nil {
+						ev.FunctionCall = &FunctionCall{
+							Name: p.FunctionCall.Name,
+							Args: p.FunctionCall.Args,
+						}
+						ev.ThoughtSignature = p.ThoughtSignature
+					}
+				}
+			}
+
+			// Extract usage metadata (typically in the final chunk).
+			if chunk.UsageMetadata.TotalTokenCount > 0 {
+				ev.Usage = &Usage{
+					PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
+					CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
+					TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
+					CachedTokens:     chunk.UsageMetadata.CachedContentTokenCount,
+				}
+			}
+
+			if ev.Text != "" || ev.FunctionCall != nil || ev.Usage != nil {
+				ch <- ev
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			ch <- StreamEvent{Err: fmt.Errorf("stream read: %w", err)}
+		}
+	}()
+
+	return ch
+}
+
+// StreamChatCompletion is a convenience wrapper that builds contents and streams.
+func (c *Client) StreamChatCompletion(ctx context.Context, model string, messages []Message, imageURLs []string) <-chan StreamEvent {
+	contents, systemInstruction := buildContents(messages)
+
+	if len(imageURLs) > 0 && len(contents) > 0 {
+		last := &contents[len(contents)-1]
+		if last.Role == "user" {
+			for _, imgURL := range imageURLs {
+				imgPart, err := c.downloadImagePart(imgURL)
+				if err != nil {
+					log.Printf("[gemini] failed to download image %s: %v", imgURL, err)
+					continue
+				}
+				last.Parts = append(last.Parts, *imgPart)
+			}
+		}
+	}
+
+	return c.StreamGenerateContent(ctx, model, generateRequest{
+		Contents:          contents,
+		SystemInstruction: systemInstruction,
+	})
+}
+
+// StreamChatCompletionWithTools is a convenience wrapper that builds contents with tools and streams.
+func (c *Client) StreamChatCompletionWithTools(ctx context.Context, model string, messages []Message, tools []FunctionDeclaration, imageURLs []string) <-chan StreamEvent {
+	contents, systemInstruction := buildContents(messages)
+
+	if len(imageURLs) > 0 && len(contents) > 0 {
+		last := &contents[len(contents)-1]
+		if last.Role == "user" {
+			for _, imgURL := range imageURLs {
+				imgPart, err := c.downloadImagePart(imgURL)
+				if err != nil {
+					log.Printf("[gemini] failed to download image %s: %v", imgURL, err)
+					continue
+				}
+				last.Parts = append(last.Parts, *imgPart)
+			}
+		}
+	}
+
+	reqBody := generateRequest{
+		Contents:          contents,
+		SystemInstruction: systemInstruction,
+	}
+	if len(tools) > 0 {
+		reqBody.Tools = []toolConfig{{FunctionDeclarations: tools}}
+	}
+
+	return c.StreamGenerateContent(ctx, model, reqBody)
 }
 
 // ListModels returns available Gemini models that support generateContent or embedContent.

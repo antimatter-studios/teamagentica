@@ -112,16 +112,70 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 }
 
 // buildToolDefs converts discovered tools into Gemini FunctionDeclaration format.
+// It sanitizes parameters to remove empty enum values that Gemini rejects.
 func buildToolDefs(tools []discoveredTool) []gemini.FunctionDeclaration {
 	defs := make([]gemini.FunctionDeclaration, len(tools))
 	for i, t := range tools {
 		defs[i] = gemini.FunctionDeclaration{
 			Name:        t.PrefixedName,
 			Description: t.Description,
-			Parameters:  t.Parameters,
+			Parameters:  sanitizeParams(t.Parameters),
 		}
 	}
 	return defs
+}
+
+// sanitizeParams cleans up JSON Schema parameters for Gemini compatibility.
+// Removes empty strings from enum arrays and strips empty enums entirely.
+func sanitizeParams(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw
+	}
+	sanitizeObject(obj)
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// sanitizeObject recursively cleans enum arrays and nested properties.
+func sanitizeObject(obj map[string]interface{}) {
+	// Clean enum arrays — remove empty strings.
+	if enumRaw, ok := obj["enum"]; ok {
+		if enumArr, ok := enumRaw.([]interface{}); ok {
+			var cleaned []interface{}
+			for _, v := range enumArr {
+				if s, ok := v.(string); ok && s == "" {
+					continue
+				}
+				cleaned = append(cleaned, v)
+			}
+			if len(cleaned) == 0 {
+				delete(obj, "enum")
+			} else {
+				obj["enum"] = cleaned
+			}
+		}
+	}
+
+	// Recurse into properties.
+	if props, ok := obj["properties"].(map[string]interface{}); ok {
+		for _, v := range props {
+			if propObj, ok := v.(map[string]interface{}); ok {
+				sanitizeObject(propObj)
+			}
+		}
+	}
+
+	// Recurse into items (for array types).
+	if items, ok := obj["items"].(map[string]interface{}); ok {
+		sanitizeObject(items)
+	}
 }
 
 // executeToolCall runs a single tool call by routing through the kernel proxy.
