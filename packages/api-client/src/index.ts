@@ -13,6 +13,7 @@ import { AgentRegistryAPI } from "./agents.js";
 import { UsersAPI } from "./users.js";
 import { SchedulerAPI } from "./scheduler.js";
 import { PersonaAPI } from "./personas.js";
+import { MemoryAPI } from "./memory.js";
 
 export class TeamAgenticaClient {
   readonly http: HttpTransport;
@@ -30,6 +31,7 @@ export class TeamAgenticaClient {
   readonly users: UsersAPI;
   readonly scheduler: SchedulerAPI;
   readonly personas: PersonaAPI;
+  readonly memory: MemoryAPI;
 
   constructor(config: ClientConfig) {
     this.http = new HttpTransport(config);
@@ -47,6 +49,7 @@ export class TeamAgenticaClient {
     this.users = new UsersAPI(this.http);
     this.scheduler = new SchedulerAPI(this.http);
     this.personas = new PersonaAPI(this.http);
+    this.memory = new MemoryAPI(this.http);
   }
 
   get baseUrl(): string {
@@ -121,3 +124,6 @@ export { SchedulerAPI } from "./scheduler.js";
 
 export type { Persona, PersonaRole, CreatePersonaRequest, UpdatePersonaRequest, CreateRoleRequest, UpdateRoleRequest } from "./personas.js";
 export { PersonaAPI } from "./personas.js";
+
+export type { Memory, MemoryEntity, LCMConversation, LCMMessage } from "./memory.js";
+export { MemoryAPI } from "./memory.js";

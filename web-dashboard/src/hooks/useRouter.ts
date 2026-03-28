@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 
-export type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "scheduler" | "agents" | "marketplace" | "plugins" | "costs" | "console" | "users";
+export type Page = "dashboard" | "chat" | "code" | "files" | "tasks" | "scheduler" | "agents" | "marketplace" | "plugins" | "costs" | "console" | "users" | "memory";
 
 const VALID_PAGES = new Set<Page>([
   "dashboard", "chat", "code", "files", "tasks", "scheduler",
-  "agents", "marketplace", "plugins", "costs", "console", "users",
+  "agents", "marketplace", "plugins", "costs", "console", "users", "memory",
 ]);
 
 function parsePath(pathname: string): { page: Page; subpath: string } {

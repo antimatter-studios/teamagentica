@@ -13,6 +13,7 @@ import KanbanBoard from "./components/KanbanBoard";
 import Agents from "./components/Agents";
 import Users from "./components/Users";
 import TaskScheduler from "./components/TaskScheduler";
+import MemoryExplorer from "./components/MemoryExplorer";
 import { useAuthStore } from "./stores/authStore";
 import { apiClient } from "./api/client";
 import { useEventStore } from "./stores/eventStore";
@@ -38,6 +39,7 @@ export default function App() {
   const [hasTasks, setHasTasks] = useState(false);
   const [hasAgents, setHasAgents] = useState(false);
   const [hasScheduler, setHasScheduler] = useState(false);
+  const [hasMemory, setHasMemory] = useState(false);
   const [capabilitiesLoaded, setCapabilitiesLoaded] = useState(false);
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
@@ -52,6 +54,7 @@ export default function App() {
       apiClient.plugins.search("system:tasks").then((p) => setHasTasks(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("tool:aliases").then((p) => setHasAgents(p.length > 0)).catch(() => {}),
       apiClient.plugins.search("infra:scheduler").then((p) => setHasScheduler(p.length > 0)).catch(() => {}),
+      apiClient.plugins.search("tool:memory").then((p) => setHasMemory(p.length > 0)).catch(() => {}),
     ]).finally(() => setCapabilitiesLoaded(true));
   }, []);
 
@@ -68,6 +71,7 @@ export default function App() {
       setHasTasks(false);
       setHasAgents(false);
       setHasScheduler(false);
+      setHasMemory(false);
     }
     return () => disconnectEvents();
   }, [authenticated, fetchUser, connectEvents, disconnectEvents, checkCapabilities]);
@@ -96,7 +100,8 @@ export default function App() {
     if (!hasTasks && page === "tasks") setPage("dashboard");
     if (!hasAgents && page === "agents") setPage("dashboard");
     if (!hasScheduler && page === "scheduler") setPage("dashboard");
-  }, [capabilitiesLoaded, hasChat, hasEditor, hasTasks, hasAgents, hasScheduler, page]);
+    if (!hasMemory && page === "memory") setPage("dashboard");
+  }, [capabilitiesLoaded, hasChat, hasEditor, hasTasks, hasAgents, hasScheduler, hasMemory, page]);
 
   const canAccessPlugins = user?.role === "admin";
   const { theme, setTheme, themes } = useTheme();
@@ -120,8 +125,9 @@ export default function App() {
     { id: "marketplace" as Page, label: "Marketplace" },
     { id: "plugins" as Page, label: "Plugins" },
     { id: "costs" as Page, label: "Costs" },
+    ...(hasMemory ? [{ id: "memory" as Page, label: "Memory" }] : []),
     { id: "console" as Page, label: "Console" },
-  ], []);
+  ], [hasMemory]);
 
   if (!authenticated) {
     return <LoginForm />;
@@ -252,6 +258,7 @@ export default function App() {
       {page === "console" && <DebugConsole />}
       {page === "users" && <Users />}
       {page === "scheduler" && <TaskScheduler />}
+      {page === "memory" && <MemoryExplorer />}
 
       {/* Chat and Code stay mounted (hidden) to preserve iframe/websocket state */}
       {hasChat && (
