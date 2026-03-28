@@ -63,6 +63,7 @@ func main() {
 
 	router := gin.Default()
 	h = handlers.New(db)
+	h.SetSDK(sdkClient)
 
 	// Health
 	router.GET("/health", h.Health)
@@ -96,6 +97,10 @@ func main() {
 	router.POST("/mcp/assign_role", h.MCPAssignRole)
 	router.POST("/mcp/get_default_persona", h.MCPGetDefaultPersona)
 	router.POST("/mcp/set_default_persona", h.MCPSetDefaultPersona)
+
+	// Notify subscribers (e.g. relay) that personas are ready.
+	// Handles the race where the relay starts before this plugin.
+	h.BroadcastReady()
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", defaultPort),

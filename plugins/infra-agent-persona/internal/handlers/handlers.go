@@ -1,23 +1,50 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-persona/internal/storage"
 )
 
 // Handler serves persona API endpoints.
 type Handler struct {
-	db *storage.DB
+	db  *storage.DB
+	sdk *pluginsdk.Client
 }
 
 // New creates a new Handler.
 func New(db *storage.DB) *Handler {
 	return &Handler{db: db}
+}
+
+// SetSDK attaches the SDK client for emitting events.
+func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
+	h.sdk = sdk
+}
+
+// BroadcastReady emits a persona:update event on startup so subscribers
+// (e.g. the relay) that started before this plugin can load personas.
+func (h *Handler) BroadcastReady() {
+	h.broadcastPersonaChange("ready", "")
+}
+
+// broadcastPersonaChange emits a persona:update event so subscribers
+// (e.g. the relay) can reactively refresh their persona cache.
+func (h *Handler) broadcastPersonaChange(action, alias string) {
+	if h.sdk == nil {
+		return
+	}
+	detail, _ := json.Marshal(map[string]string{
+		"action": action,
+		"alias":  alias,
+	})
+	h.sdk.ReportEvent("persona:update", string(detail))
 }
 
 // DB returns the underlying database (may be nil before init).
@@ -42,7 +69,7 @@ func (h *Handler) ListPersonas(c *gin.Context) {
 
 // GetPersona handles GET /personas/:alias — returns a single persona.
 func (h *Handler) GetPersona(c *gin.Context) {
-	alias := c.Param("alias")
+	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
 	p, err := h.db.Get(alias)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
@@ -58,7 +85,7 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	req.Alias = strings.ToLower(strings.TrimSpace(req.Alias))
+	req.Alias = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Alias)), "@", "")
 	if req.Alias == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
@@ -90,12 +117,13 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		}
 	}
 	p, _ := h.db.Get(req.Alias)
+	h.broadcastPersonaChange("created", req.Alias)
 	c.JSON(http.StatusCreated, p)
 }
 
 // UpdatePersona handles PUT /personas/:alias — updates an existing persona.
 func (h *Handler) UpdatePersona(c *gin.Context) {
-	alias := c.Param("alias")
+	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
 
 	// Verify it exists.
 	if _, err := h.db.Get(alias); err != nil {
@@ -163,6 +191,7 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 	}
 
 	p, _ := h.db.Get(alias)
+	h.broadcastPersonaChange("updated", alias)
 	c.JSON(http.StatusOK, p)
 }
 
@@ -178,7 +207,7 @@ func (h *Handler) GetDefaultPersona(c *gin.Context) {
 
 // SetDefaultPersona handles POST /personas/:alias/set-default.
 func (h *Handler) SetDefaultPersona(c *gin.Context) {
-	alias := c.Param("alias")
+	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
 	if _, err := h.db.Get(alias); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
 		return
@@ -188,16 +217,18 @@ func (h *Handler) SetDefaultPersona(c *gin.Context) {
 		return
 	}
 	p, _ := h.db.Get(alias)
+	h.broadcastPersonaChange("updated", alias)
 	c.JSON(http.StatusOK, p)
 }
 
 // DeletePersona handles DELETE /personas/:alias.
 func (h *Handler) DeletePersona(c *gin.Context) {
-	alias := c.Param("alias")
+	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
 	if err := h.db.Delete(alias); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.broadcastPersonaChange("deleted", alias)
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
@@ -456,7 +487,7 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	req.Alias = strings.ToLower(strings.TrimSpace(req.Alias))
+	req.Alias = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Alias)), "@", "")
 	if req.Alias == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
@@ -487,6 +518,7 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		}
 	}
 	p, _ := h.db.Get(req.Alias)
+	h.broadcastPersonaChange("created", req.Alias)
 	c.JSON(http.StatusCreated, p)
 }
 
@@ -560,6 +592,7 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 	}
 
 	p, _ := h.db.Get(alias)
+	h.broadcastPersonaChange("updated", alias)
 	c.JSON(http.StatusOK, p)
 }
 
@@ -576,6 +609,7 @@ func (h *Handler) MCPDeletePersona(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.broadcastPersonaChange("deleted", req.Alias)
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
@@ -636,6 +670,7 @@ func (h *Handler) MCPSetDefaultPersona(c *gin.Context) {
 		return
 	}
 	p, _ := h.db.Get(req.Alias)
+	h.broadcastPersonaChange("updated", req.Alias)
 	c.JSON(http.StatusOK, p)
 }
 
@@ -658,5 +693,6 @@ func (h *Handler) MCPAssignRole(c *gin.Context) {
 		return
 	}
 	p, _ := h.db.Get(req.Alias)
+	h.broadcastPersonaChange("updated", req.Alias)
 	c.JSON(http.StatusOK, p)
 }
