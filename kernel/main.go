@@ -81,7 +81,10 @@ func main() {
 	})
 
 	// Pricing routes (admin only).
-	pricingHandler := handlers.NewPricingHandler()
+	pricingHandler := handlers.NewPricingHandler(&http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: clientTLS},
+	})
 	pricingGroup := r.Group("/api/pricing")
 	pricingGroup.Use(middleware.AuthRequired())
 	{

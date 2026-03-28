@@ -618,7 +618,7 @@ func (h *PluginHandler) UpdatePricing(c *gin.Context) {
 
 	var saved []models.ModelPrice
 	for _, p := range req.Prices {
-		price, err := SavePriceRecord(h.db(), p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, p.Currency)
+		price, err := SavePriceRecord(h.db(), p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, 0, p.Currency, time.Time{})
 		if err != nil {
 			log.Printf("pricing: failed to save %s/%s: %v", p.Provider, p.Model, err)
 			continue

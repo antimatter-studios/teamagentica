@@ -13,6 +13,7 @@ type ModelPrice struct {
 	OutputPer1M   float64    `json:"output_per_1m"`               // $ per 1M output tokens
 	CachedPer1M   float64    `json:"cached_per_1m"`               // $ per 1M cached tokens
 	PerRequest    float64    `json:"per_request"`                  // $ per request (for video tools)
+	Subscription  float64    `json:"subscription"`                 // $ flat fee per month (overrides token-based pricing)
 	Currency      string     `json:"currency" gorm:"default:'USD'"`
 	EffectiveFrom time.Time  `json:"effective_from"`
 	EffectiveTo   *time.Time `json:"effective_to"`                 // nil = current price

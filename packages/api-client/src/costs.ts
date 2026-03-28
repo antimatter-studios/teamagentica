@@ -8,6 +8,7 @@ export interface ModelPrice {
   output_per_1m: number;
   cached_per_1m: number;
   per_request: number;
+  subscription: number;
   currency: string;
   effective_from: string;
   effective_to: string | null;
