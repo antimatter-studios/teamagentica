@@ -1,0 +1,36 @@
+id: infra-agent-memory-lcm
+name: "Agent Memory: Episodic (LCM)"
+description: "Lossless context management — DAG-based conversation history with summarization"
+group: infrastructure
+version: "0.5.5"
+image: "teamagentica-infra-agent-memory-lcm:latest"
+author: teamagentica
+tags: [memory, episodic, lcm, context, conversations]
+capabilities: ["tool:memory:bank:episodic"]
+config_schema:
+  LCM_LLM_ALIAS:
+    type: select
+    label: "LLM Alias"
+    description: "Alias for summarization LLM (used for DAG compaction)"
+    dynamic: true
+    help_text: "Select which LLM to use for generating conversation summaries"
+    order: 1
+  LCM_CONTEXT_THRESHOLD:
+    type: string
+    label: "Context Threshold"
+    description: "Fraction of context window that triggers compaction (0.0-1.0)"
+    default: "0.75"
+    order: 2
+  LCM_FRESH_TAIL_COUNT:
+    type: string
+    label: "Fresh Tail Count"
+    description: "Number of recent messages protected from summarization"
+    default: "32"
+    order: 3
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    description: "Enable debug logging"
+    default: "false"
+    required: false
+    order: 99

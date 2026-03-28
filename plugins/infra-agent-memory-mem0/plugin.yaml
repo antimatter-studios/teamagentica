@@ -1,0 +1,31 @@
+id: infra-agent-memory-mem0
+name: "Agent Memory: Semantic (Mem0)"
+description: "Semantic fact extraction and vector search — powered by Mem0 with embedded Qdrant"
+group: infrastructure
+version: "0.1.2"
+image: "teamagentica-infra-agent-memory-mem0:latest"
+author: teamagentica
+tags: [memory, semantic, facts, mem0, qdrant]
+capabilities: ["tool:memory:bank:semantic"]
+config_schema:
+  MEM0_LLM_ALIAS:
+    type: select
+    label: "LLM Alias"
+    description: "Alias for memory fact extraction (extracts facts from conversations)"
+    dynamic: true
+    help_text: "Only aliases from plugins with memory:extraction capability are shown"
+    order: 1
+  MEM0_EMBEDDER_ALIAS:
+    type: select
+    label: "Embedder Alias"
+    description: "Alias for generating text embeddings (semantic memory search)"
+    dynamic: true
+    help_text: "Only aliases from plugins with memory:extraction capability are shown"
+    order: 2
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    description: "Enable debug logging"
+    default: "false"
+    required: false
+    order: 99

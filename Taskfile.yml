@@ -37,9 +37,15 @@ includes:
   system-teamagentica-plugin-provider:
     taskfile: ./plugins/system-teamagentica-plugin-provider/Taskfile.yml
     dir: ./plugins/system-teamagentica-plugin-provider
-  infra-agent-memory:
-    taskfile: ./plugins/infra-agent-memory/Taskfile.yml
-    dir: ./plugins/infra-agent-memory
+  infra-agent-memory-gateway:
+    taskfile: ./plugins/infra-agent-memory-gateway/Taskfile.yml
+    dir: ./plugins/infra-agent-memory-gateway
+  infra-agent-memory-mem0:
+    taskfile: ./plugins/infra-agent-memory-mem0/Taskfile.yml
+    dir: ./plugins/infra-agent-memory-mem0
+  infra-agent-memory-lcm:
+    taskfile: ./plugins/infra-agent-memory-lcm/Taskfile.yml
+    dir: ./plugins/infra-agent-memory-lcm
   infra-agent-persona:
     taskfile: ./plugins/infra-agent-persona/Taskfile.yml
     dir: ./plugins/infra-agent-persona

@@ -12,7 +12,9 @@ use (
 	./plugins/agent-openrouter
 	./plugins/agent-requesty
 	./plugins/system-teamagentica-plugin-provider
-	./plugins/infra-agent-memory
+	./plugins/infra-agent-memory-gateway
+	./plugins/infra-agent-memory-lcm
+	./plugins/infra-agent-memory-mem0
 	./plugins/infra-agent-persona
 	./plugins/infra-alias-registry
 	./plugins/infra-agent-relay

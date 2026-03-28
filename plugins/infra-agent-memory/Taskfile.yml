@@ -11,9 +11,4 @@ tasks:
   build:
     desc: Build prod Docker image
     cmds:
-      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod ../..
-
-  build:dev:
-    desc: Build dev Docker image
-    cmds:
-      - docker build -t teamagentica-{{.BINARY_NAME}}:dev -f Dockerfile --target dev ../..
+      - docker build -t teamagentica-{{.BINARY_NAME}}:latest -f Dockerfile --target prod .
