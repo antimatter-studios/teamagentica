@@ -65,6 +65,9 @@ COPY --from=kaniko /kaniko/executor /usr/local/bin/kaniko
 # tacli (TeamAgentica CLI for plugin management)
 COPY --from=tacli-builder /tacli /usr/local/bin/tacli
 
+# Shell safety: treat unbound variables as errors (prevents rm -rf /${UNSET_VAR} disasters)
+RUN echo 'set -o nounset' > /etc/profile.d/shell-safety.sh
+
 # Common entrypoint setup (Claude config symlink, backup restore)
 COPY --chmod=755 images/devbox/entrypoint-common.sh /usr/local/bin/entrypoint-common.sh
 

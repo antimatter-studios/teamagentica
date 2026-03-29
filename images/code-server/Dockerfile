@@ -33,6 +33,9 @@ RUN GONOSUMCHECK=github.com/antimatter-studios/portpilot GOFLAGS=-mod=mod GONOSU
 # Ensure coder user has Go + Bun in PATH
 RUN echo 'export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"' >> /home/coder/.bashrc
 
+# Shell safety: treat unbound variables as errors (prevents rm -rf /${UNSET_VAR} disasters)
+RUN echo 'set -o nounset' > /etc/profile.d/shell-safety.sh
+
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY supervisord.conf /etc/supervisord.conf
 
