@@ -5,15 +5,32 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
-// sanitize normalises a name: lowercase, trimmed, all @ removed.
+// sanitize normalises a name/alias/id: lowercase, trim, strip @,
+// replace any non-alphabetical character with underscore, collapse
+// consecutive underscores, and trim leading/trailing underscores.
 func sanitize(s string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "@", "")
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "@", "")
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	result := b.String()
+	for strings.Contains(result, "__") {
+		result = strings.ReplaceAll(result, "__", "_")
+	}
+	return strings.Trim(result, "_")
 }
 
 // Alias type constants.

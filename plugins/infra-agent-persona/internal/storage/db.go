@@ -1,17 +1,35 @@
 package storage
 
 import (
-	"errors"
+	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"gorm.io/gorm"
 )
 
-// sanitize normalises a name/alias/id: lowercase, trimmed, all @ removed.
-func sanitize(s string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "@", "")
+// Sanitize normalises a name/alias/id: lowercase, trim, strip @,
+// replace any non-alphabetical character with underscore, collapse
+// consecutive underscores, and trim leading/trailing underscores.
+func Sanitize(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "@", "")
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	// Collapse consecutive underscores and trim edges.
+	result := b.String()
+	for strings.Contains(result, "__") {
+		result = strings.ReplaceAll(result, "__", "_")
+	}
+	return strings.Trim(result, "_")
 }
 
 // Role defines a persona role with a default system prompt.
@@ -62,7 +80,7 @@ func (d *DB) List() ([]Persona, error) {
 // Get returns a single persona by alias.
 func (d *DB) Get(alias string) (*Persona, error) {
 	var p Persona
-	if err := d.db.First(&p, "alias = ?", sanitize(alias)).Error; err != nil {
+	if err := d.db.First(&p, "alias = ?", Sanitize(alias)).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -70,7 +88,7 @@ func (d *DB) Get(alias string) (*Persona, error) {
 
 // Create inserts a new persona.
 func (d *DB) Create(p *Persona) error {
-	p.Alias = sanitize(p.Alias)
+	p.Alias = Sanitize(p.Alias)
 	return d.db.Create(p).Error
 }
 
@@ -78,21 +96,21 @@ func (d *DB) Create(p *Persona) error {
 func (d *DB) Update(alias string, updates map[string]interface{}) error {
 	if v, ok := updates["alias"]; ok {
 		if s, ok := v.(string); ok {
-			updates["alias"] = sanitize(s)
+			updates["alias"] = Sanitize(s)
 		}
 	}
 	updates["updated_at"] = time.Now()
-	return d.db.Model(&Persona{}).Where("alias = ?", sanitize(alias)).Updates(updates).Error
+	return d.db.Model(&Persona{}).Where("alias = ?", Sanitize(alias)).Updates(updates).Error
 }
 
 // Rename changes a persona's alias (primary key).
 func (d *DB) Rename(oldAlias, newAlias string) error {
-	return d.db.Exec("UPDATE personas SET alias = ?, updated_at = ? WHERE alias = ?", sanitize(newAlias), time.Now(), sanitize(oldAlias)).Error
+	return d.db.Exec("UPDATE personas SET alias = ?, updated_at = ? WHERE alias = ?", Sanitize(newAlias), time.Now(), Sanitize(oldAlias)).Error
 }
 
 // Delete removes a persona by alias.
 func (d *DB) Delete(alias string) error {
-	return d.db.Delete(&Persona{}, "alias = ?", sanitize(alias)).Error
+	return d.db.Delete(&Persona{}, "alias = ?", Sanitize(alias)).Error
 }
 
 // ListRoles returns all roles.
@@ -107,7 +125,7 @@ func (d *DB) ListRoles() ([]Role, error) {
 // GetRole returns a single role by ID.
 func (d *DB) GetRole(id string) (*Role, error) {
 	var r Role
-	if err := d.db.First(&r, "id = ?", sanitize(id)).Error; err != nil {
+	if err := d.db.First(&r, "id = ?", Sanitize(id)).Error; err != nil {
 		return nil, err
 	}
 	return &r, nil
@@ -115,13 +133,13 @@ func (d *DB) GetRole(id string) (*Role, error) {
 
 // CreateRole inserts a new role.
 func (d *DB) CreateRole(r *Role) error {
-	r.ID = sanitize(r.ID)
+	r.ID = Sanitize(r.ID)
 	return d.db.Create(r).Error
 }
 
 // UpdateRole modifies an existing role.
 func (d *DB) UpdateRole(id string, updates map[string]interface{}) (*Role, error) {
-	id = sanitize(id)
+	id = Sanitize(id)
 	updates["updated_at"] = time.Now()
 	if err := d.db.Model(&Role{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		return nil, err
@@ -135,13 +153,13 @@ func (d *DB) UpdateRole(id string, updates map[string]interface{}) (*Role, error
 
 // DeleteRole removes a role by ID.
 func (d *DB) DeleteRole(id string) error {
-	return d.db.Delete(&Role{}, "id = ?", sanitize(id)).Error
+	return d.db.Delete(&Role{}, "id = ?", Sanitize(id)).Error
 }
 
 // GetRolePrompt returns the system_prompt for a given role, or empty string if not found.
 func (d *DB) GetRolePrompt(roleID string) string {
 	var r Role
-	if err := d.db.Select("system_prompt").First(&r, "id = ?", sanitize(roleID)).Error; err != nil {
+	if err := d.db.Select("system_prompt").First(&r, "id = ?", Sanitize(roleID)).Error; err != nil {
 		return ""
 	}
 	return r.SystemPrompt
@@ -160,12 +178,12 @@ func (d *DB) GetDefault() (*Persona, error) {
 func (d *DB) SetDefault(alias string) error {
 	d.db.Model(&Persona{}).Where("is_default = ?", true).Update("is_default", nil)
 	isTrue := true
-	return d.db.Model(&Persona{}).Where("alias = ?", sanitize(alias)).Update("is_default", &isTrue).Error
+	return d.db.Model(&Persona{}).Where("alias = ?", Sanitize(alias)).Update("is_default", &isTrue).Error
 }
 
 // ClearDefault removes the default flag from a persona.
 func (d *DB) ClearDefault(alias string) error {
-	return d.db.Model(&Persona{}).Where("alias = ?", sanitize(alias)).Update("is_default", nil).Error
+	return d.db.Model(&Persona{}).Where("alias = ?", Sanitize(alias)).Update("is_default", nil).Error
 }
 
 // GetPersonasByRole returns all personas with the given role.
@@ -188,13 +206,13 @@ func (d *DB) GetPersonaByRole(role string) (*Persona, error) {
 
 // AssignRole assigns a role to a persona.
 func (d *DB) AssignRole(alias, role string) error {
-	alias = sanitize(alias)
-	role = sanitize(role)
+	alias = Sanitize(alias)
+	role = Sanitize(role)
 	if _, err := d.Get(alias); err != nil {
-		return errors.New("persona not found")
+		return fmt.Errorf("persona %q not found", alias)
 	}
 	if _, err := d.GetRole(role); err != nil {
-		return errors.New("role not found")
+		return fmt.Errorf("role %q not found", role)
 	}
 	return d.db.Model(&Persona{}).Where("alias = ?", alias).Update("role", role).Error
 }

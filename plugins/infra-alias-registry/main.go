@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-alias-registry/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-alias-registry/internal/storage"
 )
@@ -80,7 +81,7 @@ func main() {
 	router.POST("/migrate-from-kernel", h.MigrateFromKernel)
 
 	// Signal that the registry is ready so plugins that started before us can re-fetch.
-	sdkClient.ReportEvent("alias-registry:ready", "")
+	events.PublishAliasRegistryReady(sdkClient)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

@@ -1,14 +1,13 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-persona/internal/storage"
 )
 
@@ -40,11 +39,7 @@ func (h *Handler) broadcastPersonaChange(action, alias string) {
 	if h.sdk == nil {
 		return
 	}
-	detail, _ := json.Marshal(map[string]string{
-		"action": action,
-		"alias":  alias,
-	})
-	h.sdk.ReportEvent("persona:update", string(detail))
+	events.PublishPersonaUpdate(h.sdk, action, alias)
 }
 
 // DB returns the underlying database (may be nil before init).
@@ -69,7 +64,7 @@ func (h *Handler) ListPersonas(c *gin.Context) {
 
 // GetPersona handles GET /personas/:alias — returns a single persona.
 func (h *Handler) GetPersona(c *gin.Context) {
-	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
+	alias := c.Param("alias")
 	p, err := h.db.Get(alias)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
@@ -85,10 +80,16 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	req.Alias = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Alias)), "@", "")
-	if req.Alias == "" {
+	if storage.Sanitize(req.Alias) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
+	}
+	// Validate role exists before creating persona to avoid orphaned rows.
+	if req.Role != "" {
+		if _, err := h.db.GetRole(req.Role); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("role %q not found", req.Role)})
+			return
+		}
 	}
 	// Auto-fill system_prompt from role if not provided.
 	if req.SystemPrompt == "" && req.Role != "" {
@@ -103,6 +104,10 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "persona already exists"})
 		return
 	}
+	// Persona row exists from this point — always broadcast so caches update
+	// even if subsequent steps (role/default) fail.
+	defer h.broadcastPersonaChange("created", req.Alias)
+
 	// Use AssignRole for singleton enforcement.
 	if requestedRole != "" {
 		if err := h.db.AssignRole(req.Alias, requestedRole); err != nil {
@@ -117,13 +122,12 @@ func (h *Handler) CreatePersona(c *gin.Context) {
 		}
 	}
 	p, _ := h.db.Get(req.Alias)
-	h.broadcastPersonaChange("created", req.Alias)
 	c.JSON(http.StatusCreated, p)
 }
 
 // UpdatePersona handles PUT /personas/:alias — updates an existing persona.
 func (h *Handler) UpdatePersona(c *gin.Context) {
-	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
+	alias := c.Param("alias")
 
 	// Verify it exists.
 	if _, err := h.db.Get(alias); err != nil {
@@ -137,6 +141,14 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 		return
 	}
 
+	// Persona exists — always broadcast so caches update even on partial failure.
+	changed := false
+	defer func() {
+		if changed {
+			h.broadcastPersonaChange("updated", alias)
+		}
+	}()
+
 	// Handle role change via AssignRole.
 	if roleVal, ok := body["role"]; ok {
 		if roleStr, ok := roleVal.(string); ok {
@@ -144,6 +156,7 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
+			changed = true
 		}
 	}
 
@@ -161,6 +174,7 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 					return
 				}
 			}
+			changed = true
 		}
 	}
 
@@ -176,22 +190,22 @@ func (h *Handler) UpdatePersona(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		changed = true
 	}
 
 	// Handle rename (must be last — changes the primary key).
 	if newAlias, ok := body["alias"]; ok {
 		if s, ok := newAlias.(string); ok && s != "" && s != alias {
-			s = strings.ToLower(strings.TrimSpace(s))
 			if err := h.db.Rename(alias, s); err != nil {
 				c.JSON(http.StatusConflict, gin.H{"error": "rename failed: " + err.Error()})
 				return
 			}
-			alias = s
+			alias = storage.Sanitize(s) // track the sanitized name for broadcast/response
+			changed = true
 		}
 	}
 
 	p, _ := h.db.Get(alias)
-	h.broadcastPersonaChange("updated", alias)
 	c.JSON(http.StatusOK, p)
 }
 
@@ -207,7 +221,7 @@ func (h *Handler) GetDefaultPersona(c *gin.Context) {
 
 // SetDefaultPersona handles POST /personas/:alias/set-default.
 func (h *Handler) SetDefaultPersona(c *gin.Context) {
-	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
+	alias := c.Param("alias")
 	if _, err := h.db.Get(alias); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("persona %q not found", alias)})
 		return
@@ -223,7 +237,7 @@ func (h *Handler) SetDefaultPersona(c *gin.Context) {
 
 // DeletePersona handles DELETE /personas/:alias.
 func (h *Handler) DeletePersona(c *gin.Context) {
-	alias := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(c.Param("alias"))), "@", "")
+	alias := c.Param("alias")
 	if err := h.db.Delete(alias); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -273,7 +287,7 @@ func (h *Handler) CreateRole(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.ID == "" {
+	if storage.Sanitize(req.ID) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id is required"})
 		return
 	}
@@ -487,10 +501,16 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	req.Alias = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Alias)), "@", "")
-	if req.Alias == "" {
+	if storage.Sanitize(req.Alias) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "alias is required"})
 		return
+	}
+	// Validate role exists before creating persona to avoid orphaned rows.
+	if req.Role != "" {
+		if _, err := h.db.GetRole(req.Role); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("role %q not found", req.Role)})
+			return
+		}
 	}
 	// Auto-fill system_prompt from role if not provided.
 	wantDefault := req.IsDefault != nil && *req.IsDefault
@@ -505,6 +525,9 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "persona already exists"})
 		return
 	}
+	// Persona row exists — always broadcast so caches update even if role/default fail.
+	defer h.broadcastPersonaChange("created", req.Alias)
+
 	if requestedRole != "" {
 		if err := h.db.AssignRole(req.Alias, requestedRole); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -518,7 +541,6 @@ func (h *Handler) MCPCreatePersona(c *gin.Context) {
 		}
 	}
 	p, _ := h.db.Get(req.Alias)
-	h.broadcastPersonaChange("created", req.Alias)
 	c.JSON(http.StatusCreated, p)
 }
 
@@ -539,6 +561,14 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 		return
 	}
 
+	// Persona exists — always broadcast so caches update even on partial failure.
+	changed := false
+	defer func() {
+		if changed {
+			h.broadcastPersonaChange("updated", alias)
+		}
+	}()
+
 	// Handle role change via AssignRole.
 	if roleVal, ok := body["role"]; ok {
 		if roleStr, ok := roleVal.(string); ok {
@@ -546,6 +576,7 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
+			changed = true
 		}
 	}
 
@@ -563,6 +594,7 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 					return
 				}
 			}
+			changed = true
 		}
 	}
 
@@ -577,22 +609,22 @@ func (h *Handler) MCPUpdatePersona(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		changed = true
 	}
 
 	// Handle rename via new_alias.
 	if newAlias, ok := body["new_alias"]; ok {
 		if s, ok := newAlias.(string); ok && s != "" && s != alias {
-			s = strings.ToLower(strings.TrimSpace(s))
 			if err := h.db.Rename(alias, s); err != nil {
 				c.JSON(http.StatusConflict, gin.H{"error": "rename failed: " + err.Error()})
 				return
 			}
-			alias = s
+			alias = storage.Sanitize(s) // track the sanitized name for broadcast/response
+			changed = true
 		}
 	}
 
 	p, _ := h.db.Get(alias)
-	h.broadcastPersonaChange("updated", alias)
 	c.JSON(http.StatusOK, p)
 }
 
