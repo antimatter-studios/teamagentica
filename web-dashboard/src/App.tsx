@@ -28,10 +28,11 @@ const PLUGIN_LIFECYCLE_EVENTS = new Set([
 ]);
 
 export default function App() {
-  const { authenticated, user } = useAuthStore(
-    useShallow((s) => ({ authenticated: s.authenticated, user: s.user }))
+  const { authenticated, sessionExpired, user } = useAuthStore(
+    useShallow((s) => ({ authenticated: s.authenticated, sessionExpired: s.sessionExpired, user: s.user }))
   );
   const logout = useAuthStore((s) => s.logout);
+  const dismissSessionExpired = useAuthStore((s) => s.dismissSessionExpired);
   const fetchUser = useAuthStore((s) => s.fetchUser);
   const { page, subpath, navigate: setPage, setSubpath, pushSubpath } = useRouter();
   const [hasChat, setHasChat] = useState(false);
@@ -130,7 +131,20 @@ export default function App() {
   ], [hasMemory]);
 
   if (!authenticated) {
-    return <LoginForm />;
+    return (
+      <>
+        <LoginForm />
+        {sessionExpired && (
+          <div className="session-expired-overlay" onClick={dismissSessionExpired}>
+            <div className="session-expired-modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Session Expired</h3>
+              <p>Your session has expired. Please log in again to continue.</p>
+              <button onClick={dismissSessionExpired}>OK</button>
+            </div>
+          </div>
+        )}
+      </>
+    );
   }
 
   return (

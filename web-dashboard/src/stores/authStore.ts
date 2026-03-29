@@ -11,6 +11,7 @@ import type { User } from "@teamagentica/api-client";
 
 interface AuthStore {
   authenticated: boolean;
+  sessionExpired: boolean;
   user: User | null;
   users: User[];
   loading: boolean;
@@ -18,27 +19,29 @@ interface AuthStore {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
   logout: () => void;
+  dismissSessionExpired: () => void;
   fetchUser: () => Promise<void>;
   fetchUsers: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => {
-  // Register global 401 handler so any API call that gets a 401
-  // cleanly logs out via React state — no hard page reload.
+  // Register global 401 handler. This only fires AFTER the API client
+  // has already tried (and failed) to refresh the token silently.
   setOnUnauthorized(() => {
     clearToken();
-    set({ authenticated: false, user: null, users: [], error: null });
+    set({ authenticated: false, sessionExpired: true, user: null, users: [] });
   });
 
   return ({
   authenticated: !!getStoredToken(),
+  sessionExpired: false,
   user: null,
   users: [],
   loading: false,
   error: null,
 
   login: async (email, password) => {
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, sessionExpired: false });
     try {
       await apiLogin(email, password);
       set({ authenticated: true, loading: false });
@@ -53,7 +56,7 @@ export const useAuthStore = create<AuthStore>((set, get) => {
   },
 
   register: async (email, password, displayName) => {
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, sessionExpired: false });
     try {
       await apiRegister(email, password, displayName);
       set({ authenticated: true, loading: false });
@@ -68,8 +71,13 @@ export const useAuthStore = create<AuthStore>((set, get) => {
   },
 
   logout: () => {
+    apiClient.auth.logout();
     clearToken();
-    set({ authenticated: false, user: null, users: [], error: null });
+    set({ authenticated: false, sessionExpired: false, user: null, users: [], error: null });
+  },
+
+  dismissSessionExpired: () => {
+    set({ sessionExpired: false });
   },
 
   fetchUser: async () => {

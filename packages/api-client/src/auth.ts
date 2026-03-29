@@ -10,6 +10,7 @@ export interface User {
 
 export interface AuthResponse {
   token: string;
+  refresh_token?: string;
   user: User;
 }
 
@@ -55,5 +56,21 @@ export class AuthAPI {
 
   async getUsers(): Promise<User[]> {
     return this.http.get<User[]>("/api/users");
+  }
+
+  async refresh(refreshToken: string): Promise<AuthResponse> {
+    const res = await this.http.postNoAuth<AuthResponse>("/api/auth/refresh", {
+      refresh_token: refreshToken,
+    });
+    this.http.setToken(res.token);
+    return res;
+  }
+
+  async logout(): Promise<void> {
+    try {
+      await this.http.post("/api/auth/logout", {});
+    } catch {
+      // Best-effort — token may already be expired.
+    }
   }
 }
