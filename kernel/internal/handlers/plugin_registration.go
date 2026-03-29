@@ -238,32 +238,15 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		Detail:   fmt.Sprintf("host=%s port=%d", req.Host, req.Port),
 	})
 
-	// Dispatch plugin:registered as an inter-plugin event so other plugins
-	// can react to new capabilities coming online (e.g. ngrok re-emitting
-	// its tunnel URL when webhook:ingress appears).
-	if subs := h.Subs.GetSubscribers("plugin:registered"); len(subs) > 0 {
-		capsJSON, _ := json.Marshal(req.Capabilities)
-		detail := fmt.Sprintf(`{"plugin_id":%q,"capabilities":%s}`, req.ID, string(capsJSON))
-		payload := map[string]string{
-			"event_type": "plugin:registered",
-			"plugin_id":  req.ID,
-			"detail":     detail,
-			"timestamp":  time.Now().Format(time.RFC3339),
-		}
-		body, _ := json.Marshal(payload)
-		for _, sub := range subs {
-			h.Events.Emit(events.DebugEvent{
-				Type:     "dispatch",
-				PluginID: sub.PluginID,
-				Detail:   fmt.Sprintf("event=plugin:registered from=%s callback=%s", req.ID, sub.CallbackPath),
-			})
-			h.logEvent("plugin:registered", req.ID, sub.PluginID, "dispatched", fmt.Sprintf("callback=%s", sub.CallbackPath))
-			go h.dispatchEvent(sub, body)
-		}
-	}
-
-	// Flush any pending addressed events for this plugin.
-	go h.flushPendingEvents(req.ID)
+	// Broadcast plugin:ready lifecycle event directly to all running plugins
+	// so they can update their peer address caches for P2P communication.
+	go h.broadcastLifecycleEvent(map[string]interface{}{
+		"type":       "plugin:ready",
+		"plugin_id":  req.ID,
+		"host":       req.Host,
+		"http_port":  req.Port,
+		"event_port": req.EventPort,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "registered"})
 }
@@ -325,278 +308,46 @@ func (h *PluginHandler) Deregister(c *gin.Context) {
 		"host":   "",
 	})
 
-	// Remove all event subscriptions for this plugin.
-	h.Subs.UnsubscribeAll(req.ID)
-
 	h.Events.Emit(events.DebugEvent{
 		Type:     "deregister",
 		PluginID: req.ID,
 	})
 
+	// Broadcast plugin:stopped so peers invalidate their address caches.
+	go h.broadcastLifecycleEvent(map[string]interface{}{
+		"type":      "plugin:stopped",
+		"plugin_id": req.ID,
+	})
+
 	c.JSON(http.StatusOK, gin.H{"message": "deregistered"})
 }
 
-// ReportEvent handles POST /api/plugins/event — allows plugins to emit debug events.
+// ReportEvent handles POST /api/plugins/event — emits to the debug SSE console.
+// Inter-plugin event routing is now handled by infra-redis via Redis Streams.
+// This endpoint is kept for backward compatibility and debug console observability.
 func (h *PluginHandler) ReportEvent(c *gin.Context) {
 	var req struct {
 		ID          string `json:"id" binding:"required"`
 		Type        string `json:"type" binding:"required"`
 		Detail      string `json:"detail"`
-		Destination string `json:"destination"` // optional: addressed delivery target
+		Destination string `json:"destination"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	now := time.Now()
-
-	// Always emit to SSE debug console for observability.
+	// Emit to SSE debug console for TUI/dashboard observability.
 	h.Events.Emit(events.DebugEvent{
 		Type:     req.Type,
 		PluginID: req.ID,
 		Detail:   req.Detail,
 	})
 
-	if req.Destination != "" {
-		// Addressed delivery: guarantee at-least-once to the specific destination.
-		h.handleAddressedEvent(req.ID, req.Type, req.Detail, req.Destination, now)
-	} else {
-		// Fire-and-forget broadcast to all subscribers.
-		if subs := h.Subs.GetSubscribers(req.Type); len(subs) > 0 {
-			payload := map[string]string{
-				"event_type": req.Type,
-				"plugin_id":  req.ID,
-				"detail":     req.Detail,
-				"timestamp":  now.Format(time.RFC3339),
-			}
-			body, _ := json.Marshal(payload)
-
-			for _, sub := range subs {
-				h.Events.Emit(events.DebugEvent{
-					Type:     "dispatch",
-					PluginID: sub.PluginID,
-					Detail:   fmt.Sprintf("event=%s from=%s callback=%s", req.Type, req.ID, sub.CallbackPath),
-				})
-				h.logEvent(req.Type, req.ID, sub.PluginID, "dispatched", fmt.Sprintf("callback=%s", sub.CallbackPath))
-				go h.dispatchEvent(sub, body)
-			}
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 
 // handleAddressedEvent guarantees at-least-once delivery to a specific plugin.
-func (h *PluginHandler) handleAddressedEvent(sourceID, eventType, detail, destID string, ts time.Time) {
-	// Find the subscription for (destination, event_type) to get callback_path.
-	sub, found := h.Subs.FindSubscription(destID, eventType)
-
-	// Determine callback path — use subscription if found, otherwise default.
-	callbackPath := "/events/usage"
-	if found {
-		callbackPath = sub.CallbackPath
-	}
-
-	payload := map[string]string{
-		"event_type": eventType,
-		"plugin_id":  sourceID,
-		"detail":     detail,
-		"timestamp":  ts.Format(time.RFC3339),
-	}
-	body, _ := json.Marshal(payload)
-
-	// Persist to pending_events immediately.
-	pending := models.Event{
-		EventType:      eventType,
-		SourcePluginID: sourceID,
-		TargetPluginID: destID,
-		CallbackPath:   callbackPath,
-		Payload:        string(body),
-		Attempts:       0,
-		CreatedAt:      ts,
-	}
-	if err := h.db().Create(&pending).Error; err != nil {
-		log.Printf("event queue: failed to persist pending event: %v", err)
-		return
-	}
-
-	// Enforce cap: max 1000 pending events per target (evict oldest FIFO).
-	h.enforcePendingCap(destID, 1000)
-
-	// Attempt instant dispatch if target is running.
-	var plugin models.Plugin
-	if err := h.db().First(&plugin, "id = ?", destID).Error; err != nil {
-		return
-	}
-
-	if plugin.Status == "running" && plugin.Host != "" {
-		if h.tryDispatch(plugin, callbackPath, body) {
-			// Success — remove from pending queue.
-			h.db().Delete(&pending)
-			h.Events.Emit(events.DebugEvent{
-				Type:     "dispatch_ok",
-				PluginID: destID,
-				Detail:   fmt.Sprintf("event=%s from=%s callback=%s addressed=true", eventType, sourceID, callbackPath),
-			})
-			h.logEvent(eventType, sourceID, destID, "delivered", detail)
-			return
-		}
-		// Dispatch failed — increment attempts, leave in queue.
-		h.db().Model(&pending).Update("attempts", pending.Attempts+1)
-		h.logEvent(eventType, sourceID, destID, "failed", "target unreachable")
-	}
-
-	h.Events.Emit(events.DebugEvent{
-		Type:     "dispatch_queued",
-		PluginID: destID,
-		Detail:   fmt.Sprintf("event=%s from=%s queued (target offline or unreachable)", eventType, sourceID),
-	})
-	h.logEvent(eventType, sourceID, destID, "queued", "target offline or unreachable")
-}
-
-// callbackPort returns the port to use for event callbacks.
-// The SDK internal server (EventPort) only serves /events and /schema.
-// Custom callback paths (e.g. /events/usage) are registered on the plugin's
-// main HTTP server, so those must use HTTPPort.
-func callbackPort(plugin models.Plugin, callbackPath string) int {
-	if callbackPath == "/events" && plugin.EventPort > 0 {
-		return plugin.EventPort
-	}
-	return plugin.HTTPPort
-}
-
-// tryDispatch attempts to deliver an event payload to a plugin via HTTP POST.
-// Returns true on success (HTTP 200), false otherwise.
-func (h *PluginHandler) tryDispatch(plugin models.Plugin, callbackPath string, body []byte) bool {
-	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin, callbackPath), callbackPath)
-
-	client := &http.Client{Timeout: 5 * time.Second, Transport: h.transport}
-
-	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
-// flushPendingEvents delivers all queued events for a target plugin.
-// Called when a plugin registers (comes online).
-func (h *PluginHandler) flushPendingEvents(targetPluginID string) {
-	var pending []models.Event
-	if err := h.db().Where("target_plugin_id = ?", targetPluginID).Order("created_at ASC").Find(&pending).Error; err != nil {
-		log.Printf("event flush: failed to query pending events for %s: %v", targetPluginID, err)
-		return
-	}
-
-	if len(pending) == 0 {
-		return
-	}
-
-	log.Printf("event flush: delivering %d pending events to %s", len(pending), targetPluginID)
-
-	var plugin models.Plugin
-	if err := h.db().First(&plugin, "id = ?", targetPluginID).Error; err != nil {
-		log.Printf("event flush: target plugin %s not found", targetPluginID)
-		return
-	}
-
-	if plugin.Status != "running" || plugin.Host == "" {
-		log.Printf("event flush: target plugin %s not ready (status=%s)", targetPluginID, plugin.Status)
-		return
-	}
-
-	for _, pe := range pending {
-		// Re-lookup current subscription — the stored path may be stale if the
-		// event was queued before the target plugin subscribed.
-		callbackPath := pe.CallbackPath
-		if sub, found := h.Subs.FindSubscription(targetPluginID, pe.EventType); found {
-			callbackPath = sub.CallbackPath
-		}
-
-		if h.tryDispatch(plugin, callbackPath, []byte(pe.Payload)) {
-			h.db().Delete(&pe)
-			h.Events.Emit(events.DebugEvent{
-				Type:     "dispatch_ok",
-				PluginID: targetPluginID,
-				Detail:   fmt.Sprintf("event=%s from=%s flushed", pe.EventType, pe.SourcePluginID),
-			})
-			h.logEvent(pe.EventType, pe.SourcePluginID, targetPluginID, "delivered", "flushed from queue")
-		} else {
-			h.db().Model(&pe).Update("attempts", pe.Attempts+1)
-			h.Events.Emit(events.DebugEvent{
-				Type:     "dispatch_error",
-				PluginID: targetPluginID,
-				Detail:   fmt.Sprintf("event=%s from=%s flush failed (attempt %d)", pe.EventType, pe.SourcePluginID, pe.Attempts+1),
-			})
-			h.logEvent(pe.EventType, pe.SourcePluginID, targetPluginID, "failed", fmt.Sprintf("flush attempt %d", pe.Attempts+1))
-		}
-	}
-}
-
-// enforcePendingCap ensures no more than maxCount pending events exist per target.
-// Deletes oldest events (FIFO) if over the cap.
-func (h *PluginHandler) enforcePendingCap(targetPluginID string, maxCount int) {
-	var count int64
-	h.db().Model(&models.Event{}).Where("target_plugin_id = ?", targetPluginID).Count(&count)
-	if count <= int64(maxCount) {
-		return
-	}
-
-	excess := int(count) - maxCount
-	var oldest []models.Event
-	h.db().Where("target_plugin_id = ?", targetPluginID).Order("created_at ASC").Limit(excess).Find(&oldest)
-	for _, pe := range oldest {
-		h.logEvent(pe.EventType, pe.SourcePluginID, pe.TargetPluginID, "evicted", fmt.Sprintf("cap=%d exceeded", maxCount))
-		h.db().Delete(&pe)
-	}
-	log.Printf("event queue: evicted %d oldest events for %s (cap=%d)", excess, targetPluginID, maxCount)
-}
-
-// dispatchEvent delivers an event payload to a subscriber plugin via HTTP callback.
-// Fire-and-forget: errors are logged but do not propagate.
-func (h *PluginHandler) dispatchEvent(sub events.Subscription, body []byte) {
-	var plugin models.Plugin
-	if result := h.db().First(&plugin, "id = ?", sub.PluginID); result.Error != nil {
-		log.Printf("event dispatch: subscriber %s not found in db", sub.PluginID)
-		return
-	}
-
-	if plugin.Status != "running" || plugin.Host == "" {
-		h.Events.Emit(events.DebugEvent{
-			Type:     "dispatch_error",
-			PluginID: sub.PluginID,
-			Detail:   fmt.Sprintf("event=%s skipped: status=%s host=%q (not ready)", sub.EventType, plugin.Status, plugin.Host),
-		})
-		log.Printf("event dispatch: skipping %s→%s: status=%s host=%q", sub.EventType, sub.PluginID, plugin.Status, plugin.Host)
-		return
-	}
-
-	targetURL := fmt.Sprintf("%s://%s:%d%s", h.pluginScheme(), plugin.Host, callbackPort(plugin, sub.CallbackPath), sub.CallbackPath)
-
-	client := &http.Client{Timeout: 5 * time.Second, Transport: h.transport}
-
-	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(body))
-	if err != nil {
-		h.Events.Emit(events.DebugEvent{
-			Type:     "dispatch_error",
-			PluginID: sub.PluginID,
-			Detail:   fmt.Sprintf("event=%s error=%v", sub.EventType, err),
-		})
-		log.Printf("event dispatch: failed to deliver %s to %s (%s): %v", sub.EventType, sub.PluginID, targetURL, err)
-		return
-	}
-	resp.Body.Close()
-
-	h.Events.Emit(events.DebugEvent{
-		Type:     "dispatch_ok",
-		PluginID: sub.PluginID,
-		Status:   resp.StatusCode,
-		Detail:   fmt.Sprintf("event=%s callback=%s", sub.EventType, sub.CallbackPath),
-	})
-}
-
 // UpdatePricing handles POST /api/plugins/pricing — allows plugins to push
 // price updates to the kernel via service-token auth.
 func (h *PluginHandler) UpdatePricing(c *gin.Context) {
@@ -759,40 +510,32 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 }
 
 // --- inter-plugin event subscription handlers ---
+// Event routing is now handled by infra-redis via Redis Streams.
+// These endpoints are kept as stubs for SDK backward compatibility during transition.
 
-// SubscribeEvent handles POST /api/plugins/subscribe — allows a plugin to subscribe
-// to events of a given type. When such events are reported, the kernel will POST
-// the event payload to the subscriber's callbackPath.
+// SubscribeEvent handles POST /api/plugins/subscribe — stub for backward compat.
+// Actual subscription now happens via infra-redis consumer groups.
 func (h *PluginHandler) SubscribeEvent(c *gin.Context) {
 	var req struct {
 		ID           string `json:"id" binding:"required"`
 		EventType    string `json:"event_type" binding:"required"`
-		CallbackPath string `json:"callback_path" binding:"required"`
+		CallbackPath string `json:"callback_path"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.Subs.Subscribe(req.ID, req.EventType, req.CallbackPath)
-
 	h.Events.Emit(events.DebugEvent{
 		Type:     "subscribe",
 		PluginID: req.ID,
-		Detail:   fmt.Sprintf("event_type=%s callback_path=%s", req.EventType, req.CallbackPath),
+		Detail:   fmt.Sprintf("event_type=%s (routed via redis)", req.EventType),
 	})
-
-	// Flush any pending addressed events for this plugin — events may have been
-	// queued before this subscription existed (e.g. webhook:plugin:url arrives
-	// before the target has subscribed). flushPendingEvents re-looks up the
-	// callback path so stale paths get corrected.
-	go h.flushPendingEvents(req.ID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "subscribed"})
 }
 
-// UnsubscribeEvent handles POST /api/plugins/unsubscribe — removes a plugin's
-// subscription to events of a given type.
+// UnsubscribeEvent handles POST /api/plugins/unsubscribe — stub for backward compat.
 func (h *PluginHandler) UnsubscribeEvent(c *gin.Context) {
 	var req struct {
 		ID        string `json:"id" binding:"required"`
@@ -802,31 +545,7 @@ func (h *PluginHandler) UnsubscribeEvent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	h.Subs.Unsubscribe(req.ID, req.EventType)
-
-	h.Events.Emit(events.DebugEvent{
-		Type:     "unsubscribe",
-		PluginID: req.ID,
-		Detail:   fmt.Sprintf("event_type=%s", req.EventType),
-	})
-
 	c.JSON(http.StatusOK, gin.H{"message": "unsubscribed"})
 }
 
-// logEvent persists an inter-plugin event record to the EventLog table
-// and broadcasts it over the SSE stream so the dashboard updates in real-time.
-func (h *PluginHandler) logEvent(eventType, sourceID, targetID, status, detail string) {
-	entry := models.EventLog{
-		EventType:      eventType,
-		SourcePluginID: sourceID,
-		TargetPluginID: targetID,
-		Status:         status,
-		Detail:         detail,
-	}
-	if err := h.db().Create(&entry).Error; err != nil {
-		log.Printf("event log: failed to persist: %v", err)
-		return
-	}
-	h.Events.EmitEvent(entry)
-}
+
