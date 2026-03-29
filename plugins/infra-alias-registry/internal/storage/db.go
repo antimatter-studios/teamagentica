@@ -20,10 +20,8 @@ func sanitize(s string) string {
 	s = strings.ReplaceAll(s, "@", "")
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsLetter(r) {
+		if unicode.IsLetter(r) || r == '-' || unicode.IsDigit(r) {
 			b.WriteRune(r)
-		} else {
-			b.WriteRune('_')
 		}
 	}
 	result := b.String()
