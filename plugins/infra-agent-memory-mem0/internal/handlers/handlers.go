@@ -486,7 +486,22 @@ func (h *Handler) MCPGetMemories(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"results": memories})
+
+	// Fetch total count for pagination display (e.g. "100/847").
+	total := len(memories)
+	type counter interface {
+		Count(ctx context.Context, filters map[string]any) (int, error)
+	}
+	if cp, ok := h.provider.(counter); ok {
+		if n, err := cp.Count(c.Request.Context(), filters); err == nil && n > 0 {
+			total = n
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"results": memories,
+		"total":   total,
+	})
 }
 
 func (h *Handler) MCPGetMemory(c *gin.Context) {

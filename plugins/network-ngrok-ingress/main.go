@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/network-ngrok-ingress/internal/tunnel"
 )
 
@@ -218,19 +219,8 @@ func broadcastIngressReady(client *pluginsdk.Client) {
 		return
 	}
 
-	payload := map[string]string{
-		"url":   url,
-		"proto": "https",
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("Failed to marshal ingress:ready: %v", err)
-		return
-	}
-
-	client.ReportEvent("ingress:ready", string(data))
-	log.Printf("Broadcast ingress:ready: %s", string(data))
+	events.PublishIngressReady(client, url)
+	log.Printf("Broadcast ingress:ready: url=%s", url)
 }
 
 // applyConfig hot-reloads config values from a config:update event.

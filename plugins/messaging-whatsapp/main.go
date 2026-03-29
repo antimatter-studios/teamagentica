@@ -13,6 +13,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/bot"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/relay"
 	waClient "github.com/antimatter-studios/teamagentica/plugins/messaging-whatsapp/internal/whatsapp"
@@ -134,7 +135,7 @@ func main() {
 	// (Meta manages actual webhook registration via their dashboard — we just log for visibility.)
 	sdkClient.OnWebhookURL(func(webhookURL string) {
 		log.Printf("Webhook URL assigned: %s/webhook", webhookURL)
-		sdkClient.ReportEvent("webhook:url", fmt.Sprintf("url=%s/webhook (Meta manages registration)", webhookURL))
+		events.PublishStatus(sdkClient, "webhook:url", fmt.Sprintf("url=%s/webhook (Meta manages registration)", webhookURL))
 	})
 
 	server := &http.Server{

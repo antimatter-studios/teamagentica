@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -283,37 +284,68 @@ func configOptionsHandler(sdk *pluginsdk.Client) gin.HandlerFunc {
 			return
 		}
 
-		plugins, err := sdk.SearchPlugins("memory:extraction")
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"options": []string{}})
-			return
-		}
-		memoryPlugins := make(map[string]bool, len(plugins))
-		for _, p := range plugins {
-			memoryPlugins[p.ID] = true
-		}
-
-		aliases, err := sdk.FetchAliases()
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"options": []string{}})
-			return
-		}
-
-		var options []string
-		for _, a := range aliases {
-			pluginID := a.Target
-			for i, ch := range a.Target {
-				if ch == ':' {
-					pluginID = a.Target[:i]
-					break
-				}
-			}
-			if memoryPlugins[pluginID] {
-				options = append(options, a.Name)
-			}
-		}
+		// Show agent:chat aliases + personas that resolve to agent:chat plugins.
+		options := fetchLLMOptions(sdk)
 		c.JSON(http.StatusOK, gin.H{"options": options})
 	}
+}
+
+// fetchLLMOptions returns agent:chat aliases plus personas that resolve to agent:chat plugins.
+func fetchLLMOptions(sdk *pluginsdk.Client) []string {
+	// Get agent:chat plugins.
+	plugins, err := sdk.SearchPlugins("agent:chat")
+	if err != nil {
+		log.Printf("[config-options] failed to search agent:chat plugins: %v", err)
+		return []string{}
+	}
+	chatPlugins := make(map[string]bool, len(plugins))
+	for _, p := range plugins {
+		chatPlugins[p.ID] = true
+	}
+
+	// Get all aliases, filter to agent:chat.
+	aliases, err := sdk.FetchAliases()
+	if err != nil {
+		log.Printf("[config-options] failed to fetch aliases: %v", err)
+		return []string{}
+	}
+
+	var chatAliases []string
+	chatSet := make(map[string]bool)
+	seen := make(map[string]bool)
+	for _, a := range aliases {
+		pluginID := a.Target
+		for i, ch := range a.Target {
+			if ch == ':' {
+				pluginID = a.Target[:i]
+				break
+			}
+		}
+		if chatPlugins[pluginID] {
+			chatAliases = append(chatAliases, a.Name)
+			chatSet[strings.ToLower(a.Name)] = true
+			seen[strings.ToLower(a.Name)] = true
+		}
+	}
+
+	// Get personas whose backend_alias is an agent:chat alias.
+	personas, err := sdk.FetchPersonas()
+	if err != nil {
+		log.Printf("[config-options] failed to fetch personas: %v", err)
+		return chatAliases
+	}
+
+	options := make([]string, 0, len(chatAliases)+len(personas))
+	for _, p := range personas {
+		name := strings.ToLower(p.Alias)
+		backend := strings.ToLower(p.BackendAlias)
+		if name != "" && !seen[name] && chatSet[backend] {
+			options = append(options, p.Alias)
+			seen[name] = true
+		}
+	}
+	options = append(options, chatAliases...)
+	return options
 }
 
 // fetchLCMStats pings the LCM server for schema display.

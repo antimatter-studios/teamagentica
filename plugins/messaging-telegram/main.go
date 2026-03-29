@@ -18,6 +18,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/bot"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/kernel"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/relay"
@@ -234,19 +235,19 @@ func main() {
 		}
 
 		// Stop polling, switch to webhook.
-		sdkClient.ReportEvent("poll_stop", "stopping polling — webhook URL received")
+		events.PublishPollStop(sdkClient, "stopping polling — webhook URL received")
 		telegramBot.StopPolling()
 
-		sdkClient.ReportEvent("webhook", fmt.Sprintf("setting Telegram webhook url=%s", webhookURL))
+		events.PublishStatus(sdkClient, "webhook", fmt.Sprintf("setting Telegram webhook url=%s", webhookURL))
 		if err := telegramBot.SetWebhook(webhookURL); err != nil {
 			log.Printf("Failed to set webhook: %v — falling back to polling", err)
-			sdkClient.ReportEvent("webhook:error", fmt.Sprintf("setWebhook failed: %v — falling back to polling", err))
-			sdkClient.ReportEvent("poll_start", "mode=polling (webhook fallback)")
+			events.PublishWebhookError(sdkClient, "", "", fmt.Sprintf("setWebhook failed: %v — falling back to polling", err))
+			events.PublishPollStart(sdkClient, "mode=polling (webhook fallback)")
 			telegramBot.StartPolling()
 			return
 		}
 
-		sdkClient.ReportEvent("webhook", fmt.Sprintf("mode=webhook active url=%s", webhookURL))
+		events.PublishStatus(sdkClient, "webhook", fmt.Sprintf("mode=webhook active url=%s", webhookURL))
 	})
 
 	// Handle relay progress events — update Telegram messages with task status.
@@ -258,7 +259,7 @@ func main() {
 
 	// Start polling on all bots. For multi-bot mode, webhook is not supported
 	// (webhook requires a single URL; each bot would need its own URL).
-	sdkClient.ReportEvent("poll_start", "mode=polling (default)")
+	events.PublishPollStart(sdkClient, "mode=polling (default)")
 	for _, b := range bots {
 		b.StartPolling()
 	}
@@ -430,7 +431,7 @@ func emitCoordinatorEvent(sdk *pluginsdk.Client, sourcePlugin, aliasName string)
 		"source_plugin": sourcePlugin,
 		"alias":         aliasName,
 	})
-	sdk.ReportAddressedEvent("relay:coordinator", string(detail), "infra-agent-relay")
+	events.PublishRelayCoordinator(sdk, string(detail))
 	log.Printf("Emitted relay:coordinator: %s → @%s", sourcePlugin, aliasName)
 }
 

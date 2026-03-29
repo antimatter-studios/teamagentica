@@ -13,6 +13,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-task-scheduler/internal/storage"
 )
 
@@ -254,7 +255,7 @@ func (s *Scheduler) fireAndLog(job *storage.Job, trigger string, now time.Time) 
 	})
 
 	if s.sdk != nil {
-		s.sdk.ReportEvent("scheduler:fired", job.Name+": "+job.Text)
+		s.sdk.ReportEvent(events.SchedulerFired, job.Name+": "+job.Text)
 	}
 }
 

@@ -35,7 +35,7 @@ task marketplace:submit -- plugins/<name>/plugin.yaml
 ### 5. Upgrade the plugin
 
 ```bash
-go run ./tacli marketplace upgrade <name>
+go run ./tacli marketplace upgrade-plugin <name>
 ```
 
 This pulls the updated manifest metadata from the marketplace.

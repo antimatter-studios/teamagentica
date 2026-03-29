@@ -16,6 +16,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-mcp-server/internal/handlers"
 )
 
@@ -95,8 +96,7 @@ func main() {
 
 	// Broadcast mcp_server:enabled after registration.
 	go func() {
-		detail, _ := json.Marshal(map[string]string{"endpoint": endpoint})
-		sdkClient.ReportEvent("mcp_server:enabled", string(detail))
+		events.PublishMCPEnabled(sdkClient, endpoint)
 		log.Printf("mcp-server: broadcast mcp_server:enabled endpoint=%s", endpoint)
 	}()
 
@@ -134,7 +134,7 @@ func main() {
 	log.Printf("mcp-server: received signal %s, shutting down", sig)
 
 	// Broadcast mcp_server:disabled before deregistering.
-	sdkClient.ReportEvent("mcp_server:disabled", "{}")
+	events.PublishMCPDisabled(sdkClient)
 	log.Println("mcp-server: broadcast mcp_server:disabled")
 
 	// Deregister from kernel.

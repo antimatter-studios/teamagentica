@@ -114,7 +114,7 @@ func main() {
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	// OpenAI-compatible proxy — forwards to internal Ollama's OpenAI-compat layer.
-	// Allows other plugins (e.g. infra-agent-memory) to use Ollama models via standard endpoints.
+	// Allows other plugins (e.g. infra-agent-memory-gateway) to use Ollama models via standard endpoints.
 	router.Any("/v1/*path", h.OpenAIProxy)
 
 	h.SetSDK(sdkClient)

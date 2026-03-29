@@ -2,7 +2,7 @@ id: system-user-manager
 name: "User Manager"
 description: "User authentication, account management, service tokens, and audit logging"
 group: infrastructure
-version: "0.1.12"
+version: "0.1.15"
 image: "teamagentica-system-user-manager:latest"
 author: teamagentica
 tags: [users, auth, login, security, accounts, jwt]

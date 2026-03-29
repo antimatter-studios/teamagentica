@@ -2,7 +2,7 @@ id: messaging-telegram
 name: "Telegram Bot"
 description: "Telegram bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.32"
+version: "1.0.37"
 image: "teamagentica-messaging-telegram:latest"
 author: teamagentica
 tags: [chat, telegram, bot]

@@ -26,7 +26,7 @@ var unsupportedFields = []string{
 const googleOpenAIBase = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 // OpenAIProxy reverse-proxies OpenAI-compatible requests to Google's Gemini API,
-// injecting the plugin's API key. This allows other plugins (e.g. infra-agent-memory)
+// injecting the plugin's API key. This allows other plugins (e.g. infra-agent-memory-gateway)
 // to use Gemini models without needing their own API key.
 func (h *Handler) OpenAIProxy(c *gin.Context) {
 	h.mu.RLock()

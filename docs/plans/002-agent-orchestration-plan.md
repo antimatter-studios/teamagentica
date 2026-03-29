@@ -10,7 +10,7 @@ Three phases, each building on the last:
 | 2 | `infra-agent-persona` plugin + alias migration from kernel | Planned |
 | 3 | Multi-bot messaging support | Planned |
 
-**Future (not in this plan):** Agent memory — a separate `infra-agent-memory` plugin. Memory technology will change; keeping it decoupled from identity means either can be upgraded independently. They connect via interface when ready.
+**Future (not in this plan):** Agent memory — a separate `infra-agent-memory-gateway` plugin. Memory technology will change; keeping it decoupled from identity means either can be upgraded independently. They connect via interface when ready.
 
 ---
 
@@ -199,7 +199,7 @@ Seeded via DB migration — a default general assistant persona out of the box.
 
 ### Agent Memory (Future, Separate)
 
-Memory will be `infra-agent-memory` — a separate plugin. Memory technology will change; keeping it separate from identity means either can be upgraded independently. They connect via interface when ready.
+Memory will be `infra-agent-memory-gateway` — a separate plugin. Memory technology will change; keeping it separate from identity means either can be upgraded independently. They connect via interface when ready.
 
 ---
 

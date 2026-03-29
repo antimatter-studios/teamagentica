@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,11 +27,20 @@ type aliasTarget struct {
 	Model  string
 }
 
+// llmResolution caches the resolved LLM target and persona system prompt.
+type llmResolution struct {
+	target       aliasTarget
+	systemPrompt string
+}
+
 // pluginProxy holds the current resolved targets for LLM and embedder routing.
 type pluginProxy struct {
-	mu       sync.RWMutex
-	llm      aliasTarget
-	embedder aliasTarget
+	mu           sync.RWMutex
+	llm          aliasTarget
+	embedder     aliasTarget
+	llmAliasName string // configured alias name (may be a persona like "brains")
+	llmCache     *llmResolution // cached live resolution (nil = needs refresh)
+	sdk          *pluginsdk.Client
 }
 
 func (p *pluginProxy) setTargets(llm, embedder aliasTarget) {
@@ -37,6 +48,70 @@ func (p *pluginProxy) setTargets(llm, embedder aliasTarget) {
 	defer p.mu.Unlock()
 	p.llm = llm
 	p.embedder = embedder
+}
+
+func (p *pluginProxy) setLLMAliasName(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.llmAliasName = name
+	p.llmCache = nil // invalidate on alias change
+}
+
+// invalidateLLMCache clears the cached persona/alias resolution so the next
+// request will re-resolve from live data.
+func (p *pluginProxy) invalidateLLMCache() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.llmCache = nil
+	log.Printf("[proxy] LLM cache invalidated — next request will re-resolve")
+}
+
+// resolveLLM returns the LLM target and persona system prompt.
+// Uses cached data if available; otherwise resolves live and caches the result.
+func (p *pluginProxy) resolveLLM() (aliasTarget, string) {
+	p.mu.RLock()
+	if p.llmCache != nil {
+		cached := p.llmCache
+		p.mu.RUnlock()
+		return cached.target, cached.systemPrompt
+	}
+	aliasName := p.llmAliasName
+	p.mu.RUnlock()
+
+	if aliasName == "" {
+		return p.getTarget("llm"), ""
+	}
+
+	// Resolve live.
+	var resolution llmResolution
+	persona := fetchPersona(p.sdk, aliasName)
+	if persona != nil {
+		resolution.systemPrompt = persona.SystemPrompt
+		resolved, err := resolveAlias(p.sdk, persona.BackendAlias)
+		if err != nil {
+			log.Printf("[proxy] failed to resolve persona backend_alias %q: %v — falling back to cached target", persona.BackendAlias, err)
+			resolution.target = p.getTarget("llm")
+		} else {
+			resolution.target = resolved
+			log.Printf("[proxy] resolved persona %q → %s/%s (prompt %d chars)", aliasName, resolved.Plugin, resolved.Model, len(persona.SystemPrompt))
+		}
+	} else {
+		// Not a persona — resolve as regular alias.
+		resolved, err := resolveAlias(p.sdk, aliasName)
+		if err != nil {
+			log.Printf("[proxy] failed to resolve alias %q: %v — falling back to cached target", aliasName, err)
+			resolution.target = p.getTarget("llm")
+		} else {
+			resolution.target = resolved
+		}
+	}
+
+	// Cache the resolution.
+	p.mu.Lock()
+	p.llmCache = &resolution
+	p.mu.Unlock()
+
+	return resolution.target, resolution.systemPrompt
 }
 
 func (p *pluginProxy) getTarget(role string) aliasTarget {
@@ -102,8 +177,17 @@ func main() {
 	}
 
 	// Resolve alias selections → plugin+model targets.
-	proxy := &pluginProxy{}
+	proxy := &pluginProxy{sdk: sdkClient}
 	applyConfig(sdkClient, proxy, pluginConfig, port, mem0Port)
+
+	// Invalidate LLM cache when personas or aliases change so we pick up
+	// backend_alias or system prompt changes without restart.
+	sdkClient.OnEvent("persona:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		proxy.invalidateLLMCache()
+	}))
+	sdkClient.OnEvent("alias:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		proxy.invalidateLLMCache()
+	}))
 
 	// Create the Mem0 provider pointing at the local Mem0 server managed by supervisord.
 	provider := memory.NewMem0Provider(fmt.Sprintf("http://localhost:%d", mem0Port))
@@ -197,6 +281,22 @@ func resolveAlias(sdk *pluginsdk.Client, aliasName string) (aliasTarget, error) 
 	return aliasTarget{Plugin: resp.Plugin, Model: resp.Model}, nil
 }
 
+// fetchPersona checks if aliasName matches a persona and returns it.
+// Returns nil if no persona matches.
+func fetchPersona(sdk *pluginsdk.Client, aliasName string) *pluginsdk.PersonaInfo {
+	personas, err := sdk.FetchPersonas()
+	if err != nil {
+		log.Printf("[config] failed to fetch personas: %v", err)
+		return nil
+	}
+	for _, p := range personas {
+		if strings.EqualFold(p.Alias, aliasName) {
+			return &p
+		}
+	}
+	return nil
+}
+
 // applyConfig resolves alias selections and writes mem0.env for the Python server.
 func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]string, sidecarPort, mem0Port int) {
 	llmAlias := config["MEM0_LLM_ALIAS"]
@@ -205,11 +305,27 @@ func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]st
 	var llm, embedder aliasTarget
 
 	if llmAlias != "" {
-		resolved, err := resolveAlias(sdk, llmAlias)
-		if err != nil {
-			log.Printf("[config] failed to resolve LLM alias %q: %v", llmAlias, err)
+		proxy.setLLMAliasName(llmAlias)
+
+		// Resolve once for initial config (Mem0 env file needs a model name).
+		// Live requests will re-resolve via resolveLLM().
+		persona := fetchPersona(sdk, llmAlias)
+		if persona != nil {
+			log.Printf("[config] persona %q detected (%d char prompt), resolving via backend_alias %q",
+				llmAlias, len(persona.SystemPrompt), persona.BackendAlias)
+			resolved, err := resolveAlias(sdk, persona.BackendAlias)
+			if err != nil {
+				log.Printf("[config] failed to resolve persona backend_alias %q: %v", persona.BackendAlias, err)
+			} else {
+				llm = resolved
+			}
 		} else {
-			llm = resolved
+			resolved, err := resolveAlias(sdk, llmAlias)
+			if err != nil {
+				log.Printf("[config] failed to resolve LLM alias %q: %v", llmAlias, err)
+			} else {
+				llm = resolved
+			}
 		}
 	}
 
@@ -268,17 +384,30 @@ func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]st
 }
 
 // proxyHandler forwards requests to the resolved plugin via RouteToPlugin.
+// For "llm" role on chat completions: resolves persona live, injects system prompt,
+// and flattens structured fact objects in responses to plain strings.
 func proxyHandler(sdk *pluginsdk.Client, proxy *pluginProxy, role string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		target := proxy.getTarget(role)
-		if target.Plugin == "" {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("no %s alias configured", role)})
-			return
-		}
-
 		subPath := c.Param("path")
 		if subPath == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "missing path"})
+			return
+		}
+
+		isChatCompletion := role == "llm" && strings.HasSuffix(subPath, "/chat/completions")
+
+		// Resolve target and system prompt. For LLM chat completions, resolve live
+		// from the persona so changes take effect immediately without restart.
+		var target aliasTarget
+		var systemPrompt string
+		if isChatCompletion {
+			target, systemPrompt = proxy.resolveLLM()
+		} else {
+			target = proxy.getTarget(role)
+		}
+
+		if target.Plugin == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("no %s alias configured", role)})
 			return
 		}
 
@@ -287,7 +416,16 @@ func proxyHandler(sdk *pluginsdk.Client, proxy *pluginProxy, role string) gin.Ha
 
 		var body io.Reader
 		if c.Request.Body != nil && c.Request.Method != http.MethodGet {
-			body = c.Request.Body
+			if isChatCompletion && systemPrompt != "" {
+				if modified, err := injectSystemPrompt(c.Request.Body, systemPrompt); err == nil {
+					body = bytes.NewReader(modified)
+				} else {
+					log.Printf("[memory-api/llm] failed to inject system prompt: %v", err)
+					body = c.Request.Body
+				}
+			} else {
+				body = c.Request.Body
+			}
 		}
 
 		respBody, err := sdk.RouteToPlugin(ctx, target.Plugin, c.Request.Method, "/v1"+subPath, body)
@@ -295,6 +433,15 @@ func proxyHandler(sdk *pluginsdk.Client, proxy *pluginProxy, role string) gin.Ha
 			log.Printf("[memory-api/%s] RouteToPlugin(%s, %s) failed: %v", role, target.Plugin, subPath, err)
 			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to reach %s: %v", target.Plugin, err)})
 			return
+		}
+
+		// Flatten structured fact objects in the response if persona prompt was used.
+		if isChatCompletion && systemPrompt != "" {
+			if flattened, err := flattenFactResponse(respBody); err == nil {
+				respBody = flattened
+			} else {
+				log.Printf("[memory-api/llm] fact flattening skipped: %v", err)
+			}
 		}
 
 		contentType := "application/json"
@@ -306,15 +453,158 @@ func proxyHandler(sdk *pluginsdk.Client, proxy *pluginProxy, role string) gin.Ha
 	}
 }
 
+// injectSystemPrompt replaces or prepends the system message in a chat completion request
+// with the persona's system prompt. If personaPrompt is empty, returns the original body unchanged.
+func injectSystemPrompt(body io.Reader, personaPrompt string) ([]byte, error) {
+	if personaPrompt == "" {
+		raw, err := io.ReadAll(body)
+		return raw, err
+	}
+
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	var req map[string]interface{}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return raw, nil // not JSON, pass through
+	}
+
+	messages, ok := req["messages"].([]interface{})
+	if !ok {
+		return raw, nil
+	}
+
+	// Replace existing system message or prepend one.
+	replaced := false
+	for i, msg := range messages {
+		m, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if m["role"] == "system" {
+			m["content"] = personaPrompt
+			messages[i] = m
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		systemMsg := map[string]interface{}{
+			"role":    "system",
+			"content": personaPrompt,
+		}
+		messages = append([]interface{}{systemMsg}, messages...)
+	}
+
+	req["messages"] = messages
+	return json.Marshal(req)
+}
+
+// flattenFactResponse inspects the LLM response content for structured fact objects
+// (from @brains-style prompts) and flattens them to plain strings that Mem0 expects.
+// Input format:  {"facts": [{"content": "fact text", "category": "...", ...}, ...]}
+// Output format: {"facts": ["fact text", "fact text", ...]}
+func flattenFactResponse(respBody []byte) ([]byte, error) {
+	// Parse the chat completion response to extract the content.
+	var resp map[string]interface{}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	choices, ok := resp["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return nil, fmt.Errorf("no choices in response")
+	}
+
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid choice format")
+	}
+
+	message, ok := choice["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no message in choice")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok || content == "" {
+		return nil, fmt.Errorf("no content in message")
+	}
+
+	// Strip markdown code fences if present.
+	content = strings.TrimSpace(content)
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 2 {
+			lines = lines[1 : len(lines)-1] // remove first and last fence lines
+			content = strings.Join(lines, "\n")
+		}
+	}
+
+	// Parse the content as JSON to check for structured facts.
+	var factsObj map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &factsObj); err != nil {
+		return nil, fmt.Errorf("content is not JSON: %w", err)
+	}
+
+	factsRaw, ok := factsObj["facts"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no facts array in content")
+	}
+
+	// Check if facts are already plain strings (no flattening needed).
+	if len(factsRaw) > 0 {
+		if _, isString := factsRaw[0].(string); isString {
+			return nil, fmt.Errorf("facts are already plain strings")
+		}
+	}
+
+	// Flatten structured objects to plain strings.
+	var plainFacts []string
+	for _, f := range factsRaw {
+		obj, ok := f.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		// Extract the "content" field from each fact object.
+		if text, ok := obj["content"].(string); ok && text != "" {
+			plainFacts = append(plainFacts, text)
+		}
+	}
+
+	// Rebuild the content as Mem0-compatible JSON.
+	newContent := map[string]interface{}{"facts": plainFacts}
+	newContentBytes, err := json.Marshal(newContent)
+	if err != nil {
+		return nil, fmt.Errorf("marshal flattened facts: %w", err)
+	}
+
+	// Replace the content in the response.
+	message["content"] = string(newContentBytes)
+	choice["message"] = message
+	choices[0] = choice
+	resp["choices"] = choices
+
+	log.Printf("[memory-api/llm] flattened %d structured facts to plain strings", len(plainFacts))
+	return json.Marshal(resp)
+}
+
 // configOptionsHandler serves dynamic dropdown options for alias selection.
-// Fetches all aliases, then filters to only those from plugins with memory:extraction capability.
+// LLM alias accepts any chat-capable plugin; embedder alias requires memory:extraction (embeddings support).
 func configOptionsHandler(sdk *pluginsdk.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		field := c.Param("field")
 
 		switch field {
-		case "MEM0_LLM_ALIAS", "MEM0_EMBEDDER_ALIAS":
-			options := fetchMemoryAliases(sdk)
+		case "MEM0_LLM_ALIAS":
+			// Show agent:chat aliases + personas (which have custom system prompts).
+			options := fetchLLMOptions(sdk)
+			c.JSON(http.StatusOK, gin.H{"options": options})
+		case "MEM0_EMBEDDER_ALIAS":
+			// Embeddings require a plugin that exposes /v1/embeddings.
+			options := fetchAliasesByCapability(sdk, "memory:extraction")
 			c.JSON(http.StatusOK, gin.H{"options": options})
 		default:
 			c.JSON(http.StatusOK, gin.H{"options": []string{}})
@@ -322,17 +612,17 @@ func configOptionsHandler(sdk *pluginsdk.Client) gin.HandlerFunc {
 	}
 }
 
-// fetchMemoryAliases returns alias names whose plugin has the memory:extraction capability.
-func fetchMemoryAliases(sdk *pluginsdk.Client) []string {
-	// Step 1: get plugins with memory:extraction capability.
-	plugins, err := sdk.SearchPlugins("memory:extraction")
+// fetchAliasesByCapability returns alias names whose plugin has the given capability.
+func fetchAliasesByCapability(sdk *pluginsdk.Client, capability string) []string {
+	// Step 1: get plugins with the requested capability.
+	plugins, err := sdk.SearchPlugins(capability)
 	if err != nil {
-		log.Printf("[config-options] failed to search memory:extraction plugins: %v", err)
+		log.Printf("[config-options] failed to search %s plugins: %v", capability, err)
 		return []string{}
 	}
-	memoryPlugins := make(map[string]bool, len(plugins))
+	matchingPlugins := make(map[string]bool, len(plugins))
 	for _, p := range plugins {
-		memoryPlugins[p.ID] = true
+		matchingPlugins[p.ID] = true
 	}
 
 	// Step 2: fetch all aliases from the alias-registry.
@@ -342,7 +632,7 @@ func fetchMemoryAliases(sdk *pluginsdk.Client) []string {
 		return []string{}
 	}
 
-	// Step 3: filter aliases to those from memory:extraction plugins.
+	// Step 3: filter aliases to those from matching plugins.
 	var options []string
 	for _, a := range aliases {
 		// AliasInfo.Target is "plugin-id:model" — extract plugin ID.
@@ -353,10 +643,42 @@ func fetchMemoryAliases(sdk *pluginsdk.Client) []string {
 				break
 			}
 		}
-		if memoryPlugins[pluginID] {
+		if matchingPlugins[pluginID] {
 			options = append(options, a.Name)
 		}
 	}
 
+	return options
+}
+
+// fetchLLMOptions returns agent:chat aliases plus personas that resolve to agent:chat plugins.
+func fetchLLMOptions(sdk *pluginsdk.Client) []string {
+	// Get agent:chat aliases.
+	chatAliases := fetchAliasesByCapability(sdk, "agent:chat")
+	chatSet := make(map[string]bool, len(chatAliases))
+	seen := make(map[string]bool, len(chatAliases))
+	for _, a := range chatAliases {
+		chatSet[strings.ToLower(a)] = true
+		seen[strings.ToLower(a)] = true
+	}
+
+	// Get personas — only include those whose backend_alias resolves to an agent:chat plugin.
+	personas, err := sdk.FetchPersonas()
+	if err != nil {
+		log.Printf("[config-options] failed to fetch personas: %v", err)
+		return chatAliases
+	}
+
+	options := make([]string, 0, len(chatAliases)+len(personas))
+	// Personas first — they're the interesting ones with custom prompts.
+	for _, p := range personas {
+		name := strings.ToLower(p.Alias)
+		backend := strings.ToLower(p.BackendAlias)
+		if name != "" && !seen[name] && chatSet[backend] {
+			options = append(options, p.Alias)
+			seen[name] = true
+		}
+	}
+	options = append(options, chatAliases...)
 	return options
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/bot"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/channels"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-discord/internal/kernel"
@@ -339,6 +340,6 @@ func emitCoordinatorEvent(sdk *pluginsdk.Client, sourcePlugin, aliasName string)
 		"source_plugin": sourcePlugin,
 		"alias":         aliasName,
 	})
-	sdk.ReportAddressedEvent("relay:coordinator", string(detail), "infra-agent-relay")
+	events.PublishRelayCoordinator(sdk, string(detail))
 	log.Printf("Emitted relay:coordinator: %s → @%s", sourcePlugin, aliasName)
 }

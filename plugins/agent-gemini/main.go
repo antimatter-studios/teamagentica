@@ -88,7 +88,7 @@ func main() {
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	// OpenAI-compatible proxy — allows other plugins (e.g. infra-agent-memory)
+	// OpenAI-compatible proxy — allows other plugins (e.g. infra-agent-memory-gateway)
 	// to use Gemini models via standard OpenAI endpoints without their own API key.
 	router.Any("/v1/*path", h.OpenAIProxy)
 

@@ -196,7 +196,74 @@ tasks:
     cmds:
       - task: "{{.CLI_ARGS}}:test"
 
-  build:plugins:
+  plugin:deploy:all:
+    desc: "Bump patch version, build, submit, upgrade, and restart every plugin"
+    silent: true
+    cmds:
+      - |
+        set -e
+        FAILED=""
+        SUMMARY=""
+        for plugin_yaml in plugins/*/plugin.yaml; do
+          dir=$(dirname "$plugin_yaml")
+          name=$(basename "$dir")
+
+          # Skip if no Dockerfile.
+          if [ ! -f "$dir/Dockerfile" ]; then
+            echo "⏭  $name — no Dockerfile, skipping"
+            continue
+          fi
+
+          # Read current version.
+          old_ver=$(grep '^version:' "$plugin_yaml" | sed 's/version: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+          if [ -z "$old_ver" ]; then
+            echo "⏭  $name — no version found, skipping"
+            continue
+          fi
+
+          # Bump patch: X.Y.Z → X.Y.(Z+1)
+          major=$(echo "$old_ver" | cut -d. -f1)
+          minor=$(echo "$old_ver" | cut -d. -f2)
+          patch=$(echo "$old_ver" | cut -d. -f3)
+          new_ver="${major}.${minor}.$((patch + 1))"
+
+          echo ""
+          echo "━━━ $name: $old_ver → $new_ver ━━━"
+
+          # Build.
+          if ! task plugin:build -- "$name" --version "$new_ver"; then
+            echo "✗ $name build failed"
+            FAILED="$FAILED $name"
+            SUMMARY="$SUMMARY\n| $name | $old_ver | $new_ver | FAILED |"
+            continue
+          fi
+
+          # Submit manifest.
+          task marketplace:submit -- "plugins/$name/plugin.yaml" || true
+
+          # Upgrade from marketplace.
+          go run ./tacli marketplace upgrade-plugin "$name" || true
+
+          # Restart.
+          go run ./tacli plugin restart "$name" || true
+
+          SUMMARY="$SUMMARY\n| $name | $old_ver | $new_ver | deployed |"
+        done
+
+        echo ""
+        echo "┌─────────────────────────────────────────────────────┐"
+        echo "│ Plugin                            │ Before │ After  │ Status   │"
+        echo "├─────────────────────────────────────────────────────┤"
+        printf "$SUMMARY\n"
+        echo "└─────────────────────────────────────────────────────┘"
+
+        if [ -n "$FAILED" ]; then
+          echo ""
+          echo "Failed plugins:$FAILED"
+          exit 1
+        fi
+
+  plugin:build:all:
     desc: Build all plugin Docker images (prod)
     cmds:
       - task: agent-claude:build
@@ -233,7 +300,7 @@ tasks:
       - echo "All plugin images built successfully"
       - task: restart:running
 
-  build:plugins:dev:
+  plugin:build:dev:
     desc: Build all plugin Docker images (dev)
     cmds:
       - task: agent-claude:build:dev
@@ -295,12 +362,12 @@ tasks:
   marketplace:submit:
     desc: Submit a plugin manifest to the catalog
     cmds:
-      - go run ./tacli marketplace submit {{.CLI_ARGS}}
+      - go run ./tacli marketplace submit-plugin {{.CLI_ARGS}}
 
   marketplace:submit-all:
     desc: Submit all plugin.yaml manifests to the catalog
     cmds:
-      - go run ./tacli marketplace submit ./plugins
+      - go run ./tacli marketplace submit-plugin ./plugins
 
   restart:running:
     desc: Restart running plugin containers so they pick up new images

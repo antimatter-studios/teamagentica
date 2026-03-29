@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 )
 
 // Route represents a registered webhook route.
@@ -113,7 +114,7 @@ func main() {
 		upsertRoute(route)
 
 		log.Printf("Route updated via event: %s → %s:%d (prefix=%s)", data.PluginID, data.TargetHost, data.TargetPort, route.Prefix)
-		sdkClient.ReportEvent("webhook:route", fmt.Sprintf("plugin=%s prefix=%s target=%s:%d", data.PluginID, route.Prefix, data.TargetHost, data.TargetPort))
+		events.PublishWebhookRoute(sdkClient, data.PluginID, route.Prefix, data.TargetHost, data.TargetPort)
 
 		evaluateAndNotifyPlugin(sdkClient, data.PluginID, route.Prefix)
 	}))
@@ -198,7 +199,7 @@ func main() {
 		req.Prefix = NormalizePrefix(req.Prefix)
 		upsertRoute(req)
 
-		sdkClient.ReportEvent("webhook:register", fmt.Sprintf("plugin=%s prefix=%s target=%s:%d", req.PluginID, req.Prefix, req.TargetHost, req.TargetPort))
+		events.PublishWebhookRegister(sdkClient, req.PluginID, req.Prefix, req.TargetHost, req.TargetPort)
 
 		baseURLMu.RLock()
 		url := baseURL
@@ -239,7 +240,7 @@ func main() {
 		routes = filtered
 		routesMu.Unlock()
 
-		sdkClient.ReportEvent("webhook:unregister", fmt.Sprintf("plugin=%s", req.PluginID))
+		events.PublishWebhookUnregister(sdkClient, req.PluginID)
 
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"unregistered","plugin_id":%q}`, req.PluginID)
@@ -286,7 +287,7 @@ func main() {
 
 		resp, err := proxyClient.Do(proxyReq)
 		if err != nil {
-			sdkClient.ReportEvent("webhook:error", fmt.Sprintf("plugin=%s path=%s error=%v", matched.PluginID, path, err))
+			events.PublishWebhookError(sdkClient, matched.PluginID, path, err.Error())
 			http.Error(w, `{"error":"target unreachable"}`, http.StatusBadGateway)
 			return
 		}
@@ -422,22 +423,12 @@ func evaluateAndNotifyPlugin(sdkClient *pluginsdk.Client, pluginID, prefix strin
 // sendPluginURL sends an addressed webhook:plugin:url event to a gateway plugin.
 func sendPluginURL(sdkClient *pluginsdk.Client, pluginID, tunnelBaseURL, prefix string) {
 	webhookURL := strings.TrimRight(tunnelBaseURL, "/") + prefix
-	payload := map[string]string{
-		"webhook_url": webhookURL,
-	}
-	data, _ := json.Marshal(payload)
-
-	sdkClient.ReportAddressedEvent("webhook:plugin:url", string(data), pluginID)
+	events.PublishWebhookPluginURL(sdkClient, pluginID, webhookURL)
 	log.Printf("Sent webhook:plugin:url to %s: %s", pluginID, webhookURL)
 }
 
 // broadcastWebhookReady broadcasts a webhook:ready event so gateway plugins can register.
 func broadcastWebhookReady(sdkClient *pluginsdk.Client, hostname string, port int) {
-	payload := map[string]interface{}{
-		"host": hostname,
-		"port": port,
-	}
-	data, _ := json.Marshal(payload)
-	sdkClient.ReportEvent("webhook:ready", string(data))
+	events.PublishWebhookReady(sdkClient, hostname, port)
 	log.Printf("Broadcast webhook:ready (host=%s port=%d)", hostname, port)
 }

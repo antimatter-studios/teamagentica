@@ -1,8 +1,8 @@
 # ── Claude CLI installer ──
 FROM node:22-alpine AS claude-installer
 
-RUN npm install -g @anthropic-ai/claude-code \
-    && which claude
+RUN npm install -g @anthropic-ai/claude-code@latest \
+    && claude --version && which claude
 
 # ── Dev stage: hot reload with Air ──
 FROM golang:1.25-alpine AS dev

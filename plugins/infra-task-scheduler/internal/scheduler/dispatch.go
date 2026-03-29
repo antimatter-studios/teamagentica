@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-task-scheduler/internal/storage"
 )
 
@@ -429,7 +430,7 @@ func (s *Scheduler) runExecutionLoop(ctx context.Context, entry *storage.Dispatc
 
 		if testAction.Action == "done" {
 			s.moveCard(ctx, entry.CardID, card.BoardID, "Done")
-			s.sdk.ReportEvent("dispatch:completed", card.Title)
+			s.sdk.ReportEvent(events.DispatchCompleted, card.Title)
 			return
 		}
 

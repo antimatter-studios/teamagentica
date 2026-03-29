@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/system-user-manager/internal/auth"
 	"github.com/antimatter-studios/teamagentica/plugins/system-user-manager/internal/storage"
 )
@@ -142,7 +143,7 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		fmt.Sprintf(`{"display_name":%q,"role":%q}`, user.DisplayName, user.Role),
 		c.ClientIP(), true)
 
-	h.sdk.ReportEvent("user.updated", fmt.Sprintf(`{"user_id":%d}`, user.ID))
+	events.PublishUserUpdated(h.sdk, int(user.ID))
 
 	c.JSON(http.StatusOK, gin.H{"user": user})
 }
@@ -194,7 +195,7 @@ func (h *Handler) BanUser(c *gin.Context) {
 		fmt.Sprintf(`{"banned":%t,"reason":%q}`, req.Banned, req.Reason),
 		c.ClientIP(), true)
 
-	h.sdk.ReportEvent(action, fmt.Sprintf(`{"user_id":%d,"email":%q}`, user.ID, user.Email))
+	events.PublishStatus(h.sdk, action, fmt.Sprintf("user_id=%d email=%s", user.ID, user.Email))
 
 	c.JSON(http.StatusOK, gin.H{"user": user})
 }
@@ -220,7 +221,7 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		fmt.Sprintf("user:%d", id), "",
 		c.ClientIP(), true)
 
-	h.sdk.ReportEvent("user.deleted", fmt.Sprintf(`{"user_id":%d}`, id))
+	events.PublishUserDeleted(h.sdk, int(id))
 
 	c.JSON(http.StatusOK, gin.H{"deleted": true})
 }

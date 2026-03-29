@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/system-user-manager/internal/auth"
 	"github.com/antimatter-studios/teamagentica/plugins/system-user-manager/internal/storage"
 )
@@ -94,7 +95,7 @@ func (h *Handler) Register(c *gin.Context) {
 		fmt.Sprintf(`{"email":%q,"role":%q}`, user.Email, user.Role),
 		c.ClientIP(), true)
 
-	h.sdk.ReportEvent("user.registered", fmt.Sprintf(`{"user_id":%d,"email":%q}`, user.ID, user.Email))
+	events.PublishUserRegistered(h.sdk, int(user.ID), user.Email)
 
 	c.JSON(http.StatusCreated, authResponse{Token: token, User: user})
 }

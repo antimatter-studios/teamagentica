@@ -144,6 +144,35 @@ func (m *Mem0Provider) List(ctx context.Context, opts ListOpts) ([]Memory, error
 	return memories, nil
 }
 
+// Count returns the total number of memories matching the given filters.
+func (m *Mem0Provider) Count(ctx context.Context, filters map[string]any) (int, error) {
+	q := url.Values{}
+	if filters != nil {
+		if v, ok := filters["user_id"].(string); ok && v != "" {
+			q.Set("user_id", v)
+		}
+		if v, ok := filters["agent_id"].(string); ok && v != "" {
+			q.Set("agent_id", v)
+		}
+		if v, ok := filters["run_id"].(string); ok && v != "" {
+			q.Set("run_id", v)
+		}
+	}
+
+	path := "/v1/memories/count"
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	var resp struct {
+		Total int `json:"total"`
+	}
+	if err := m.doJSON(ctx, "GET", path, nil, &resp); err != nil {
+		return 0, fmt.Errorf("count memories: %w", err)
+	}
+	return resp.Total, nil
+}
+
 // Get retrieves a single memory by ID.
 func (m *Mem0Provider) Get(ctx context.Context, memoryID string) (*Memory, error) {
 	var mem Memory

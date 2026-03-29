@@ -11,7 +11,7 @@ import (
 )
 
 // OpenAIProxy reverse-proxies OpenAI-compatible requests to the internal Ollama server.
-// This allows other plugins (e.g. infra-agent-memory) to use Ollama models
+// This allows other plugins (e.g. infra-agent-memory-gateway) to use Ollama models
 // via standard OpenAI endpoints without knowing the internal Ollama address.
 func (h *Handler) OpenAIProxy(c *gin.Context) {
 	h.mu.RLock()

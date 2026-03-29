@@ -36,7 +36,7 @@ func WriteMCPConfig(claudeDir, serverURL string) error {
 	}
 
 	cfg.MCPServers["teamagentica"] = mcpServerEntry{
-		Type: "sse",
+		Type: "http",
 		URL:  serverURL,
 	}
 

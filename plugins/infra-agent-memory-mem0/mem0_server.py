@@ -425,6 +425,30 @@ async def search_memories(request: Request):
     return {"results": results.get("results", results) if isinstance(results, dict) else results}
 
 
+@app.get("/v1/memories/count")
+async def count_memories(
+    user_id: str = None,
+    agent_id: str = None,
+    app_id: str = None,
+    run_id: str = None,
+):
+    """Return total memory count. Uses a high limit to count all."""
+    kwargs = {}
+    if user_id:
+        kwargs["user_id"] = user_id
+    if agent_id:
+        kwargs["agent_id"] = agent_id
+    if app_id:
+        kwargs["app_id"] = app_id
+    if run_id:
+        kwargs["run_id"] = run_id
+
+    raw = memory_client.get_all(**kwargs, limit=100000)
+    results = raw.get("results", raw) if isinstance(raw, dict) else raw
+    total = len(results) if isinstance(results, list) else 0
+    return {"total": total}
+
+
 @app.get("/v1/memories/")
 async def list_memories(
     user_id: str = None,
@@ -444,7 +468,14 @@ async def list_memories(
     if run_id:
         kwargs["run_id"] = run_id
 
-    raw = memory_client.get_all(**kwargs)
+    # Request enough items to cover the requested page window.
+    effective_limit = 100  # Mem0 default
+    if page is not None and page_size is not None:
+        effective_limit = page * page_size
+    elif page_size is not None:
+        effective_limit = page_size
+
+    raw = memory_client.get_all(**kwargs, limit=effective_limit)
     # get_all returns {"results": [...]} in v1.1 — unwrap to plain list.
     results = raw.get("results", raw) if isinstance(raw, dict) else raw
     # Apply pagination manually since mem0 OSS doesn't support it natively.
