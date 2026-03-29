@@ -120,8 +120,8 @@ const KanbanCard = memo(function KanbanCard({
       {...attributes}
       {...listeners}
     >
-      {/* Top meta row: type + priority + assignee */}
-      {(card.card_type || card.priority || card.assignee_name) && (
+      {/* Top meta row: type + priority + assignee + card number */}
+      {(card.card_type || card.priority || card.assignee_name || card.number > 0) && (
         <div className="kn-card-meta">
           {card.card_type && (
             <span className={`kn-card-type ${CARD_TYPE_CLASS[card.card_type] ?? ""}`}>
@@ -136,11 +136,13 @@ const KanbanCard = memo(function KanbanCard({
           {card.assignee_name && (
             <span className="kn-card-assignee">{card.assignee_name}</span>
           )}
+          {card.number > 0 && (
+            <span className="kn-card-ref">{cardRef(boardPrefix, card.number)}</span>
+          )}
         </div>
       )}
 
       <span className="kn-card-title">
-        {card.number > 0 && <span className="kn-card-number">{cardRef(boardPrefix, card.number)}</span>}
         {card.title}
       </span>
 
@@ -1004,6 +1006,18 @@ function SidePanel({
                 onChange={(e) => setDueDate(e.target.value)}
               />
             </div>
+            {panel.type === "edit-card" && (
+              <div className="kn-field">
+                <label className="kn-label">Status</label>
+                <input
+                  className="kn-input"
+                  value={panel.columnName}
+                  readOnly
+                  tabIndex={-1}
+                  style={{ opacity: 0.7, cursor: "default" }}
+                />
+              </div>
+            )}
           </div>
 
           <div className="kn-field">

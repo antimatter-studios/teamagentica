@@ -7014,10 +7014,11 @@ body::after {
   cursor: grabbing;
 }
 
-.kn-card-number {
+.kn-card-ref {
   color: var(--text-secondary);
   font-weight: 500;
-  margin-right: 4px;
+  margin-left: auto;
+  font-size: 10px;
 }
 .kn-card-title {
   font-family: var(--font-mono);
@@ -8907,4 +8908,40 @@ body::after {
 .lcm-load-more:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Session Expired Modal */
+.session-expired-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.session-expired-modal {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 400px;
+  text-align: center;
+}
+.session-expired-modal h3 {
+  margin: 0 0 0.75rem;
+  color: var(--text-primary, #fff);
+}
+.session-expired-modal p {
+  margin: 0 0 1.5rem;
+  color: var(--text-secondary, #aaa);
+}
+.session-expired-modal button {
+  padding: 0.5rem 2rem;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent-primary, #7c3aed);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.9rem;
 }
