@@ -263,6 +263,13 @@ func LoadConfig() Config {
 	}
 }
 
+// peerEntry holds a cached plugin address for direct P2P communication.
+type peerEntry struct {
+	Host      string
+	HTTPPort  int
+	EventPort int
+}
+
 // Client manages the plugin's relationship with the kernel.
 type Client struct {
 	config       Config
@@ -277,6 +284,12 @@ type Client struct {
 	eventDebouncers map[string]Debouncer
 	eventMu         sync.RWMutex
 	registeredCh    chan struct{} // closed after successful kernel registration
+
+	// Peer registry — caches plugin addresses for direct P2P communication.
+	// Populated from GET /api/plugins/registry on startup, kept fresh by
+	// plugin:ready / plugin:stopped lifecycle events from the kernel.
+	peers   map[string]peerEntry
+	peersMu sync.RWMutex
 
 	// Cached storage plugin discovery.
 	storagePluginID string
@@ -325,6 +338,7 @@ func NewClient(cfg Config, reg Registration) *Client {
 		registration: reg,
 		httpClient:   httpClient,
 		routeClient:  routeClient,
+		peers:        make(map[string]peerEntry),
 		stopCh:       make(chan struct{}),
 		registeredCh: make(chan struct{}),
 	}
@@ -397,6 +411,9 @@ func (c *Client) Start(ctx context.Context) {
 		// point will subscribe immediately.
 		close(c.registeredCh)
 
+		// Pre-populate peer registry with all running plugin addresses.
+		c.loadPeerRegistry()
+
 		// Subscribe any event handlers that were registered before Start completed.
 		c.eventMu.RLock()
 		pending := make([]string, 0, len(c.eventDebouncers))
@@ -432,29 +449,42 @@ func (c *Client) Start(ctx context.Context) {
 	}()
 }
 
-// ReportEvent sends a debug event to the kernel for display in the console.
+// ReportEvent publishes an event to the platform event bus (infra-redis).
+// Falls back to the kernel endpoint if infra-redis is unreachable.
 func (c *Client) ReportEvent(eventType, detail string) {
-	payload := map[string]string{
-		"id":     c.registration.ID,
-		"type":   eventType,
-		"detail": detail,
+	payload := map[string]interface{}{
+		"event_type": eventType,
+		"source":     c.registration.ID,
+		"detail":     detail,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/event", bytes.NewReader(body))
+	// Try infra-redis event bus first.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = c.RouteToPlugin(ctx, "infra-redis", "POST", "/events/publish", bytes.NewReader(body))
 	if err != nil {
-		return
+		// Fallback to kernel for backward compat during transition.
+		fallback := map[string]string{
+			"id":     c.registration.ID,
+			"type":   eventType,
+			"detail": detail,
+		}
+		fb, _ := json.Marshal(fallback)
+		req, err2 := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/event", bytes.NewReader(fb))
+		if err2 != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err2 := c.httpClient.Do(req)
+		if err2 != nil {
+			return
+		}
+		resp.Body.Close()
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return
-	}
-	resp.Body.Close()
 }
 
 // UsageReport holds usage data reported by plugins to the kernel.
@@ -473,53 +503,24 @@ type UsageReport struct {
 	DurationMs   int64  `json:"duration_ms,omitempty"`
 }
 
-// ReportUsage sends a usage report to the kernel as a usage:report event
-// with addressed delivery to infra-cost-tracking for guaranteed at-least-once processing.
+// ReportUsage sends a usage report via the event bus to infra-cost-tracking.
 func (c *Client) ReportUsage(report UsageReport) {
 	data, err := json.Marshal(report)
 	if err != nil {
 		log.Printf("sdk: ReportUsage marshal error: %v", err)
 		return
 	}
-
-	payload := map[string]string{
-		"id":          c.registration.ID,
-		"type":        "usage:report",
-		"detail":      string(data),
-		"destination": "infra-cost-tracking",
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("sdk: ReportUsage payload marshal error: %v", err)
-		return
-	}
-
-	req, err := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/event", bytes.NewReader(body))
-	if err != nil {
-		log.Printf("sdk: ReportUsage request error: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("sdk: ReportUsage send error: %v", err)
-		return
-	}
-	resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		log.Printf("sdk: ReportUsage got %d from kernel", resp.StatusCode)
-	}
+	c.ReportAddressedEvent("usage:report", string(data), "infra-cost-tracking")
 }
 
-// ReportAddressedEvent sends an event with addressed delivery to a specific plugin.
-// The kernel guarantees at-least-once delivery, queuing if the destination is offline.
+// ReportAddressedEvent publishes an event targeted at a specific plugin via the event bus.
+// The event bus stores events in Redis Streams for persistence and replay.
 func (c *Client) ReportAddressedEvent(eventType, detail, destination string) {
-	payload := map[string]string{
-		"id":          c.registration.ID,
-		"type":        eventType,
-		"detail":      detail,
-		"destination": destination,
+	payload := map[string]interface{}{
+		"event_type": eventType,
+		"source":     c.registration.ID,
+		"target":     destination,
+		"detail":     detail,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -527,53 +528,119 @@ func (c *Client) ReportAddressedEvent(eventType, detail, destination string) {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/event", bytes.NewReader(body))
+	// Try infra-redis event bus first.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = c.RouteToPlugin(ctx, "infra-redis", "POST", "/events/publish", bytes.NewReader(body))
 	if err != nil {
-		log.Printf("sdk: ReportAddressedEvent request error: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("sdk: ReportAddressedEvent send error: %v", err)
-		return
-	}
-	resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		log.Printf("sdk: ReportAddressedEvent got %d from kernel", resp.StatusCode)
+		// Fallback to kernel.
+		fallback := map[string]string{
+			"id":          c.registration.ID,
+			"type":        eventType,
+			"detail":      detail,
+			"destination": destination,
+		}
+		fb, _ := json.Marshal(fallback)
+		req, err2 := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/event", bytes.NewReader(fb))
+		if err2 != nil {
+			log.Printf("sdk: ReportAddressedEvent request error: %v", err2)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err2 := c.httpClient.Do(req)
+		if err2 != nil {
+			log.Printf("sdk: ReportAddressedEvent send error: %v", err2)
+			return
+		}
+		resp.Body.Close()
 	}
 }
 
 // Subscribe registers interest in events of the given type.
-// When such events occur, the kernel will POST to callbackPath on this plugin's HTTP server.
+// Registers this plugin as a subscriber on the event stream so that events
+// are pushed directly to this plugin's event port — no polling required.
+// If the event stream is not ready yet, polls the kernel status endpoint
+// to wait for it, then subscribes once it's running.
 func (c *Client) Subscribe(eventType, callbackPath string) error {
-	payload := map[string]string{
-		"id":            c.registration.ID,
-		"event_type":    eventType,
-		"callback_path": callbackPath,
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal subscribe: %w", err)
+	if c.trySubscribeEventStream(eventType) {
+		return nil
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.kernelURL()+"/api/plugins/subscribe", bytes.NewReader(body))
+	// Event stream not ready yet — poll kernel status endpoint until it's running.
+	log.Printf("pluginsdk: event stream not ready for %s subscription, waiting for it to come online", eventType)
+	go func() {
+		for attempt := 1; ; attempt++ {
+			select {
+			case <-c.stopCh:
+				return
+			case <-time.After(time.Duration(math.Min(float64(attempt)*2, 30)) * time.Second):
+			}
+
+			// Check if infra-redis is running via the kernel status endpoint.
+			status := c.PluginStatus("infra-redis")
+			if status != "running" {
+				continue
+			}
+
+			if c.trySubscribeEventStream(eventType) {
+				log.Printf("pluginsdk: subscribed to %s via event stream (after %d retries)", eventType, attempt)
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+// PluginStatus returns the current status of a plugin by querying the kernel.
+// Returns the status string ("running", "stopped", "unhealthy", "error", "enabled")
+// or empty string on failure. This is a lightweight call — the kernel only
+// fetches the status fields, not the full plugin object.
+func (c *Client) PluginStatus(pluginID string) string {
+	req, err := http.NewRequest(http.MethodGet, c.kernelURL()+"/api/plugins/"+pluginID+"/status", nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return ""
 	}
-	req.Header.Set("Content-Type", "application/json")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("http request: %w", err)
+		return ""
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("kernel returned status %d", resp.StatusCode)
+		return ""
 	}
-	return nil
+
+	var result struct {
+		Status string `json:"status"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&result) != nil {
+		return ""
+	}
+	return result.Status
+}
+
+// trySubscribeEventStream attempts to register this plugin as a subscriber
+// on the event stream (infra-redis). The event stream will push events
+// directly to this plugin's event port — no polling needed.
+func (c *Client) trySubscribeEventStream(eventType string) bool {
+	payload := map[string]string{
+		"plugin_id":  c.registration.ID,
+		"event_type": eventType,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = c.RouteToPlugin(ctx, "infra-redis", "POST", "/events/subscribe", bytes.NewReader(body))
+	return err == nil
 }
 
 // Unsubscribe removes interest in events of the given type.
@@ -733,6 +800,10 @@ func (c *Client) startInternalServer() error {
 	// Event callback handler.
 	mux.HandleFunc("POST /events", c.handleEventCallback)
 
+	// Lifecycle event handler — receives plugin:ready / plugin:stopped / plugin:registry-sync
+	// directly from the kernel via HTTP POST (not through Redis event bus).
+	mux.HandleFunc("POST /sdk/lifecycle", c.handleLifecycleEvent)
+
 	c.eventServer = &http.Server{Handler: mux}
 
 	// Use TLS on the internal server when mTLS is enabled so the kernel
@@ -776,6 +847,53 @@ func (c *Client) handleEventCallback(w http.ResponseWriter, r *http.Request) {
 		debouncer.Submit(event)
 	} else {
 		log.Printf("pluginsdk: no handler for event type %q", event.EventType)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleLifecycleEvent handles POST /sdk/lifecycle — receives plugin lifecycle
+// events directly from the kernel (not via Redis). Updates the peer registry
+// so plugins can maintain direct P2P connections.
+func (c *Client) handleLifecycleEvent(w http.ResponseWriter, r *http.Request) {
+	var event struct {
+		Type    string `json:"type"` // plugin:ready, plugin:stopped, plugin:registry-sync
+		Plugin  string `json:"plugin_id,omitempty"`
+		Host    string `json:"host,omitempty"`
+		Port    int    `json:"http_port,omitempty"`
+		EvtPort int    `json:"event_port,omitempty"`
+		// For registry-sync: bulk address map.
+		Registry []struct {
+			ID        string `json:"id"`
+			Host      string `json:"host"`
+			HTTPPort  int    `json:"http_port"`
+			EventPort int    `json:"event_port"`
+		} `json:"registry,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+
+	switch event.Type {
+	case "plugin:ready":
+		if event.Plugin != "" && event.Host != "" {
+			c.setPeer(event.Plugin, event.Host, event.Port, event.EvtPort)
+		}
+	case "plugin:stopped":
+		if event.Plugin != "" {
+			c.invalidatePeer(event.Plugin)
+		}
+	case "plugin:registry-sync":
+		c.peersMu.Lock()
+		c.peers = make(map[string]peerEntry, len(event.Registry))
+		for _, p := range event.Registry {
+			if p.Host != "" {
+				c.peers[p.ID] = peerEntry{Host: p.Host, HTTPPort: p.HTTPPort, EventPort: p.EventPort}
+			}
+		}
+		c.peersMu.Unlock()
+		log.Printf("pluginsdk: registry-sync received, %d peers", len(event.Registry))
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -1346,8 +1464,149 @@ func (c *Client) GetPluginSchema(pluginID string) (map[string]interface{}, error
 
 // RouteToPlugin proxies a request through the kernel to a specific plugin.
 // Returns the raw response body. The caller is responsible for interpreting it.
-func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error) {
-	url := fmt.Sprintf("%s/api/route/%s%s", c.kernelURL(), pluginID, path)
+// --- Peer Registry (P2P direct communication) ---
+
+// resolvePeer returns the cached address for a plugin, or resolves it from
+// the kernel on cache miss. Returns empty peerEntry if resolution fails.
+func (c *Client) resolvePeer(pluginID string) (peerEntry, bool) {
+	c.peersMu.RLock()
+	entry, ok := c.peers[pluginID]
+	c.peersMu.RUnlock()
+	if ok {
+		return entry, true
+	}
+
+	// Cache miss — resolve from kernel.
+	return c.resolvePeerFromKernel(pluginID)
+}
+
+// resolvePeerFromKernel fetches a plugin's address from the kernel and caches it.
+func (c *Client) resolvePeerFromKernel(pluginID string) (peerEntry, bool) {
+	req, err := http.NewRequest(http.MethodGet, c.kernelURL()+"/api/plugins/"+pluginID+"/address", nil)
+	if err != nil {
+		return peerEntry{}, false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return peerEntry{}, false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return peerEntry{}, false
+	}
+
+	var result struct {
+		Host      string `json:"host"`
+		HTTPPort  int    `json:"http_port"`
+		EventPort int    `json:"event_port"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&result) != nil || result.Host == "" {
+		return peerEntry{}, false
+	}
+
+	entry := peerEntry{Host: result.Host, HTTPPort: result.HTTPPort, EventPort: result.EventPort}
+	c.peersMu.Lock()
+	c.peers[pluginID] = entry
+	c.peersMu.Unlock()
+
+	return entry, true
+}
+
+// invalidatePeer removes a plugin from the peer cache (e.g. on connection failure
+// or plugin:stopped lifecycle event).
+func (c *Client) invalidatePeer(pluginID string) {
+	c.peersMu.Lock()
+	delete(c.peers, pluginID)
+	c.peersMu.Unlock()
+}
+
+// setPeer updates the peer cache for a plugin (e.g. on plugin:ready lifecycle event).
+func (c *Client) setPeer(pluginID, host string, httpPort, eventPort int) {
+	c.peersMu.Lock()
+	c.peers[pluginID] = peerEntry{Host: host, HTTPPort: httpPort, EventPort: eventPort}
+	c.peersMu.Unlock()
+}
+
+// PeerEventURL returns the event callback URL for a plugin from the peer cache.
+// Returns ("", false) if the plugin is not in the cache or has no event port.
+// Used by infra-redis to fan out events to subscribers via push.
+func (c *Client) PeerEventURL(pluginID string) (string, bool) {
+	entry, ok := c.resolvePeer(pluginID)
+	if !ok || entry.EventPort == 0 {
+		return "", false
+	}
+	scheme := "http"
+	if c.config.TLSCert != "" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d/events", scheme, entry.Host, entry.EventPort), true
+}
+
+// loadPeerRegistry bulk-loads all running plugin addresses from the kernel.
+// Called on startup to pre-populate the cache.
+func (c *Client) loadPeerRegistry() {
+	req, err := http.NewRequest(http.MethodGet, c.kernelURL()+"/api/plugins/registry", nil)
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var result struct {
+		Plugins []struct {
+			ID        string `json:"id"`
+			Host      string `json:"host"`
+			HTTPPort  int    `json:"http_port"`
+			EventPort int    `json:"event_port"`
+		} `json:"plugins"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&result) != nil {
+		return
+	}
+
+	c.peersMu.Lock()
+	for _, p := range result.Plugins {
+		if p.Host != "" {
+			c.peers[p.ID] = peerEntry{Host: p.Host, HTTPPort: p.HTTPPort, EventPort: p.EventPort}
+		}
+	}
+	c.peersMu.Unlock()
+
+	if len(result.Plugins) > 0 {
+		log.Printf("pluginsdk: loaded %d peer addresses from registry", len(result.Plugins))
+	}
+}
+
+// peerURL builds a direct URL to a peer plugin.
+func (c *Client) peerURL(entry peerEntry, path string) string {
+	scheme := "http"
+	if c.config.TLSCert != "" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d%s", scheme, entry.Host, entry.HTTPPort, path)
+}
+
+// callPeerDirect makes a direct HTTP call to a peer plugin, bypassing the kernel.
+func (c *Client) callPeerDirect(ctx context.Context, entry peerEntry, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
+	url := c.peerURL(entry, path)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
@@ -1356,10 +1615,13 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.routeClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, err // return unwrapped so caller can detect connection failure
 	}
 	defer resp.Body.Close()
 
@@ -1369,13 +1631,13 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("plugin %s returned status %d: %s", pluginID, resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("plugin returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 	return respBody, nil
 }
 
-// RouteToPluginWithHeaders is like RouteToPlugin but allows setting custom headers on the request.
-func (c *Client) RouteToPluginWithHeaders(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
+// callViaKernel makes an HTTP call to a plugin via the kernel proxy (fallback path).
+func (c *Client) callViaKernel(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
 	url := fmt.Sprintf("%s/api/route/%s%s", c.kernelURL(), pluginID, path)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
@@ -1406,10 +1668,71 @@ func (c *Client) RouteToPluginWithHeaders(ctx context.Context, pluginID, method,
 	return respBody, nil
 }
 
+// RouteToPlugin calls a plugin endpoint. Tries direct P2P first using the peer
+// registry cache, falls back to kernel proxy on connection failure.
+func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error) {
+	return c.routeToPluginInternal(ctx, pluginID, method, path, body, nil)
+}
+
+// RouteToPluginWithHeaders is like RouteToPlugin but allows setting custom headers.
+func (c *Client) RouteToPluginWithHeaders(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
+	return c.routeToPluginInternal(ctx, pluginID, method, path, body, headers)
+}
+
+// routeToPluginInternal implements the P2P-first routing with kernel fallback.
+func (c *Client) routeToPluginInternal(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
+	// Try direct P2P call if we have a cached address.
+	if entry, ok := c.resolvePeer(pluginID); ok {
+		// Buffer the body so we can retry on failure.
+		var bodyBytes []byte
+		if body != nil {
+			var err error
+			bodyBytes, err = io.ReadAll(body)
+			if err != nil {
+				return nil, fmt.Errorf("read body: %w", err)
+			}
+			body = bytes.NewReader(bodyBytes)
+		}
+
+		result, err := c.callPeerDirect(ctx, entry, method, path, body, headers)
+		if err == nil {
+			return result, nil
+		}
+
+		// Direct call failed — invalidate cache and fall back to kernel.
+		c.invalidatePeer(pluginID)
+		if bodyBytes != nil {
+			body = bytes.NewReader(bodyBytes)
+		}
+	}
+
+	// Fallback: route through kernel proxy.
+	return c.callViaKernel(ctx, pluginID, method, path, body, headers)
+}
+
 // RouteToPluginStream opens a streaming connection to a plugin endpoint and returns
 // the raw HTTP response. The caller owns the response body and must close it.
 // Unlike RouteToPlugin, this uses no timeout — the caller controls lifetime via ctx.
 func (c *Client) RouteToPluginStream(ctx context.Context, pluginID, method, path string, body io.Reader) (*http.Response, error) {
+	// Try direct P2P for streaming too.
+	if entry, ok := c.resolvePeer(pluginID); ok {
+		url := c.peerURL(entry, path)
+		req, err := http.NewRequestWithContext(ctx, method, url, body)
+		if err == nil {
+			if body != nil {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			streamClient := &http.Client{Transport: c.routeClient.Transport}
+			resp, err := streamClient.Do(req)
+			if err == nil {
+				return resp, nil
+			}
+			// Direct failed — fall through to kernel proxy.
+			c.invalidatePeer(pluginID)
+		}
+	}
+
+	// Fallback: stream via kernel proxy.
 	url := fmt.Sprintf("%s/api/route/%s%s", c.kernelURL(), pluginID, path)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
