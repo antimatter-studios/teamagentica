@@ -38,6 +38,7 @@ func New(db *storage.DB, events EventEmitter, cache *usercache.Cache) *Handler {
 type CardResponse struct {
 	storage.Card
 	AssigneeName string `json:"assignee_name"`
+	StatusName   string `json:"status_name"`
 }
 
 type CommentResponse struct {
@@ -54,14 +55,21 @@ func (h *Handler) enrichCard(ctx context.Context, card *storage.Card) CardRespon
 	} else if card.AssigneeAgent != "" {
 		resp.AssigneeName = card.AssigneeAgent
 	}
+	if col, err := h.db.GetColumn(card.ColumnID); err == nil && col != nil {
+		resp.StatusName = col.Name
+	}
 	return resp
 }
 
 func (h *Handler) enrichCards(ctx context.Context, cards []storage.Card) []CardResponse {
 	ids := make(map[uint]bool)
+	colIDs := make(map[string]bool)
 	for _, c := range cards {
 		if c.AssigneeID != 0 {
 			ids[c.AssigneeID] = true
+		}
+		if c.ColumnID != "" {
+			colIDs[c.ColumnID] = true
 		}
 	}
 	idSlice := make([]uint, 0, len(ids))
@@ -69,6 +77,14 @@ func (h *Handler) enrichCards(ctx context.Context, cards []storage.Card) []CardR
 		idSlice = append(idSlice, id)
 	}
 	users := h.userCache.GetMany(ctx, idSlice)
+
+	// resolve column names
+	colNames := make(map[string]string, len(colIDs))
+	for cid := range colIDs {
+		if col, err := h.db.GetColumn(cid); err == nil && col != nil {
+			colNames[cid] = col.Name
+		}
+	}
 
 	result := make([]CardResponse, len(cards))
 	for i, c := range cards {
@@ -79,6 +95,9 @@ func (h *Handler) enrichCards(ctx context.Context, cards []storage.Card) []CardR
 			}
 		} else if c.AssigneeAgent != "" {
 			result[i].AssigneeName = c.AssigneeAgent
+		}
+		if name, ok := colNames[c.ColumnID]; ok {
+			result[i].StatusName = name
 		}
 	}
 	return result
