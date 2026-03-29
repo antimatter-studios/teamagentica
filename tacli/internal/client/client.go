@@ -551,6 +551,11 @@ func (c *Client) SubmitManifest(manifestJSON []byte) error {
 	return nil
 }
 
+// DeleteManifest removes all versions of a plugin from the provider catalog.
+func (c *Client) DeleteManifest(pluginID string) error {
+	return c.doSimple("DELETE", "/api/marketplace/manifests/"+pluginID)
+}
+
 func (c *Client) doSimple(method, path string) error {
 	resp, err := c.do(method, path)
 	if err != nil {

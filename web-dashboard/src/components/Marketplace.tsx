@@ -299,7 +299,18 @@ export default function Marketplace() {
                 const isInstalling = installing === p.plugin_id;
                 const isUpgrading = upgrading === p.plugin_id;
                 const installedVersion = installedVersions.get(p.plugin_id);
-                const hasUpdate = isInstalled && installedVersion !== p.version;
+                const normalizeVersion = (v: string | undefined) => v?.replace(/^v/i, "").trim() ?? "";
+                const parseSemver = (v: string) => {
+                  const parts = v.split(".").map(Number);
+                  return [parts[0] || 0, parts[1] || 0, parts[2] || 0] as const;
+                };
+                const nInstalled = normalizeVersion(installedVersion);
+                const nCatalog = normalizeVersion(p.version);
+                const hasUpdate = isInstalled && nCatalog !== "" && nInstalled !== "" && (() => {
+                  const [a, b, c] = parseSemver(nInstalled);
+                  const [x, y, z] = parseSemver(nCatalog);
+                  return x > a || (x === a && y > b) || (x === a && y === b && z > c);
+                })();
 
                 return (
                   <div
@@ -309,7 +320,6 @@ export default function Marketplace() {
                     <div className="marketplace-row-main">
                       <div className="marketplace-row-title">
                         <span className="plugin-name">{p.name}</span>
-                        <span className="plugin-version">v{p.version}</span>
                         {p.author && (
                           <span className="marketplace-row-author">
                             by {p.author}
@@ -320,6 +330,8 @@ export default function Marketplace() {
                         <p className="marketplace-row-desc">{p.description}</p>
                       )}
                     </div>
+
+                    <span className="plugin-version">v{p.version}</span>
 
                     <div className="marketplace-row-meta">
                       {p.tags && p.tags.length > 0 && (
@@ -340,7 +352,7 @@ export default function Marketplace() {
                           role="button"
                           onClick={() => !isUpgrading && handleUpgrade(p.plugin_id)}
                         >
-                          {isUpgrading ? "UPGRADING..." : "UPDATE AVAILABLE"}
+                          {isUpgrading ? "UPGRADING..." : `UPGRADE TO v${p.version}?`}
                         </span>
                       ) : isInstalled ? (
                         <span className="marketplace-installed-badge">

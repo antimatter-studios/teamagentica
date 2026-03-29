@@ -353,6 +353,34 @@ func (h *MarketplaceHandler) SubmitManifest(c *gin.Context) {
 	c.Data(resp.StatusCode, "application/json", respBody)
 }
 
+// DeleteManifest handles DELETE /api/marketplace/manifests/:id.
+// Forwards the delete request to the first enabled provider.
+func (h *MarketplaceHandler) DeleteManifest(c *gin.Context) {
+	pluginID := c.Param("id")
+
+	var provider models.Provider
+	if err := h.db().Where("enabled = ?", true).First(&provider).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no providers configured"})
+		return
+	}
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodDelete, provider.URL+"/plugins/"+pluginID, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create request"})
+		return
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach provider: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	c.Data(resp.StatusCode, "application/json", respBody)
+}
+
 // --- Install ---
 
 // InstallPlugin handles POST /api/marketplace/install.
@@ -412,7 +440,7 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 
 	var allInstalled []models.Plugin
 	visited := map[string]bool{}
-	if err := h.syncPlugin(provider, plugin, visited, &allInstalled); err != nil {
+	if err := h.syncPlugin(provider, plugin, visited, &allInstalled, true); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -469,9 +497,10 @@ func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugi
 }
 
 // syncPlugin fetches the latest manifest from the provider and applies it to
-// the plugin record. Dependencies are resolved recursively — new deps that
-// aren't installed yet get bootstrapped first.
-func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models.Plugin, visited map[string]bool, allInstalled *[]models.Plugin) error {
+// the plugin record. When installDeps is true (fresh install), missing
+// dependencies are auto-installed from the catalog. When false (upgrade),
+// only already-installed dependencies are synced — no new installs.
+func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models.Plugin, visited map[string]bool, allInstalled *[]models.Plugin, installDeps bool) error {
 	if visited[plugin.ID] {
 		return nil
 	}
@@ -489,24 +518,32 @@ func (h *MarketplaceHandler) syncPlugin(provider models.Provider, plugin *models
 
 	// Recursively ensure dependencies exist and are synced.
 	for _, cap := range plugin.GetDependencies() {
-		depEntry := h.findProviderPluginByCapability(provider, cap)
-		if depEntry == nil {
-			log.Printf("marketplace: no provider plugin found for capability %q", cap)
-			continue
-		}
-
 		var dep models.Plugin
-		if h.db().First(&dep, "id = ?", depEntry.PluginID).Error != nil {
-			bootstrapped, err := h.bootstrapPlugin(depEntry)
-			if err != nil {
-				log.Printf("marketplace: failed to bootstrap dependency %s: %v", depEntry.PluginID, err)
+		if installDeps {
+			// Install path: look up capability in catalog and auto-install if missing.
+			depEntry := h.findProviderPluginByCapability(provider, cap)
+			if depEntry == nil {
+				log.Printf("marketplace: no provider plugin found for capability %q", cap)
 				continue
 			}
-			dep = *bootstrapped
+			if h.db().First(&dep, "id = ?", depEntry.PluginID).Error != nil {
+				bootstrapped, err := h.bootstrapPlugin(depEntry)
+				if err != nil {
+					log.Printf("marketplace: failed to bootstrap dependency %s: %v", depEntry.PluginID, err)
+					continue
+				}
+				dep = *bootstrapped
+			}
+		} else {
+			// Upgrade path: only sync already-installed plugins that provide this capability.
+			if err := h.db().Where("capabilities LIKE ?", "%"+cap+"%").First(&dep).Error; err != nil {
+				log.Printf("marketplace: dependency %q not installed, skipping (upgrade does not auto-install)", cap)
+				continue
+			}
 		}
 
-		if err := h.syncPlugin(provider, &dep, visited, allInstalled); err != nil {
-			log.Printf("marketplace: failed to sync dependency %s: %v", depEntry.PluginID, err)
+		if err := h.syncPlugin(provider, &dep, visited, allInstalled, installDeps); err != nil {
+			log.Printf("marketplace: failed to sync dependency %s: %v", dep.ID, err)
 		}
 	}
 
@@ -569,7 +606,7 @@ func (h *MarketplaceHandler) UpgradePlugin(c *gin.Context) {
 
 	var allInstalled []models.Plugin
 	visited := map[string]bool{}
-	if err := h.syncPlugin(provider, &existing, visited, &allInstalled); err != nil {
+	if err := h.syncPlugin(provider, &existing, visited, &allInstalled, false); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

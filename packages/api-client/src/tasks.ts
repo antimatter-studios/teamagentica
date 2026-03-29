@@ -5,6 +5,7 @@ const ROUTE = "/api/route/tool-task-tracker";
 export interface Board {
   id: string;
   name: string;
+  prefix: string;
   description: string;
   created_at: number;
   updated_at: number;
@@ -19,12 +20,26 @@ export interface Column {
   updated_at: number;
 }
 
-export interface Card {
+export interface Epic {
   id: string;
   board_id: string;
+  name: string;
+  description: string;
+  color: string;
+  position: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface Card {
+  id: string;
+  number: number;          // auto-incrementing per board
+  board_id: string;
   column_id: string;
+  epic_id: string;             // epic grouping ("" = ungrouped)
   title: string;
   description: string;
+  card_type: "task" | "bug" | "";
   priority: "low" | "medium" | "high" | "urgent" | "";
   assignee_id: number;       // user ID (0 = unassigned)
   assignee_agent: string;    // agent alias ("" = none)
@@ -54,7 +69,7 @@ export class TasksAPI {
     return this.http.get<Board[]>(`${ROUTE}/boards`);
   }
 
-  async createBoard(data: { name: string; description?: string }): Promise<Board> {
+  async createBoard(data: { name: string; prefix?: string; description?: string }): Promise<Board> {
     return this.http.post<Board>(`${ROUTE}/boards`, data);
   }
 
@@ -62,7 +77,7 @@ export class TasksAPI {
     return this.http.get<Board>(`${ROUTE}/boards/${id}`);
   }
 
-  async updateBoard(id: string, data: { name?: string; description?: string }): Promise<Board> {
+  async updateBoard(id: string, data: { name?: string; prefix?: string; description?: string }): Promise<Board> {
     return this.http.put<Board>(`${ROUTE}/boards/${id}`, data);
   }
 
@@ -87,15 +102,52 @@ export class TasksAPI {
     return this.http.delete(`${ROUTE}/boards/${boardId}/columns/${colId}`);
   }
 
+  // Epics
+  async listEpics(boardId: string): Promise<Epic[]> {
+    return this.http.get<Epic[]>(`${ROUTE}/boards/${boardId}/epics`);
+  }
+
+  async createEpic(boardId: string, data: {
+    name: string;
+    description?: string;
+    color?: string;
+    position?: number;
+  }): Promise<Epic> {
+    return this.http.post<Epic>(`${ROUTE}/boards/${boardId}/epics`, data);
+  }
+
+  async updateEpic(boardId: string, epicId: string, data: {
+    name?: string;
+    description?: string;
+    color?: string;
+    position?: number;
+  }): Promise<Epic> {
+    return this.http.put<Epic>(`${ROUTE}/boards/${boardId}/epics/${epicId}`, data);
+  }
+
+  async deleteEpic(boardId: string, epicId: string): Promise<void> {
+    return this.http.delete(`${ROUTE}/boards/${boardId}/epics/${epicId}`);
+  }
+
   // Cards
   async listCards(boardId: string): Promise<Card[]> {
     return this.http.get<Card[]>(`${ROUTE}/boards/${boardId}/cards`);
   }
 
+  async getCardByNumber(boardId: string, number: number): Promise<Card> {
+    return this.http.get<Card>(`${ROUTE}/boards/${boardId}/cards/number/${number}`);
+  }
+
+  async searchCards(boardId: string, query: string): Promise<Card[]> {
+    return this.http.get<Card[]>(`${ROUTE}/boards/${boardId}/cards/search?q=${encodeURIComponent(query)}`);
+  }
+
   async createCard(boardId: string, data: {
     column_id: string;
+    epic_id?: string;
     title: string;
     description?: string;
+    card_type?: string;
     priority?: string;
     assignee_id?: number;
     assignee_agent?: string;
@@ -108,8 +160,11 @@ export class TasksAPI {
 
   async updateCard(boardId: string, cardId: string, data: {
     column_id?: string;
+    epic_id?: string;
+    clear_epic?: boolean;
     title?: string;
     description?: string;
+    card_type?: string;
     priority?: string;
     assignee_id?: number;
     assignee_agent?: string;

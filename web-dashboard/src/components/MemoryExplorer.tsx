@@ -247,10 +247,10 @@ type SidebarView = "all" | "user" | "agent" | "conversations";
 
 export default function MemoryExplorer() {
   const {
-    memories, entities, searchResults, loading, searching, error,
+    memories, memoryTotal, entities, searchResults, loading, loadingMore, searching, error,
     // @ts-ignore — WIP: these will be wired up
     selectedUserId, selectedAgentId,
-    fetch, fetchEntities, search, clearSearch, deleteMemory, setFilter,
+    fetch, loadMore, fetchEntities, search, clearSearch, deleteMemory, setFilter,
     conversations, loadingConversations, selectedConversationId,
     fetchConversations, selectConversation,
   } = useMemoryStore(useShallow((s) => s));
@@ -319,7 +319,8 @@ export default function MemoryExplorer() {
       });
 
   // Compute quality stats
-  const totalCount = memories.length;
+  const totalCount = memoryTotal || memories.length;
+  const hasMoreMemories = memories.length < totalCount;
   const shortCount = memories.filter((m) => (m.memory?.length ?? 0) < 30).length;
   const vagueCount = memories.filter((m) => /^(the user|user |they |it |this |that )/i.test(m.memory ?? "")).length;
   const withCategories = memories.filter((m) => m.categories && m.categories.length > 0).length;
@@ -351,7 +352,9 @@ export default function MemoryExplorer() {
           <span className="section-icon">[M]</span>
           MEMORY
           {totalCount > 0 && (
-            <span className="section-count">{totalCount}</span>
+            <span className="section-count">
+              {hasMoreMemories ? `${memories.length}/${totalCount}` : totalCount}
+            </span>
           )}
         </div>
 
@@ -387,7 +390,9 @@ export default function MemoryExplorer() {
             >
               <span className="plugin-status-dot status-running" />
               <span className="plugin-sidebar-name">All Memories</span>
-              <span className="plugin-sidebar-status status-running">{totalCount}</span>
+              <span className="plugin-sidebar-status status-running">
+                {hasMoreMemories ? `${memories.length}/${totalCount}` : totalCount}
+              </span>
             </div>
           </div>
 
@@ -535,6 +540,15 @@ export default function MemoryExplorer() {
                     isSearchResult={isSearch}
                   />
                 ))}
+                {!isSearch && hasMoreMemories && (
+                  <button
+                    className="lcm-load-more"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                  >
+                    {loadingMore ? "Loading..." : `Load more (${totalCount - memories.length} remaining)`}
+                  </button>
+                )}
               </div>
             )}
           </>

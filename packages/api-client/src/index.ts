@@ -110,7 +110,7 @@ export { ChatAPI } from "./chat.js";
 export type { StorageFile, BrowseResult } from "./files.js";
 export { FilesAPI, formatBytes, filenameFromKey, folderName } from "./files.js";
 
-export type { Board, Column, Card, Comment } from "./tasks.js";
+export type { Board, Column, Epic, Card, Comment } from "./tasks.js";
 export { TasksAPI } from "./tasks.js";
 
 export type { RegistryAlias, AgentType, CreateAliasRequest, UpdateAliasRequest, PluginModels } from "./agents.js";

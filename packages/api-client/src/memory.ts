@@ -73,10 +73,10 @@ export class MemoryAPI {
     run_id?: string;
     page?: number;
     page_size?: number;
-  }): Promise<Memory[]> {
+  }): Promise<{ results: Memory[]; total: number }> {
     const route = await this.semanticRoute();
-    const res = await this.http.post<{ results: Memory[] }>(`${route}/mcp/get_memories`, opts ?? {});
-    return res.results || [];
+    const res = await this.http.post<{ results: Memory[]; total: number }>(`${route}/mcp/get_memories`, opts ?? {});
+    return { results: res.results || [], total: res.total ?? (res.results || []).length };
   }
 
   async search(query: string, opts?: {

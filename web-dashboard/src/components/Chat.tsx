@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useChatStore } from "../stores/chatStore";
+import { useChatStore, type ProgressInfo } from "../stores/chatStore";
 import { apiClient } from "../api/client";
 import type { Attachment } from "@teamagentica/api-client";
 import ConfirmDialog from "./ConfirmDialog";
@@ -52,7 +52,7 @@ interface ChatProps {
 }
 
 export default function Chat({ activePage, subpath, onConversationChange }: ChatProps) {
-  const { conversations, activeConversationId, messages, sending, loading, error, sendStartedAt, activeTaskGroupId, shelvedTasks } = useChatStore(
+  const { conversations, activeConversationId, messages, sending, loading, error, sendStartedAt, activeTaskGroupId, shelvedTasks, progressInfo } = useChatStore(
     useShallow((s) => ({
       conversations: s.conversations,
       activeConversationId: s.activeConversationId,
@@ -63,8 +63,12 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
       sendStartedAt: s.sendStartedAt,
       activeTaskGroupId: s.activeTaskGroupId,
       shelvedTasks: s.shelvedTasks,
+      progressInfo: s.progressInfo,
     }))
   );
+
+  // SSE-driven progress for the active conversation (if any).
+  const activeProgress: ProgressInfo | null = activeConversationId ? progressInfo[activeConversationId] ?? null : null;
   const loadConversations = useChatStore((s) => s.loadConversations);
   const selectConversation = useChatStore((s) => s.selectConversation);
   const newConversation = useChatStore((s) => s.newConversation);
@@ -338,7 +342,7 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
           {loading && (
             <div className="chat-loading">Loading messages...</div>
           )}
-          {messages.map((msg) => (
+          {messages.filter((m) => !(m.role === "progress" && activeProgress)).map((msg) => (
             msg.role === "progress" ? (
             <div key={msg.id} className="chat-msg chat-msg-progress">
               <div className="chat-msg-progress-content">
@@ -368,6 +372,11 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
                     )}
                   </span>
                 )}
+                <span className="chat-msg-time">
+                  {new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {" · "}
+                  {new Date(msg.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+                </span>
               </div>
               <div className="chat-msg-content">
                 {msg.content}
@@ -404,6 +413,18 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
             </div>
             )
           ))}
+          {activeProgress && (
+            <div className="chat-msg chat-msg-progress">
+              <div className="chat-msg-progress-content">
+                {activeProgress.message}
+                {activeProgress.taskGroupId && <span className="chat-msg-task-group"> [task = {activeProgress.taskGroupId}]</span>}
+                {sendStartedAt && <ElapsedTimer startedAt={sendStartedAt} />}
+                <button className="chat-shelf-btn" onClick={shelfTask} title="Move to shelf">
+                  {"\u{1F4E6}"}
+                </button>
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
 

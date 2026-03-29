@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { apiClient } from "../api/client";
 import { parseConfigSchema } from "@teamagentica/api-client";
 import type { Plugin, PluginConfigEntry, ConfigSchemaField, OAuthStatus, OAuthDeviceCode } from "@teamagentica/api-client";
@@ -210,11 +210,28 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     }
   }
 
-  // Poll readonly sections every 1s while plugin is running.
+  const REFRESH_INTERVAL = 30;
+  const [refreshCountdown, setRefreshCountdown] = useState(REFRESH_INTERVAL);
+  const countdownRef = useRef(REFRESH_INTERVAL);
+
+  const triggerRefresh = useCallback(() => {
+    refreshExtraSections();
+    countdownRef.current = REFRESH_INTERVAL;
+    setRefreshCountdown(REFRESH_INTERVAL);
+  }, [plugin.id, plugin.status]);
+
+  // Countdown ticker + auto-refresh every 30s while plugin is running.
   useEffect(() => {
     if (plugin.status !== "running") return;
-    const timer = setInterval(refreshExtraSections, 1000);
-    return () => clearInterval(timer);
+    const ticker = setInterval(() => {
+      countdownRef.current -= 1;
+      if (countdownRef.current <= 0) {
+        refreshExtraSections();
+        countdownRef.current = REFRESH_INTERVAL;
+      }
+      setRefreshCountdown(countdownRef.current);
+    }, 1000);
+    return () => clearInterval(ticker);
   }, [plugin.id, plugin.status]);
 
   useEffect(() => {
@@ -334,6 +351,8 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     error,
     saveSuccess,
     extraSections,
+    refreshCountdown,
+    triggerRefresh,
     dynamicOptions,
     oauthStates,
     updateField,

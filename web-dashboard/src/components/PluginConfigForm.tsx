@@ -154,11 +154,12 @@ function ReadonlyTable({ items, columns }: { items: Record<string, unknown>[]; c
   );
 }
 
-function ReadonlySection({ section }: { section: SchemaSection }) {
+function ReadonlySection({ section, headerRight }: { section: SchemaSection; headerRight?: React.ReactNode }) {
   return (
     <div className="schema-readonly-section">
       <div className="schema-readonly-header">
         {section.name.replace(/_/g, " ").toUpperCase()}
+        {headerRight}
       </div>
       <div className="schema-readonly-fields">
         {section.items && section.columns ? (
@@ -203,6 +204,8 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
     error,
     saveSuccess,
     extraSections,
+    refreshCountdown,
+    triggerRefresh,
     dynamicOptions,
     oauthStates,
     updateField,
@@ -584,8 +587,16 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
         return renderField(field, index);
       })}
 
-      {extraSections.length > 0 && extraSections.map((section) => (
-        <ReadonlySection key={section.name} section={section} />
+      {extraSections.length > 0 && extraSections.map((section, idx) => (
+        <ReadonlySection
+          key={section.name}
+          section={section}
+          headerRight={idx === 0 ? (
+            <button className="schema-refresh-btn" onClick={triggerRefresh}>
+              Refresh ({refreshCountdown}s)
+            </button>
+          ) : undefined}
+        />
       ))}
 
       {error && <div className="form-error">{error}</div>}

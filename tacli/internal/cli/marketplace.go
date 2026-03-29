@@ -27,45 +27,51 @@ func init() {
 
 	cmd.AddCommand(
 		&cobra.Command{
-			Use:   "list",
-			Short: "List configured marketplaces",
+			Use:   "list-providers",
+			Short: "List configured marketplace providers",
 			RunE:  runMarketplaceList,
 		},
 		&cobra.Command{
-			Use:   "add <url>",
-			Short: "Add a marketplace by URL",
+			Use:   "add-provider <url>",
+			Short: "Add a marketplace provider by URL",
 			Args:  cobra.ExactArgs(1),
 			RunE:  runMarketplaceAdd,
 		},
 		&cobra.Command{
-			Use:   "remove <name>",
-			Short: "Remove a marketplace by name",
+			Use:   "remove-provider <name>",
+			Short: "Remove a marketplace provider by name",
 			Args:  cobra.ExactArgs(1),
 			RunE:  runMarketplaceRemove,
 		},
 		&cobra.Command{
-			Use:   "install <plugin-id>",
+			Use:   "list-plugins [provider-name]",
+			Short: "List available plugins in the catalog",
+			Args:  cobra.MaximumNArgs(1),
+			RunE:  runMarketplacePlugins,
+		},
+		&cobra.Command{
+			Use:   "submit-plugin <path>",
+			Short: "Submit plugin.yaml file(s) — accepts a single file or a directory of plugins",
+			Args:  cobra.ExactArgs(1),
+			RunE:  runMarketplaceSubmitCatalog,
+		},
+		&cobra.Command{
+			Use:   "remove-plugin <plugin-id>",
+			Short: "Remove a plugin from the catalog (all versions)",
+			Args:  cobra.ExactArgs(1),
+			RunE:  runMarketplaceDeletePlugin,
+		},
+		&cobra.Command{
+			Use:   "install-plugin <plugin-id>",
 			Short: "Install a plugin by ID from the marketplace",
 			Args:  cobra.ExactArgs(1),
 			RunE:  runMarketplaceInstall,
 		},
 		&cobra.Command{
-			Use:   "upgrade <plugin-id>",
+			Use:   "upgrade-plugin <plugin-id>",
 			Short: "Upgrade an installed plugin's metadata from the marketplace",
 			Args:  cobra.ExactArgs(1),
 			RunE:  runMarketplaceUpgrade,
-		},
-		&cobra.Command{
-			Use:   "plugins [marketplace-name]",
-			Short: "List available plugins",
-			Args:  cobra.MaximumNArgs(1),
-			RunE:  runMarketplacePlugins,
-		},
-		&cobra.Command{
-			Use:   "submit <path>",
-			Short: "Submit plugin.yaml file(s) — accepts a single file or a directory of plugins",
-			Args:  cobra.ExactArgs(1),
-			RunE:  runMarketplaceSubmitCatalog,
 		},
 	)
 
@@ -145,6 +151,19 @@ func runMarketplaceSubmitCatalog(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return marketplaceSubmitCatalog(c, args[0])
+}
+
+func runMarketplaceDeletePlugin(cmd *cobra.Command, args []string) error {
+	c, err := resolveMarketplaceClient(cmd)
+	if err != nil {
+		return err
+	}
+	pluginID := args[0]
+	if err := c.DeleteManifest(pluginID); err != nil {
+		return fmt.Errorf("delete %s from catalog: %w", pluginID, err)
+	}
+	fmt.Printf("Removed %s from catalog (all versions)\n", pluginID)
+	return nil
 }
 
 func marketplaceAdd(c *client.Client, rawURL string) error {

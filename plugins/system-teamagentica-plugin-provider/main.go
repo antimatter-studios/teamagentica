@@ -99,6 +99,22 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"message": "manifest stored", "plugin_id": pluginID, "version": version})
 	})
 
+	// Remove all versions of a plugin from the catalog.
+	r.DELETE("/plugins/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		affected, err := catalog.Delete(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete: " + err.Error()})
+			return
+		}
+		if affected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "plugin not found: " + id})
+			return
+		}
+		log.Printf("catalog: deleted %s (%d versions)", id, affected)
+		c.JSON(http.StatusOK, gin.H{"message": "plugin removed from catalog", "plugin_id": id, "versions_removed": affected})
+	})
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", defaultPort),
 		Handler: r,

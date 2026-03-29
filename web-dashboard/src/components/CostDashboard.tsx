@@ -80,12 +80,19 @@ export default function CostDashboard() {
 
   const totalCost = costRecords.reduce((s, r) => s + r.cost, 0);
 
-  // Build chart data: daily costs stacked by provider.
+  // Active providers in the data.
+  const providers = [
+    ...new Set(costRecords.map((r) => r.provider)),
+  ].sort();
+
+  // Build chart data: costs stacked by provider.
+  // Every data point must include all providers (default 0) so lines are continuous.
   const chartDataMap = new Map<string, Record<string, string | number>>();
   for (const r of costRecords) {
     let entry = chartDataMap.get(r.date);
     if (!entry) {
       entry = { date: r.date };
+      for (const p of providers) entry[p] = 0;
       chartDataMap.set(r.date, entry);
     }
     entry[r.provider] = ((entry[r.provider] as number) || 0) + r.cost;
@@ -93,11 +100,6 @@ export default function CostDashboard() {
   const chartData = Array.from(chartDataMap.values()).sort((a, b) =>
     (a.date as string).localeCompare(b.date as string)
   );
-
-  // Active providers in the data.
-  const providers = [
-    ...new Set(costRecords.map((r) => r.provider)),
-  ].sort();
 
   // Breakdown table: per-model totals.
   const modelBreakdown = new Map<
@@ -243,7 +245,12 @@ export default function CostDashboard() {
                 }}
                 formatter={(value) => [`$${Number(value).toFixed(4)}`, ""]}
               />
-              <Legend />
+              <Legend
+                wrapperStyle={{ paddingTop: 12 }}
+                formatter={(value: string) => (
+                  <span style={{ color: "#9ca3af", fontSize: 12, marginRight: 16 }}>{value}</span>
+                )}
+              />
               {providers.map((p) => (
                 <Area
                   key={p}

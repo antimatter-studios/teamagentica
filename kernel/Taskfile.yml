@@ -12,6 +12,12 @@ tasks:
     cmds:
       - go run ./tacli connect http://api.teamagentica.localhost --email chris@teamagentica.localhost --password 'FL3t9.Uk:xA44xK'
 
+  get_token:
+    desc: Gets the token from the default profile (useful for agents)
+    dir: ..
+    cmds:
+      - cat ~/.config/teamagentica/tacli.json | jq -r '.profiles[] | select(.name=="default") | .token'
+
   start:
     desc: Start kernel via tacli
     dir: ..

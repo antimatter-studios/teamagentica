@@ -4,9 +4,11 @@ import type { Memory, MemoryEntity, LCMConversation, LCMMessage } from "@teamage
 
 interface MemoryStore {
   memories: Memory[];
+  memoryTotal: number;
   entities: MemoryEntity[];
   searchResults: Memory[] | null;
   loading: boolean;
+  loadingMore: boolean;
   searching: boolean;
   error: string | null;
 
@@ -24,6 +26,7 @@ interface MemoryStore {
 
   // Actions
   fetch: () => Promise<void>;
+  loadMore: () => Promise<void>;
   fetchEntities: () => Promise<void>;
   search: (query: string) => Promise<void>;
   clearSearch: () => void;
@@ -36,11 +39,15 @@ interface MemoryStore {
   loadMoreMessages: () => Promise<void>;
 }
 
+const PAGE_SIZE = 100;
+
 export const useMemoryStore = create<MemoryStore>((set, get) => ({
   memories: [],
+  memoryTotal: 0,
   entities: [],
   searchResults: null,
   loading: true,
+  loadingMore: false,
   searching: false,
   error: null,
   selectedUserId: "",
@@ -58,13 +65,33 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
     const { selectedUserId, selectedAgentId } = get();
     if (get().memories.length === 0) set({ loading: true });
     try {
-      const opts: Record<string, unknown> = { page_size: 200 };
+      const opts: Record<string, unknown> = { page_size: PAGE_SIZE, page: 1 };
       if (selectedUserId) opts.user_id = selectedUserId;
       if (selectedAgentId) opts.agent_id = selectedAgentId;
-      const memories = await apiClient.memory.list(opts as Parameters<typeof apiClient.memory.list>[0]);
-      set({ memories, loading: false, error: null });
+      const { results, total } = await apiClient.memory.list(opts as Parameters<typeof apiClient.memory.list>[0]);
+      set({ memories: results, memoryTotal: total, loading: false, error: null });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : "Failed to load memories" });
+    }
+  },
+
+  loadMore: async () => {
+    const { memories, memoryTotal, selectedUserId, selectedAgentId } = get();
+    if (memories.length >= memoryTotal) return;
+    set({ loadingMore: true });
+    try {
+      const nextPage = Math.floor(memories.length / PAGE_SIZE) + 1;
+      const opts: Record<string, unknown> = { page_size: PAGE_SIZE, page: nextPage };
+      if (selectedUserId) opts.user_id = selectedUserId;
+      if (selectedAgentId) opts.agent_id = selectedAgentId;
+      const { results, total } = await apiClient.memory.list(opts as Parameters<typeof apiClient.memory.list>[0]);
+      set((s) => ({
+        memories: [...s.memories, ...results],
+        memoryTotal: total,
+        loadingMore: false,
+      }));
+    } catch (err) {
+      set({ loadingMore: false, error: err instanceof Error ? err.message : "Failed to load more memories" });
     }
   },
 

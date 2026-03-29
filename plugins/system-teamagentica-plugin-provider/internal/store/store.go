@@ -178,6 +178,12 @@ func (s *Store) ListAll() []Entry {
 	return s.Search("")
 }
 
+// Delete soft-deletes all manifest versions for a given plugin ID.
+func (s *Store) Delete(pluginID string) (int64, error) {
+	result := s.db.Where("plugin_id = ?", pluginID).Delete(&Manifest{})
+	return result.RowsAffected, result.Error
+}
+
 // Count returns the number of unique plugins in the catalog.
 func (s *Store) Count() int64 {
 	var count int64

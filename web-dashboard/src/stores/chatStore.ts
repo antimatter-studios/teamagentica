@@ -10,6 +10,14 @@ export interface ShelvedTask {
   status: "processing" | "completed" | "failed";
 }
 
+/** SSE-driven progress for a conversation — updated directly from relay:progress events. */
+export interface ProgressInfo {
+  status: string;   // thinking, running, streaming, planning, synthesizing
+  message: string;
+  taskGroupId: string;
+  updatedAt: number;
+}
+
 /** Per-conversation in-flight task state. */
 interface InFlightTask {
   taskGroupId: string;
@@ -24,6 +32,9 @@ interface ChatStore {
   loading: boolean;
   error: string | null;
   shelvedTasks: ShelvedTask[];
+
+  /** SSE-driven progress per conversation — no REST needed for intermediate states. */
+  progressInfo: Record<number, ProgressInfo>;
 
   /** Map of conversationId → in-flight task. Multiple convs can be sending simultaneously. */
   inFlightTasks: Record<number, InFlightTask>;
@@ -40,6 +51,8 @@ interface ChatStore {
   removeConversation: (id: number) => Promise<void>;
   send: (content: string, attachmentIds?: string[]) => Promise<void>;
   refreshMessages: () => Promise<void>;
+  setProgressInfo: (convId: number, info: ProgressInfo) => void;
+  clearProgressInfo: (convId: number) => void;
   shelfTask: () => void;
   revealShelved: (taskGroupId: string) => void;
 }
@@ -61,6 +74,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   loading: false,
   error: null,
   shelvedTasks: [],
+  progressInfo: {},
   inFlightTasks: {},
   // Derived — initial values, updated via deriveSending() on every relevant set().
   sending: false,
@@ -70,6 +84,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   loadConversations: async () => {
     try {
       const conversations = await apiClient.chat.fetchConversations();
+      conversations.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
       set({ conversations });
     } catch (e: unknown) {
       console.error("Failed to load conversations:", e);
@@ -124,6 +139,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch (e: unknown) {
       console.error("Failed to delete conversation:", e);
     }
+  },
+
+  setProgressInfo: (convId: number, info: ProgressInfo) => {
+    set((state) => ({
+      progressInfo: { ...state.progressInfo, [convId]: info },
+    }));
+  },
+
+  clearProgressInfo: (convId: number) => {
+    set((state) => {
+      const { [convId]: _, ...rest } = state.progressInfo;
+      return { progressInfo: rest };
+    });
   },
 
   refreshMessages: async () => {
@@ -252,7 +280,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 // ---------- Periodic background refresh ----------
 // Safety net: poll active conversation + conversation list every 10s.
 // Catches anything SSE missed (reconnect gaps, events without in-flight tasks).
-const POLL_INTERVAL_MS = 10_000;
+// Demoted to 30s — SSE now drives real-time updates; polling is just a safety net.
+const POLL_INTERVAL_MS = 30_000;
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function startBackgroundPoll() {
@@ -314,23 +343,39 @@ useEventStore.subscribe((state, prevState) => {
       const tgId = detail.task_group_id;
       if (!tgId) continue;
 
-      // In-flight task — refresh messages if it's the active conversation.
+      const isTerminal = detail.status === "completed" || detail.status === "failed";
+
+      // In-flight task — update progress directly from SSE data.
       const convId = watchedIds.get(tgId);
-      if (convId !== undefined && !refreshedConvs.has(convId)) {
+      if (convId !== undefined) {
         const currentState = useChatStore.getState();
-        if (currentState.activeConversationId === convId) {
-          console.log("[chat-sub] MATCH active conv", convId, "— calling refreshMessages()");
-          currentState.refreshMessages();
-          refreshedConvs.add(convId);
-        } else if (detail.status === "completed" || detail.status === "failed") {
-          // Non-active conv completed — clear in-flight + bump unread on that conversation.
-          const { [convId]: _, ...rest } = currentState.inFlightTasks;
-          useChatStore.setState((s) => ({
-            inFlightTasks: rest,
-            conversations: s.conversations.map((c) =>
-              c.id === convId ? { ...c, unread_count: (c.unread_count ?? 0) + 1 } : c
-            ),
-          }));
+
+        if (isTerminal) {
+          // Terminal: clear progress, fetch final message from DB.
+          currentState.clearProgressInfo(convId);
+          if (currentState.activeConversationId === convId && !refreshedConvs.has(convId)) {
+            console.log("[chat-sub] MATCH conv", convId, "terminal — fetching final message");
+            currentState.refreshMessages();
+            refreshedConvs.add(convId);
+          } else if (currentState.activeConversationId !== convId) {
+            // Non-active conv completed — clear in-flight + bump unread.
+            const { [convId]: _, ...rest } = currentState.inFlightTasks;
+            useChatStore.setState((s) => ({
+              inFlightTasks: rest,
+              conversations: s.conversations.map((c) =>
+                c.id === convId ? { ...c, unread_count: (c.unread_count ?? 0) + 1 } : c
+              ),
+            }));
+          }
+        } else {
+          // Intermediate: update progress directly — no REST call needed.
+          console.log("[chat-sub] SSE progress conv", convId, ":", detail.status, detail.message);
+          currentState.setProgressInfo(convId, {
+            status: detail.status,
+            message: detail.message || `${detail.status}...`,
+            taskGroupId: tgId,
+            updatedAt: Date.now(),
+          });
         }
       }
 
@@ -338,9 +383,7 @@ useEventStore.subscribe((state, prevState) => {
       if (shelvedIds.has(tgId)) {
         const shelvedTask = shelved.find((t) => t.taskGroupId === tgId);
         if (shelvedTask) {
-          const newStatus = detail.status === "completed" ? "completed"
-            : detail.status === "failed" ? "failed"
-            : "processing";
+          const newStatus = isTerminal ? (detail.status === "completed" ? "completed" : "failed") : "processing";
           const newMessage = detail.message || shelvedTask.message;
 
           if (newStatus !== shelvedTask.status || newMessage !== shelvedTask.message) {
