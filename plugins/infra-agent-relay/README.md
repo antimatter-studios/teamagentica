@@ -4,7 +4,7 @@ Routes messages between messaging plugins and AI agents, with DAG-based multi-ag
 
 ## Overview
 
-The relay is the central routing hub for all chat messages. Messaging plugins (Discord, Telegram, WhatsApp, etc.) send messages here; the relay resolves which agent should handle them, optionally runs a coordinator that produces a DAG execution plan, executes the plan with parallel task execution, and returns the final response. It also integrates with infra-agent-memory for conversation history and infra-alias-registry for persona system prompts.
+The relay is the central routing hub for all chat messages. Messaging plugins (Discord, Telegram, WhatsApp, etc.) send messages here; the relay resolves which agent should handle them, optionally runs a coordinator that produces a DAG execution plan, executes the plan with parallel task execution, and returns the final response. It also integrates with infra-agent-memory-gateway for conversation history and infra-alias-registry for persona system prompts.
 
 ## Capabilities
 
@@ -69,7 +69,7 @@ For non-coordinator (worker) agent calls, the relay looks up the agent's alias i
 
 ### Memory integration
 
-- Before routing, fetches conversation history from infra-agent-memory using session ID `source_plugin:channel_id`
+- Before routing, fetches conversation history from infra-agent-memory-gateway using session ID `source_plugin:channel_id`
 - Stores incoming user messages and outgoing assistant messages (fire-and-forget)
 - Memory plugin discovery is cached for 60 seconds
 

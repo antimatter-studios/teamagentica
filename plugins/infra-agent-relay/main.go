@@ -18,6 +18,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/bridge"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/debugtrace"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-relay/internal/router"
@@ -36,7 +37,7 @@ type relay struct {
 	debug                 bool
 	tracer                *debugtrace.Recorder
 	personas              *personaCache
-	memoryPluginID        string // cached plugin ID for infra-agent-memory (empty = not available)
+	memoryPluginID        string // cached plugin ID for infra-agent-memory-gateway (empty = not available)
 	memoryMu              sync.RWMutex
 	memoryCheckedAt       time.Time
 
@@ -192,11 +193,19 @@ func (r *relay) fetchPersonas() map[string]personaInfo {
 }
 
 // lookupPersona returns the persona for agentAlias, or nil if not found.
+// On cache miss it refreshes once from the persona plugin so newly-created
+// personas are available immediately even if the event was lost or delayed.
 func (r *relay) lookupPersona(agentAlias string) *personaInfo {
 	if agentAlias == "" || r.sdk == nil {
 		return nil
 	}
 	personas := r.fetchPersonas()
+	if p, ok := personas[agentAlias]; ok {
+		return &p
+	}
+	// Cache miss — refresh once and retry.
+	r.refreshPersonas()
+	personas = r.fetchPersonas()
 	if p, ok := personas[agentAlias]; ok {
 		return &p
 	}
@@ -265,7 +274,7 @@ func parseAtPrefix(text string) (string, string, bool) {
 
 // --- Memory integration ---
 
-// memoryPlugin returns the plugin ID of the infra-agent-memory plugin, or "" if unavailable.
+// memoryPlugin returns the plugin ID of the infra-agent-memory-gateway plugin, or "" if unavailable.
 // Result is cached for 60 seconds to avoid repeated discovery calls.
 func (r *relay) memoryPlugin() string {
 	r.memoryMu.RLock()
@@ -503,7 +512,7 @@ func (r *relay) emitProgress(sourcePlugin, channelID, taskGroupID, status, messa
 	payload["message"] = message
 
 	data, _ := json.Marshal(payload)
-	r.sdk.ReportAddressedEvent("relay:progress", string(data), sourcePlugin)
+	r.sdk.ReportAddressedEvent(events.RelayProgress, string(data), sourcePlugin)
 }
 
 // handleChat is the single entry point for all messages from messaging plugins.
@@ -1393,7 +1402,26 @@ func main() {
 
 	entries, err := sdkClient.FetchAliases()
 	if err != nil {
-		log.Printf("Initial alias fetch failed: %v (will update via alias-registry:ready event)", err)
+		log.Printf("Initial alias fetch failed: %v (retrying in background)", err)
+		// Retry in background — alias-registry or other deps may not be ready yet.
+		go func() {
+			for attempt := 1; attempt <= 30; attempt++ {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+				if attempt > 15 {
+					time.Sleep(30 * time.Second)
+				}
+				e, err := sdkClient.FetchAliases()
+				if err != nil {
+					continue
+				}
+				r.routes.SetAliases(alias.NewAliasMap(e))
+				log.Printf("Loaded %d aliases (after %d retries)", len(e), attempt)
+				// Also refresh personas since they likely failed too.
+				r.refreshPersonas()
+				return
+			}
+			log.Printf("WARNING: alias fetch never succeeded — relay has no aliases")
+		}()
 	} else {
 		r.routes.SetAliases(alias.NewAliasMap(entries))
 		log.Printf("Loaded %d aliases", len(entries))
@@ -1538,7 +1566,7 @@ func main() {
 			"status":        forwardStatus,
 			"message":       forwardMessage,
 		})
-		sdkClient.ReportAddressedEvent("relay:progress", string(payload), sourcePlugin)
+		sdkClient.ReportAddressedEvent(events.RelayProgress, string(payload), sourcePlugin)
 		log.Printf("relay: forwarded progress to %s channel=%s group=%s", sourcePlugin, channelID, taskGroupID)
 	}))
 
@@ -1596,7 +1624,7 @@ func main() {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		sdkClient.ReportEvent("relay:ready", "accepting chat requests")
+		events.PublishRelayReady(sdkClient)
 	}()
 
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
