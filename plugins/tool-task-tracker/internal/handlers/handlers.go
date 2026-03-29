@@ -185,6 +185,7 @@ func (h *Handler) ListBoards(c *gin.Context) {
 func (h *Handler) CreateBoard(c *gin.Context) {
 	var req struct {
 		Name        string `json:"name" binding:"required"`
+		Prefix      string `json:"prefix"`
 		Description string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -194,6 +195,7 @@ func (h *Handler) CreateBoard(c *gin.Context) {
 	b := &storage.Board{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
+		Prefix:      req.Prefix,
 		Description: req.Description,
 	}
 	if err := h.db.CreateBoard(b); err != nil {
@@ -220,6 +222,7 @@ func (h *Handler) UpdateBoard(c *gin.Context) {
 	}
 	var req struct {
 		Name        *string `json:"name"`
+		Prefix      *string `json:"prefix"`
 		Description *string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -228,6 +231,9 @@ func (h *Handler) UpdateBoard(c *gin.Context) {
 	}
 	if req.Name != nil {
 		b.Name = *req.Name
+	}
+	if req.Prefix != nil {
+		b.Prefix = *req.Prefix
 	}
 	if req.Description != nil {
 		b.Description = *req.Description
@@ -320,6 +326,91 @@ func (h *Handler) DeleteColumn(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// ── Epics ─────────────────────────────────────────────────────────────────────
+
+func (h *Handler) ListEpics(c *gin.Context) {
+	epics, err := h.db.ListEpics(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, epics)
+}
+
+func (h *Handler) CreateEpic(c *gin.Context) {
+	boardID := c.Param("id")
+	if _, err := h.db.GetBoard(boardID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", boardID)})
+		return
+	}
+	var req struct {
+		Name        string  `json:"name" binding:"required"`
+		Description string  `json:"description"`
+		Color       string  `json:"color"`
+		Position    float64 `json:"position"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	epic := &storage.Epic{
+		ID:          uuid.New().String(),
+		BoardID:     boardID,
+		Name:        req.Name,
+		Description: req.Description,
+		Color:       req.Color,
+		Position:    req.Position,
+	}
+	if err := h.db.CreateEpic(epic); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, epic)
+}
+
+func (h *Handler) UpdateEpic(c *gin.Context) {
+	epic, err := h.db.GetEpic(c.Param("eid"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("epic %q not found", c.Param("eid"))})
+		return
+	}
+	var req struct {
+		Name        *string  `json:"name"`
+		Description *string  `json:"description"`
+		Color       *string  `json:"color"`
+		Position    *float64 `json:"position"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Name != nil {
+		epic.Name = *req.Name
+	}
+	if req.Description != nil {
+		epic.Description = *req.Description
+	}
+	if req.Color != nil {
+		epic.Color = *req.Color
+	}
+	if req.Position != nil {
+		epic.Position = *req.Position
+	}
+	if err := h.db.UpdateEpic(epic); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, epic)
+}
+
+func (h *Handler) DeleteEpic(c *gin.Context) {
+	if err := h.db.DeleteEpic(c.Param("eid")); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 // ── Cards ─────────────────────────────────────────────────────────────────────
 
 func (h *Handler) ListCards(c *gin.Context) {
@@ -339,8 +430,10 @@ func (h *Handler) CreateCard(c *gin.Context) {
 	}
 	var req struct {
 		ColumnID      string  `json:"column_id" binding:"required"`
+		EpicID        string  `json:"epic_id"`
 		Title         string  `json:"title" binding:"required"`
 		Description   string  `json:"description"`
+		CardType      string  `json:"card_type"`
 		Priority      string  `json:"priority"`
 		AssigneeID    uint    `json:"assignee_id"`
 		AssigneeAgent string  `json:"assignee_agent"`
@@ -354,10 +447,13 @@ func (h *Handler) CreateCard(c *gin.Context) {
 	}
 	card := &storage.Card{
 		ID:            uuid.New().String(),
+		Number:        h.db.NextCardNumber(boardID),
 		BoardID:       boardID,
 		ColumnID:      req.ColumnID,
+		EpicID:        req.EpicID,
 		Title:         req.Title,
 		Description:   req.Description,
+		CardType:      req.CardType,
 		Priority:      req.Priority,
 		AssigneeID:    req.AssigneeID,
 		AssigneeAgent: req.AssigneeAgent,
@@ -384,8 +480,11 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 
 	var req struct {
 		ColumnID       *string  `json:"column_id"`
+		EpicID         *string  `json:"epic_id"`
+		ClearEpic      bool     `json:"clear_epic"`
 		Title          *string  `json:"title"`
 		Description    *string  `json:"description"`
+		CardType       *string  `json:"card_type"`
 		Priority       *string  `json:"priority"`
 		AssigneeID     *uint    `json:"assignee_id"`
 		AssigneeAgent  *string  `json:"assignee_agent"`
@@ -402,11 +501,19 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 	if req.ColumnID != nil {
 		card.ColumnID = *req.ColumnID
 	}
+	if req.ClearEpic {
+		card.EpicID = ""
+	} else if req.EpicID != nil {
+		card.EpicID = *req.EpicID
+	}
 	if req.Title != nil {
 		card.Title = *req.Title
 	}
 	if req.Description != nil {
 		card.Description = *req.Description
+	}
+	if req.CardType != nil {
+		card.CardType = *req.CardType
 	}
 	if req.Priority != nil {
 		card.Priority = *req.Priority
@@ -445,10 +552,40 @@ func (h *Handler) UpdateCard(c *gin.Context) {
 	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
 }
 
+func (h *Handler) SearchCards(c *gin.Context) {
+	boardID := c.Param("id")
+	query := c.Query("q")
+	if query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameter 'q' is required"})
+		return
+	}
+	cards, err := h.db.SearchCards(boardID, query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, h.enrichCards(c.Request.Context(), cards))
+}
+
 func (h *Handler) GetCard(c *gin.Context) {
 	card, err := h.db.GetCard(c.Param("cid"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card %q not found", c.Param("cid"))})
+		return
+	}
+	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
+}
+
+func (h *Handler) GetCardByNumber(c *gin.Context) {
+	boardID := c.Param("id")
+	num, err := strconv.ParseUint(c.Param("num"), 10, 64)
+	if err != nil || num == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid card number"})
+		return
+	}
+	card, err := h.db.GetCardByNumber(boardID, uint(num))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("card #%d not found in board %q", num, boardID)})
 		return
 	}
 	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
@@ -548,6 +685,60 @@ func (h *Handler) ToolDefs() interface{} {
 			},
 		},
 		{
+			"name":        "list_epics",
+			"description": "List all epics on a board",
+			"endpoint":    "/mcp/list_epics",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id": gin.H{"type": "string", "description": "ID of the board"},
+				},
+				"required": []string{"board_id"},
+			},
+		},
+		{
+			"name":        "create_epic",
+			"description": "Create a new epic to group tasks on a board",
+			"endpoint":    "/mcp/create_epic",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id":    gin.H{"type": "string", "description": "ID of the board"},
+					"name":        gin.H{"type": "string", "description": "Epic name"},
+					"description": gin.H{"type": "string", "description": "Epic description"},
+					"color":       gin.H{"type": "string", "description": "Hex color e.g. #4A90D9"},
+				},
+				"required": []string{"board_id", "name"},
+			},
+		},
+		{
+			"name":        "update_epic",
+			"description": "Update an existing epic",
+			"endpoint":    "/mcp/update_epic",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"epic_id":     gin.H{"type": "string", "description": "ID of the epic"},
+					"name":        gin.H{"type": "string", "description": "New name"},
+					"description": gin.H{"type": "string", "description": "New description"},
+					"color":       gin.H{"type": "string", "description": "New hex color"},
+				},
+				"required": []string{"epic_id"},
+			},
+		},
+		{
+			"name":        "delete_epic",
+			"description": "Delete an epic (cards are unlinked, not deleted)",
+			"endpoint":    "/mcp/delete_epic",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"epic_id": gin.H{"type": "string", "description": "ID of the epic to delete"},
+				},
+				"required": []string{"epic_id"},
+			},
+		},
+		{
 			"name":        "create_task",
 			"description": "Create a new task (card) in a kanban board column",
 			"endpoint":    "/mcp/create_task",
@@ -556,8 +747,10 @@ func (h *Handler) ToolDefs() interface{} {
 				"properties": gin.H{
 					"board_id":       gin.H{"type": "string", "description": "ID of the board"},
 					"column_id":      gin.H{"type": "string", "description": "ID of the column (state) to place the task in"},
+					"epic_id":        gin.H{"type": "string", "description": "ID of the epic to group this task under (optional)"},
 					"title":          gin.H{"type": "string", "description": "Task title"},
 					"description":    gin.H{"type": "string", "description": "Task description"},
+					"card_type":      gin.H{"type": "string", "description": "Card type: task or bug", "enum": []string{"task", "bug"}},
 					"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
 					"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
 					"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
@@ -589,13 +782,28 @@ func (h *Handler) ToolDefs() interface{} {
 					"card_id":        gin.H{"type": "string", "description": "ID of the task/card"},
 					"title":          gin.H{"type": "string", "description": "New title"},
 					"description":    gin.H{"type": "string", "description": "New description"},
+					"card_type":      gin.H{"type": "string", "description": "Card type: task or bug", "enum": []string{"task", "bug"}},
 					"priority":       gin.H{"type": "string", "description": "Priority: low, medium, high, urgent", "enum": []string{"", "low", "medium", "high", "urgent"}},
 					"assignee_id":    gin.H{"type": "integer", "description": "User ID of assignee"},
 					"assignee_agent": gin.H{"type": "string", "description": "Agent alias to assign (e.g. @relay)"},
 					"labels":         gin.H{"type": "string", "description": "Comma-separated labels"},
 					"column_id":      gin.H{"type": "string", "description": "Move to this column"},
+					"epic_id":        gin.H{"type": "string", "description": "Move to this epic (empty string to unlink)"},
 				},
 				"required": []string{"card_id"},
+			},
+		},
+		{
+			"name":        "search_tasks",
+			"description": "Search tasks by title, description, or labels substring",
+			"endpoint":    "/mcp/search_tasks",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id": gin.H{"type": "string", "description": "ID of the board"},
+					"query":    gin.H{"type": "string", "description": "Search substring to match against title, description, and labels"},
+				},
+				"required": []string{"board_id", "query"},
 			},
 		},
 		{
@@ -638,6 +846,100 @@ func (h *Handler) MCPListBoards(c *gin.Context) {
 		result = append(result, boardWithColumns{Board: b, Columns: cols})
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+func (h *Handler) MCPListEpics(c *gin.Context) {
+	var req struct {
+		BoardID string `json:"board_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	epics, err := h.db.ListEpics(req.BoardID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, epics)
+}
+
+func (h *Handler) MCPCreateEpic(c *gin.Context) {
+	var req struct {
+		BoardID     string  `json:"board_id" binding:"required"`
+		Name        string  `json:"name" binding:"required"`
+		Description string  `json:"description"`
+		Color       string  `json:"color"`
+		Position    float64 `json:"position"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.db.GetBoard(req.BoardID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", req.BoardID)})
+		return
+	}
+	epic := &storage.Epic{
+		ID:          uuid.New().String(),
+		BoardID:     req.BoardID,
+		Name:        req.Name,
+		Description: req.Description,
+		Color:       req.Color,
+		Position:    req.Position,
+	}
+	if err := h.db.CreateEpic(epic); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, epic)
+}
+
+func (h *Handler) MCPUpdateEpic(c *gin.Context) {
+	var req struct {
+		EpicID      string  `json:"epic_id" binding:"required"`
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+		Color       *string `json:"color"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	epic, err := h.db.GetEpic(req.EpicID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("epic %q not found", req.EpicID)})
+		return
+	}
+	if req.Name != nil {
+		epic.Name = *req.Name
+	}
+	if req.Description != nil {
+		epic.Description = *req.Description
+	}
+	if req.Color != nil {
+		epic.Color = *req.Color
+	}
+	if err := h.db.UpdateEpic(epic); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, epic)
+}
+
+func (h *Handler) MCPDeleteEpic(c *gin.Context) {
+	var req struct {
+		EpicID string `json:"epic_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.db.DeleteEpic(req.EpicID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (h *Handler) MCPListTasks(c *gin.Context) {
@@ -712,8 +1014,10 @@ func (h *Handler) MCPCreateTask(c *gin.Context) {
 	var req struct {
 		BoardID       string  `json:"board_id" binding:"required"`
 		ColumnID      string  `json:"column_id" binding:"required"`
+		EpicID        string  `json:"epic_id"`
 		Title         string  `json:"title" binding:"required"`
 		Description   string  `json:"description"`
+		CardType      string  `json:"card_type"`
 		Priority      string  `json:"priority"`
 		AssigneeID    uint    `json:"assignee_id"`
 		AssigneeAgent string  `json:"assignee_agent"`
@@ -731,10 +1035,13 @@ func (h *Handler) MCPCreateTask(c *gin.Context) {
 	}
 	card := &storage.Card{
 		ID:            uuid.New().String(),
+		Number:        h.db.NextCardNumber(req.BoardID),
 		BoardID:       req.BoardID,
 		ColumnID:      req.ColumnID,
+		EpicID:        req.EpicID,
 		Title:         req.Title,
 		Description:   req.Description,
+		CardType:      req.CardType,
 		Priority:      req.Priority,
 		AssigneeID:    req.AssigneeID,
 		AssigneeAgent: req.AssigneeAgent,
@@ -776,8 +1083,10 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 	var req struct {
 		CardID        string   `json:"card_id" binding:"required"`
 		ColumnID      *string  `json:"column_id"`
+		EpicID        *string  `json:"epic_id"`
 		Title         *string  `json:"title"`
 		Description   *string  `json:"description"`
+		CardType      *string  `json:"card_type"`
 		Priority      *string  `json:"priority"`
 		AssigneeID    *uint    `json:"assignee_id"`
 		AssigneeAgent *string  `json:"assignee_agent"`
@@ -801,11 +1110,17 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 	if req.ColumnID != nil {
 		card.ColumnID = *req.ColumnID
 	}
+	if req.EpicID != nil {
+		card.EpicID = *req.EpicID
+	}
 	if req.Title != nil {
 		card.Title = *req.Title
 	}
 	if req.Description != nil {
 		card.Description = *req.Description
+	}
+	if req.CardType != nil {
+		card.CardType = *req.CardType
 	}
 	if req.Priority != nil {
 		card.Priority = *req.Priority
@@ -837,6 +1152,23 @@ func (h *Handler) MCPUpdateTask(c *gin.Context) {
 		h.emitAssign(c.Request.Context(), card)
 	}
 	c.JSON(http.StatusOK, h.enrichCard(c.Request.Context(), card))
+}
+
+func (h *Handler) MCPSearchTasks(c *gin.Context) {
+	var req struct {
+		BoardID string `json:"board_id" binding:"required"`
+		Query   string `json:"query" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cards, err := h.db.SearchCards(req.BoardID, req.Query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, h.enrichCards(c.Request.Context(), cards))
 }
 
 func (h *Handler) MCPAddComment(c *gin.Context) {

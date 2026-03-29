@@ -75,14 +75,22 @@ func main() {
 	router.PUT("/boards/:id/columns/:cid", h.UpdateColumn)
 	router.DELETE("/boards/:id/columns/:cid", h.DeleteColumn)
 
+	// Epics (nested under board)
+	router.GET("/boards/:id/epics", h.ListEpics)
+	router.POST("/boards/:id/epics", h.CreateEpic)
+	router.PUT("/boards/:id/epics/:eid", h.UpdateEpic)
+	router.DELETE("/boards/:id/epics/:eid", h.DeleteEpic)
+
 	// Cards (nested under board)
+	router.GET("/boards/:id/cards/search", h.SearchCards)
 	router.GET("/boards/:id/cards", h.ListCards)
 	router.POST("/boards/:id/cards", h.CreateCard)
 	router.PUT("/boards/:id/cards/:cid", h.UpdateCard)
 	router.DELETE("/boards/:id/cards/:cid", h.DeleteCard)
 
-	// Single card by ID
+	// Single card by ID or by board+number
 	router.GET("/cards/:cid", h.GetCard)
+	router.GET("/boards/:id/cards/number/:num", h.GetCardByNumber)
 
 	// Comments (nested under card)
 	router.GET("/cards/:cid/comments", h.ListComments)
@@ -92,11 +100,16 @@ func main() {
 	// MCP tool discovery + execution
 	router.GET("/mcp", h.GetTools)
 	router.POST("/mcp/list_boards", h.MCPListBoards)
+	router.POST("/mcp/list_epics", h.MCPListEpics)
+	router.POST("/mcp/create_epic", h.MCPCreateEpic)
+	router.POST("/mcp/update_epic", h.MCPUpdateEpic)
+	router.POST("/mcp/delete_epic", h.MCPDeleteEpic)
 	router.POST("/mcp/list_tasks", h.MCPListTasks)
 	router.POST("/mcp/list_tasks_by_status", h.MCPListTasksByStatus)
 	router.POST("/mcp/create_task", h.MCPCreateTask)
 	router.POST("/mcp/set_task_state", h.MCPSetTaskState)
 	router.POST("/mcp/update_task", h.MCPUpdateTask)
+	router.POST("/mcp/search_tasks", h.MCPSearchTasks)
 	router.POST("/mcp/add_comment", h.MCPAddComment)
 
 	server := &http.Server{
