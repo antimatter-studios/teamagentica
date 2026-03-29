@@ -120,6 +120,8 @@ func main() {
 		authGroup.POST("/register", registerLimiter.Middleware(), middleware.AuthOptional(), authProxy)
 		authGroup.POST("/login", loginLimiter.Middleware(), authProxy)
 		authGroup.POST("/session", middleware.AuthRequired(), authProxy)
+		authGroup.POST("/refresh", loginLimiter.Middleware(), authProxy)
+		authGroup.POST("/logout", middleware.AuthRequired(), authProxy)
 	}
 	serviceTokenGroup := r.Group("/api/auth")
 	serviceTokenGroup.Use(middleware.AuthRequired())

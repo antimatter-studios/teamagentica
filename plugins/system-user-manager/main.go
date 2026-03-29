@@ -104,6 +104,8 @@ func main() {
 	router.POST("/auth/login", h.Login)
 	router.POST("/auth/register", h.Register)
 	router.POST("/auth/session", h.CreateSession)
+	router.POST("/auth/refresh", h.RefreshAccessToken)
+	router.POST("/auth/logout", h.Logout)
 
 	// Service tokens (admin only — kernel enforces auth before proxying)
 	router.POST("/auth/service-token", h.CreateServiceToken)

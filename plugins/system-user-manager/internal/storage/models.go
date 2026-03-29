@@ -40,6 +40,17 @@ type ServiceToken struct {
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
+// RefreshToken stores hashed refresh tokens for JWT renewal.
+type RefreshToken struct {
+	ID        uint           `json:"id" gorm:"primaryKey"`
+	UserID    uint           `json:"user_id" gorm:"index;not null"`
+	TokenHash string         `json:"-" gorm:"not null;uniqueIndex"`
+	ExpiresAt time.Time      `json:"expires_at"`
+	Revoked   bool           `json:"revoked" gorm:"default:false"`
+	CreatedAt time.Time      `json:"created_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
 // AuditLog records security-relevant events.
 type AuditLog struct {
 	ID        uint           `json:"id" gorm:"primaryKey"`

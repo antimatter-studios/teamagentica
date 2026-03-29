@@ -27,8 +27,31 @@ type loginRequest struct {
 }
 
 type authResponse struct {
-	Token string       `json:"token"`
-	User  storage.User `json:"user"`
+	Token        string       `json:"token"`
+	RefreshToken string       `json:"refresh_token,omitempty"`
+	User         storage.User `json:"user"`
+}
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+// issueRefreshToken creates and persists a refresh token for the given user,
+// returning the raw token to send to the client.
+func (h *Handler) issueRefreshToken(userID uint) (string, error) {
+	raw, hash, err := auth.GenerateRefreshToken()
+	if err != nil {
+		return "", err
+	}
+	rt := storage.RefreshToken{
+		UserID:    userID,
+		TokenHash: hash,
+		ExpiresAt: time.Now().Add(auth.RefreshTokenExpiry()),
+	}
+	if err := h.db.CreateRefreshToken(&rt); err != nil {
+		return "", err
+	}
+	return raw, nil
 }
 
 // Register handles POST /auth/register.
@@ -97,7 +120,9 @@ func (h *Handler) Register(c *gin.Context) {
 
 	events.PublishUserRegistered(h.sdk, int(user.ID), user.Email)
 
-	c.JSON(http.StatusCreated, authResponse{Token: token, User: user})
+	refreshToken, _ := h.issueRefreshToken(user.ID)
+
+	c.JSON(http.StatusCreated, authResponse{Token: token, RefreshToken: refreshToken, User: user})
 }
 
 // Login handles POST /auth/login.
@@ -150,7 +175,9 @@ func (h *Handler) Login(c *gin.Context) {
 		fmt.Sprintf("user:%d", user.ID), "",
 		c.ClientIP(), true)
 
-	c.JSON(http.StatusOK, authResponse{Token: token, User: *user})
+	refreshToken, _ := h.issueRefreshToken(user.ID)
+
+	c.JSON(http.StatusOK, authResponse{Token: token, RefreshToken: refreshToken, User: *user})
 }
 
 // CreateSession sets an HttpOnly session cookie containing the caller's JWT.
@@ -265,6 +292,62 @@ func (h *Handler) ListServiceTokens(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"tokens": tokens})
+}
+
+// RefreshAccessToken handles POST /auth/refresh.
+// Validates the refresh token and issues a new access token (+ new refresh token).
+func (h *Handler) RefreshAccessToken(c *gin.Context) {
+	var req refreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	hashBytes := sha256.Sum256([]byte(req.RefreshToken))
+	hash := fmt.Sprintf("%x", hashBytes)
+
+	rt, err := h.db.GetRefreshTokenByHash(hash)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
+		return
+	}
+
+	// Revoke the used refresh token (single-use rotation).
+	_ = h.db.RevokeRefreshToken(rt.ID)
+
+	user, err := h.db.GetUserByID(rt.UserID)
+	if err != nil || user.Banned {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "account unavailable"})
+		return
+	}
+
+	token, err := auth.GenerateToken(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+
+	newRefresh, _ := h.issueRefreshToken(user.ID)
+
+	h.audit.LogUserAction(user.ID, "auth.refresh",
+		fmt.Sprintf("user:%d", user.ID), "",
+		c.ClientIP(), true)
+
+	c.JSON(http.StatusOK, authResponse{Token: token, RefreshToken: newRefresh, User: *user})
+}
+
+// Logout handles POST /auth/logout — revokes all refresh tokens for the user.
+func (h *Handler) Logout(c *gin.Context) {
+	var userID uint
+	if uid := c.GetHeader("X-User-ID"); uid != "" {
+		fmt.Sscanf(uid, "%d", &userID)
+	}
+	if userID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing user"})
+		return
+	}
+	_ = h.db.RevokeUserRefreshTokens(userID)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // RevokeServiceToken handles DELETE /auth/service-token/:id.

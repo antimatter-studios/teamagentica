@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -20,7 +21,7 @@ type DB struct {
 
 // Open creates or opens the SQLite database at dataPath/users.db.
 func Open(dataPath string) (*DB, error) {
-	conn, err := pluginsdk.OpenDatabase(dataPath, "users.db", &Setting{}, &User{}, &ServiceToken{}, &AuditLog{}, &ExternalUser{})
+	conn, err := pluginsdk.OpenDatabase(dataPath, "users.db", &Setting{}, &User{}, &ServiceToken{}, &RefreshToken{}, &AuditLog{}, &ExternalUser{})
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +141,33 @@ func (d *DB) RevokeServiceToken(id uint) error {
 		return err
 	}
 	return d.db.Model(&token).Update("revoked", true).Error
+}
+
+// --- RefreshToken operations ---
+
+// CreateRefreshToken inserts a new refresh token record.
+func (d *DB) CreateRefreshToken(rt *RefreshToken) error {
+	return d.db.Create(rt).Error
+}
+
+// GetRefreshTokenByHash looks up a non-revoked, non-expired refresh token.
+func (d *DB) GetRefreshTokenByHash(hash string) (*RefreshToken, error) {
+	var rt RefreshToken
+	err := d.db.Where("token_hash = ? AND revoked = ? AND expires_at > ?", hash, false, time.Now()).First(&rt).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &rt, err
+}
+
+// RevokeRefreshToken marks a single refresh token as revoked.
+func (d *DB) RevokeRefreshToken(id uint) error {
+	return d.db.Model(&RefreshToken{}).Where("id = ?", id).Update("revoked", true).Error
+}
+
+// RevokeUserRefreshTokens revokes all refresh tokens for a user.
+func (d *DB) RevokeUserRefreshTokens(userID uint) error {
+	return d.db.Model(&RefreshToken{}).Where("user_id = ? AND revoked = ?", userID, false).Update("revoked", true).Error
 }
 
 // --- AuditLog operations ---

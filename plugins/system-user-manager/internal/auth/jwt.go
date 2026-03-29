@@ -1,7 +1,11 @@
 package auth
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -11,6 +15,7 @@ import (
 
 var jwtSecret []byte
 var tokenExpiry = 24 * time.Hour
+var refreshTokenExpiry = 30 * 24 * time.Hour
 
 // InitJWT sets the signing key and optional expiry for all token operations.
 func InitJWT(secret string, expiryHours int) {
@@ -63,6 +68,24 @@ func GenerateServiceToken(name string, capabilities []string, expiresIn time.Dur
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)
+}
+
+// GenerateRefreshToken creates a random opaque refresh token and returns
+// the raw token (for the client) and its SHA-256 hash (for DB storage).
+func GenerateRefreshToken() (raw string, hash string, err error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", err
+	}
+	raw = hex.EncodeToString(b)
+	h := sha256.Sum256([]byte(raw))
+	hash = fmt.Sprintf("%x", h)
+	return raw, hash, nil
+}
+
+// RefreshTokenExpiry returns the configured refresh token lifetime.
+func RefreshTokenExpiry() time.Duration {
+	return refreshTokenExpiry
 }
 
 // ValidateToken parses and validates the token string, returning the claims.
