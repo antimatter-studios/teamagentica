@@ -47,6 +47,25 @@ def load_env_file():
     logger.info("Loaded config from %s", ENV_FILE)
 
 
+def _detect_existing_dims() -> int:
+    """Check for an existing memories_NNN collection on disk and return its dimensions.
+    Returns 0 if no collection exists (first run)."""
+    import pathlib
+    qdrant_path = pathlib.Path(QDRANT_PATH) / "collection"
+    if not qdrant_path.is_dir():
+        return 0
+    for entry in qdrant_path.iterdir():
+        if entry.is_dir() and entry.name.startswith("memories_"):
+            try:
+                dims = int(entry.name.split("_", 1)[1])
+                if dims > 0:
+                    logger.info("Reusing existing collection dimensions: %d (from %s)", dims, entry.name)
+                    return dims
+            except ValueError:
+                continue
+    return 0
+
+
 def _detect_embedding_dims(embedder_config: dict, provider: str, base_url: str) -> int:
     """Probe the embedding endpoint to discover vector dimensions.
 
@@ -130,12 +149,12 @@ def build_config() -> dict:
         else:
             embedder_config["openai_base_url"] = embedder_base_url
 
-    # Auto-detect embedding dimensions by sending a probe request.
-    # This must also be set on the embedder config so Mem0's OpenAI SDK
-    # passes the correct `dimensions` parameter when creating embeddings.
-    # This blocks until the embedding endpoint is available — starting with
-    # wrong dimensions would create a wrong collection and lose data.
-    embed_dims = _detect_embedding_dims(embedder_config, embedder_provider, embedder_base_url)
+    # Try to reuse dimensions from an existing collection on disk before probing.
+    # This avoids blocking startup when the embedder is unavailable.
+    embed_dims = _detect_existing_dims()
+    if embed_dims == 0:
+        # No existing collection — must probe to discover dimensions.
+        embed_dims = _detect_embedding_dims(embedder_config, embedder_provider, embedder_base_url)
 
     # Tell Mem0's embedder the correct dimensions so it passes them
     # to the OpenAI SDK (which forwards as `dimensions` parameter).
@@ -351,18 +370,28 @@ def _init_memory():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _init_memory()
+    # Initialize Mem0 in a background thread so the server starts immediately.
+    # Endpoints return 503 until memory_client is ready.
+    t = threading.Thread(target=_init_memory, daemon=True)
+    t.start()
     yield
 
 
 app = FastAPI(title="Mem0 Memory Server", lifespan=lifespan)
 
 
+def _require_memory():
+    """Raise 503 if Mem0 is not yet initialized (embedder still probing)."""
+    if memory_client is None:
+        raise HTTPException(status_code=503, detail="Mem0 initializing — embedder not yet available")
+
+
 # ── Health ───────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def health():
-    return {"status": "healthy", "service": "mem0"}
+    ready = memory_client is not None
+    return {"status": "healthy" if ready else "initializing", "service": "mem0", "ready": ready}
 
 
 # ── Hot reload ───────────────────────────────────────────────────────────────────
@@ -371,6 +400,7 @@ async def health():
 async def reload_config():
     """Reinitialize Mem0 with updated config from env file.
     Called by the Go sidecar when kernel config changes."""
+    _require_memory()
     current = _config_hash()
     if current == _current_config_hash and current != "":
         return {"status": "no_change", "config_hash": current}
@@ -389,6 +419,7 @@ async def migration_status():
 
 @app.post("/v1/memories/")
 async def add_memories(request: Request):
+    _require_memory()
     body = await request.json()
     messages = body.get("messages", [])
     if not messages:
@@ -407,6 +438,7 @@ async def add_memories(request: Request):
 
 @app.post("/v1/memories/search/")
 async def search_memories(request: Request):
+    _require_memory()
     body = await request.json()
     query = body.get("query", "")
     if not query:
@@ -433,6 +465,7 @@ async def count_memories(
     run_id: str = None,
 ):
     """Return total memory count. Uses a high limit to count all."""
+    _require_memory()
     kwargs = {}
     if user_id:
         kwargs["user_id"] = user_id
@@ -458,6 +491,7 @@ async def list_memories(
     page: int = None,
     page_size: int = None,
 ):
+    _require_memory()
     kwargs = {}
     if user_id:
         kwargs["user_id"] = user_id
@@ -490,6 +524,7 @@ async def list_memories(
 
 @app.get("/v1/memories/{memory_id}/")
 async def get_memory(memory_id: str):
+    _require_memory()
     result = memory_client.get(memory_id)
     if not result:
         raise HTTPException(status_code=404, detail="memory not found")
@@ -498,6 +533,7 @@ async def get_memory(memory_id: str):
 
 @app.put("/v1/memories/{memory_id}/")
 async def update_memory(memory_id: str, request: Request):
+    _require_memory()
     body = await request.json()
     text = body.get("text", "")
     if not text:
@@ -508,12 +544,14 @@ async def update_memory(memory_id: str, request: Request):
 
 @app.delete("/v1/memories/{memory_id}/")
 async def delete_memory(memory_id: str):
+    _require_memory()
     memory_client.delete(memory_id)
     return {"status": "deleted"}
 
 
 @app.delete("/v1/memories/")
 async def delete_all_memories(request: Request):
+    _require_memory()
     body = await request.json()
     kwargs = {}
     for key in ("user_id", "agent_id", "app_id", "run_id"):
@@ -529,6 +567,7 @@ async def delete_all_memories(request: Request):
 
 @app.get("/v1/entities/")
 async def list_entities():
+    _require_memory()
     # Mem0 OSS doesn't have a direct list_entities; return empty for now.
     # The cloud API supports this but self-hosted may not.
     try:
@@ -541,6 +580,7 @@ async def list_entities():
 
 @app.delete("/v1/entities/{entity_type}/{entity_id}/")
 async def delete_entity(entity_type: str, entity_id: str):
+    _require_memory()
     kwargs = {f"{entity_type}_id": entity_id}
     memory_client.delete_all(**kwargs)
     return {"status": "deleted"}

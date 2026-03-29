@@ -298,6 +298,8 @@ func fetchPersona(sdk *pluginsdk.Client, aliasName string) *pluginsdk.PersonaInf
 }
 
 // applyConfig resolves alias selections and writes mem0.env for the Python server.
+// If aliases can't be resolved (e.g. alias-registry not ready yet), it schedules
+// background retries so the plugin starts immediately and self-heals.
 func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]string, sidecarPort, mem0Port int) {
 	llmAlias := config["MEM0_LLM_ALIAS"]
 	embedderAlias := config["MEM0_EMBEDDER_ALIAS"]
@@ -307,22 +309,20 @@ func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]st
 	if llmAlias != "" {
 		proxy.setLLMAliasName(llmAlias)
 
-		// Resolve once for initial config (Mem0 env file needs a model name).
-		// Live requests will re-resolve via resolveLLM().
 		persona := fetchPersona(sdk, llmAlias)
 		if persona != nil {
 			log.Printf("[config] persona %q detected (%d char prompt), resolving via backend_alias %q",
 				llmAlias, len(persona.SystemPrompt), persona.BackendAlias)
 			resolved, err := resolveAlias(sdk, persona.BackendAlias)
 			if err != nil {
-				log.Printf("[config] failed to resolve persona backend_alias %q: %v", persona.BackendAlias, err)
+				log.Printf("[config] LLM alias %q not yet available: %v — will retry in background", persona.BackendAlias, err)
 			} else {
 				llm = resolved
 			}
 		} else {
 			resolved, err := resolveAlias(sdk, llmAlias)
 			if err != nil {
-				log.Printf("[config] failed to resolve LLM alias %q: %v", llmAlias, err)
+				log.Printf("[config] LLM alias %q not yet available: %v — will retry in background", llmAlias, err)
 			} else {
 				llm = resolved
 			}
@@ -332,35 +332,91 @@ func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]st
 	if embedderAlias != "" {
 		resolved, err := resolveAlias(sdk, embedderAlias)
 		if err != nil {
-			log.Printf("[config] failed to resolve embedder alias %q: %v", embedderAlias, err)
+			log.Printf("[config] embedder alias %q not yet available: %v — will retry in background", embedderAlias, err)
 		} else {
 			embedder = resolved
 		}
 	}
 
-	if llm.Plugin == "" {
-		log.Printf("[config] ERROR: no LLM configured — set MEM0_LLM_ALIAS in plugin config")
-		return
-	}
-	if embedder.Plugin == "" {
-		log.Printf("[config] ERROR: no embedder configured — set MEM0_EMBEDDER_ALIAS in plugin config")
-		return
+	// Apply whatever we resolved so far.
+	if llm.Plugin != "" || embedder.Plugin != "" {
+		proxy.setTargets(llm, embedder)
 	}
 
-	proxy.setTargets(llm, embedder)
+	// Write env file with whatever we have (Python server can start with existing config).
+	writeMemEnv(llm, embedder, config, sidecarPort, mem0Port)
 
-	// Mem0 uses "openai" provider pointing at the internal plain-HTTP proxy
-	// (sidecarPort+1), not the mTLS main port.
+	// If either alias is missing, retry in background until resolved.
+	if llm.Plugin == "" || embedder.Plugin == "" {
+		go retryAliasResolution(sdk, proxy, config, sidecarPort, mem0Port)
+	}
+}
+
+// retryAliasResolution retries alias resolution with exponential backoff.
+func retryAliasResolution(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]string, sidecarPort, mem0Port int) {
+	llmAlias := config["MEM0_LLM_ALIAS"]
+	embedderAlias := config["MEM0_EMBEDDER_ALIAS"]
+	delay := 2 * time.Second
+
+	for attempt := 1; attempt <= 30; attempt++ {
+		time.Sleep(delay)
+		if delay < 30*time.Second {
+			delay = delay * 3 / 2 // 2s, 3s, 4.5s, 6.75s, ...
+		}
+
+		var llm, embedder aliasTarget
+		allResolved := true
+
+		if llmAlias != "" {
+			persona := fetchPersona(sdk, llmAlias)
+			target := llmAlias
+			if persona != nil {
+				target = persona.BackendAlias
+			}
+			resolved, err := resolveAlias(sdk, target)
+			if err != nil {
+				allResolved = false
+			} else {
+				llm = resolved
+			}
+		}
+
+		if embedderAlias != "" {
+			resolved, err := resolveAlias(sdk, embedderAlias)
+			if err != nil {
+				allResolved = false
+			} else {
+				embedder = resolved
+			}
+		}
+
+		if llm.Plugin != "" || embedder.Plugin != "" {
+			proxy.setTargets(llm, embedder)
+			writeMemEnv(llm, embedder, config, sidecarPort, mem0Port)
+			log.Printf("[config] alias retry %d: llm=%s/%s embedder=%s/%s",
+				attempt, llm.Plugin, llm.Model, embedder.Plugin, embedder.Model)
+		}
+
+		if allResolved {
+			log.Printf("[config] all aliases resolved on retry %d", attempt)
+			return
+		}
+	}
+	log.Printf("[config] WARNING: gave up retrying alias resolution after 30 attempts")
+}
+
+// writeMemEnv writes the mem0.env configuration file for the Python server.
+func writeMemEnv(llm, embedder aliasTarget, config map[string]string, sidecarPort, mem0Port int) {
 	localBase := fmt.Sprintf("http://localhost:%d", sidecarPort+1)
 	env := map[string]string{
-		"MEM0_LLM_PROVIDER":     "openai",
-		"MEM0_LLM_MODEL":        llm.Model,
-		"MEM0_LLM_BASE_URL":     localBase + "/memory-api/llm/v1",
-		"MEM0_LLM_API_KEY":      "not-needed",
-		"MEM0_EMBEDDER_PROVIDER": "openai",
-		"MEM0_EMBEDDER_MODEL":    embedder.Model,
-		"MEM0_EMBEDDER_BASE_URL": localBase + "/memory-api/embedder/v1",
-		"MEM0_EMBEDDER_API_KEY":  "not-needed",
+		"MEM0_LLM_PROVIDER":      "openai",
+		"MEM0_LLM_MODEL":         llm.Model,
+		"MEM0_LLM_BASE_URL":      localBase + "/memory-api/llm/v1",
+		"MEM0_LLM_API_KEY":       "not-needed",
+		"MEM0_EMBEDDER_PROVIDER":  "openai",
+		"MEM0_EMBEDDER_MODEL":     embedder.Model,
+		"MEM0_EMBEDDER_BASE_URL":  localBase + "/memory-api/embedder/v1",
+		"MEM0_EMBEDDER_API_KEY":   "not-needed",
 	}
 
 	var lines []string
@@ -376,7 +432,7 @@ func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]st
 
 	if err := os.WriteFile("/data/mem0.env", []byte(content), 0644); err != nil {
 		log.Printf("WARNING: failed to write /data/mem0.env: %v", err)
-	} else {
+	} else if llm.Plugin != "" && embedder.Plugin != "" {
 		log.Printf("[mem0] config: llm=%s/%s (alias=%s) embedder=%s/%s (alias=%s)",
 			llm.Plugin, llm.Model, config["MEM0_LLM_ALIAS"],
 			embedder.Plugin, embedder.Model, config["MEM0_EMBEDDER_ALIAS"])
