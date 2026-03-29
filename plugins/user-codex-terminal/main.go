@@ -79,7 +79,11 @@ func getConfigSchema() map[string]pluginsdk.ConfigSchemaField {
 			Type:     "select",
 			Label:    "Approval Mode",
 			Default:  "suggest",
-			Options:  []string{"suggest", "auto-edit", "full-auto"},
+			Options: []pluginsdk.SelectOption{
+				{Label: "Suggest", Value: "suggest"},
+				{Label: "Auto-Edit", Value: "auto-edit"},
+				{Label: "Full Auto", Value: "full-auto"},
+			},
 			HelpText: "suggest: asks before everything, auto-edit: auto-approves file changes, full-auto: auto-approves everything",
 			Order:    1,
 		},
