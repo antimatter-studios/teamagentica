@@ -31,7 +31,6 @@ type PluginHandler struct {
 	clientTLS *tls.Config
 	transport *http.Transport // shared transport for all outbound plugin requests
 	Events    *events.Hub
-	Subs      *events.SubscriptionManager
 }
 
 func (h *PluginHandler) db() *gorm.DB { return database.Get() }
@@ -47,7 +46,77 @@ func NewPluginHandler(rt runtime.ContainerRuntime, cfg *config.Config, clientTLS
 	if clientTLS != nil {
 		t.TLSClientConfig = clientTLS
 	}
-	return &PluginHandler{runtime: rt, cfg: cfg, clientTLS: clientTLS, transport: t, Events: events.NewHub(), Subs: events.NewPersistentSubscriptionManager()}
+	return &PluginHandler{runtime: rt, cfg: cfg, clientTLS: clientTLS, transport: t, Events: events.NewHub()}
+}
+
+// broadcastLifecycleEvent sends a lifecycle event to all running plugins via
+// direct HTTP POST to their event ports. This is NOT via Redis — it's a
+// kernel-direct notification so plugins can maintain their peer address caches
+// even when the event bus is unavailable.
+func (h *PluginHandler) broadcastLifecycleEvent(payload interface{}) {
+	var plugins []models.Plugin
+	h.db().Select("id", "host", "http_port", "event_port").
+		Where("status = ? AND host != ''", "running").
+		Find(&plugins)
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second, Transport: h.transport}
+
+	for _, p := range plugins {
+		port := p.EventPort
+		if port == 0 {
+			port = p.HTTPPort
+		}
+		scheme := "http"
+		if h.clientTLS != nil {
+			scheme = "https"
+		}
+		url := fmt.Sprintf("%s://%s:%d/sdk/lifecycle", scheme, p.Host, port)
+
+		go func(url string) {
+			req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(data)))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			resp.Body.Close()
+		}(url)
+	}
+}
+
+// broadcastRegistrySync sends the full plugin address registry to all running
+// plugins. Called on kernel startup to ensure all plugins have current addresses.
+func (h *PluginHandler) BroadcastRegistrySync() {
+	var plugins []models.Plugin
+	h.db().Select("id", "host", "http_port", "event_port", "status").
+		Where("status = ? AND host != ''", "running").
+		Find(&plugins)
+
+	registry := make([]map[string]interface{}, 0, len(plugins))
+	for _, p := range plugins {
+		registry = append(registry, map[string]interface{}{
+			"id":         p.ID,
+			"host":       p.Host,
+			"http_port":  p.HTTPPort,
+			"event_port": p.EventPort,
+		})
+	}
+
+	payload := map[string]interface{}{
+		"type":     "plugin:registry-sync",
+		"registry": registry,
+	}
+
+	h.broadcastLifecycleEvent(payload)
+	log.Printf("kernel: broadcast registry-sync to %d plugins", len(plugins))
 }
 
 // stripHTMLTags removes all HTML tags from a string to prevent XSS.
@@ -156,6 +225,77 @@ func (h *PluginHandler) GetPlugin(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"plugin": plugin})
+}
+
+// GetPluginStatus handles GET /api/plugins/:id/status — lightweight endpoint
+// returning only the plugin's current operational state. Fed by the heartbeat
+// system and kernel lifecycle events (start/stop). Designed for cheap polling
+// by the SDK to check dependency readiness without fetching the full plugin object.
+func (h *PluginHandler) GetPluginStatus(c *gin.Context) {
+	id := c.Param("id")
+
+	var plugin models.Plugin
+	if result := h.db().Select("id", "status", "last_seen", "enabled").First(&plugin, "id = ?", id); result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":        plugin.ID,
+		"status":    plugin.Status,
+		"last_seen": plugin.LastSeen,
+		"enabled":   plugin.Enabled,
+	})
+}
+
+// GetPluginAddress handles GET /api/plugins/:id/address — returns the host and
+// port of a running plugin for direct peer-to-peer communication. Used by the
+// SDK PeerRegistry to resolve addresses on cache miss.
+func (h *PluginHandler) GetPluginAddress(c *gin.Context) {
+	id := c.Param("id")
+
+	var plugin models.Plugin
+	if result := h.db().Select("id", "host", "http_port", "event_port", "status").First(&plugin, "id = ?", id); result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
+		return
+	}
+
+	if plugin.Status != "running" || plugin.Host == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":  fmt.Sprintf("plugin %q is not running", id),
+			"status": plugin.Status,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":         plugin.ID,
+		"host":       plugin.Host,
+		"http_port":  plugin.HTTPPort,
+		"event_port": plugin.EventPort,
+	})
+}
+
+// GetPluginRegistry handles GET /api/plugins/registry — returns all running
+// plugin addresses for bulk cache population (used on plugin startup and after
+// kernel restart via plugin:registry-sync).
+func (h *PluginHandler) GetPluginRegistry(c *gin.Context) {
+	var plugins []models.Plugin
+	h.db().Select("id", "host", "http_port", "event_port", "status").
+		Where("status = ? AND host != ''", "running").
+		Find(&plugins)
+
+	entries := make([]gin.H, 0, len(plugins))
+	for _, p := range plugins {
+		entries = append(entries, gin.H{
+			"id":         p.ID,
+			"host":       p.Host,
+			"http_port":  p.HTTPPort,
+			"event_port": p.EventPort,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"plugins": entries})
 }
 
 // UninstallPlugin handles DELETE /api/plugins/:id.
@@ -803,18 +943,14 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 			configValues[k] = v.Value
 		}
 
-		detail, _ := json.Marshal(map[string]interface{}{
-			"keys":   keys,
-			"config": configValues,
-		})
-
 		h.Events.Emit(events.DebugEvent{
 			Type:     "config:update",
 			PluginID: id,
 			Detail:   fmt.Sprintf("config update keys=%s", keysJSON),
 		})
 
-		h.handleAddressedEvent("kernel", "config:update", string(detail), id, time.Now())
+		// Config update events are now delivered via infra-redis event bus.
+		// The debug SSE emit above is sufficient for console observability.
 	}
 
 	if al := getAudit(c); al != nil {

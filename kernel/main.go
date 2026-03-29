@@ -174,9 +174,12 @@ func main() {
 	pluginsGroup.Use(middleware.AuthRequired())
 	{
 		pluginsGroup.GET("/search", pluginHandler.SearchPlugins)
+		pluginsGroup.GET("/registry", pluginHandler.GetPluginRegistry)
 		pluginsGroup.POST("", pluginHandler.RegisterPlugin)
 		pluginsGroup.GET("", pluginHandler.ListPlugins)
 		pluginsGroup.GET("/:id", pluginHandler.GetPlugin)
+		pluginsGroup.GET("/:id/status", pluginHandler.GetPluginStatus)
+		pluginsGroup.GET("/:id/address", pluginHandler.GetPluginAddress)
 		pluginsGroup.DELETE("/:id", pluginHandler.UninstallPlugin)
 		pluginsGroup.POST("/:id/enable", pluginHandler.EnablePlugin)
 		pluginsGroup.POST("/:id/disable", pluginHandler.DisablePlugin)
@@ -207,6 +210,7 @@ func main() {
 		marketplaceGroup.GET("/providers/:name/plugins", marketplaceHandler.ProviderPlugins)
 		marketplaceGroup.GET("/plugins", marketplaceHandler.BrowsePlugins)
 		marketplaceGroup.POST("/manifests", marketplaceHandler.SubmitManifest)
+		marketplaceGroup.DELETE("/manifests/:id", marketplaceHandler.DeleteManifest)
 		marketplaceGroup.POST("/install", marketplaceHandler.InstallPlugin)
 		marketplaceGroup.POST("/upgrade", marketplaceHandler.UpgradePlugin)
 	}
@@ -298,6 +302,11 @@ func main() {
 			log.Printf("orchestrator: boot error: %v", err)
 		}
 		orch.RecoverManagedContainers(orchCtx)
+
+		// Wait for plugins to register, then broadcast full address registry
+		// so all plugins can populate their peer caches for P2P communication.
+		time.Sleep(10 * time.Second)
+		pluginHandler.BroadcastRegistrySync()
 
 		// Fetch JWT secret from the user-manager plugin.
 		// The plugin owns the secret; the kernel only needs it for middleware validation.
