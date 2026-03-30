@@ -12,6 +12,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimi"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimicli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/usage"
 )
 
@@ -24,6 +25,8 @@ type Handler struct {
 	defaultPrompt string
 	sdk           *pluginsdk.Client
 	client        *kimi.Client
+	kimiCLI       *kimicli.Client
+	mcpConfigFile string
 	usage         *usage.Tracker
 }
 
@@ -41,6 +44,18 @@ func NewHandler(apiKey, model, dataPath string, debug bool, defaultPrompt string
 
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+}
+
+func (h *Handler) SetKimiCLI(cli *kimicli.Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.kimiCLI = cli
+}
+
+func (h *Handler) SetMCPConfigFile(path string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.mcpConfigFile = path
 }
 
 // ApplyConfig updates mutable config fields in-place without restarting.
@@ -178,8 +193,9 @@ func (h *Handler) Chat(c *gin.Context) {
 			}
 
 			messages = append(messages, kimi.Message{
-				Role:      "assistant",
-				ToolCalls: resp.ToolCalls,
+				Role:             "assistant",
+				ReasoningContent: resp.ReasoningContent,
+				ToolCalls:        resp.ToolCalls,
 			})
 
 			for _, tc := range resp.ToolCalls {

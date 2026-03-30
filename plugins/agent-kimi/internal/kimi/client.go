@@ -15,10 +15,11 @@ const baseURL = "https://api.moonshot.ai/v1"
 
 // Message is the standard role+content pair used by the handler layer.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"`
+	Content          string     `json:"content"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 // Usage holds token counts from the API response.
@@ -30,11 +31,12 @@ type Usage struct {
 
 // ChatResponse is the parsed result of a chat completion call.
 type ChatResponse struct {
-	Content      string
-	ToolCalls    []ToolCall
-	FinishReason string
-	Usage        Usage
-	Headers      http.Header
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall
+	FinishReason     string
+	Usage            Usage
+	Headers          http.Header
 }
 
 // ToolDef describes a tool available for function calling.
@@ -106,6 +108,9 @@ func buildAPIMessages(messages []Message) []interface{} {
 			if msg.Content != "" {
 				m["content"] = msg.Content
 			}
+			if msg.ReasoningContent != "" {
+				m["reasoning_content"] = msg.ReasoningContent
+			}
 			result = append(result, m)
 			continue
 		}
@@ -165,8 +170,9 @@ func (c *Client) ChatCompletion(model string, messages []Message, tools ...ToolD
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content   string     `json:"content"`
-				ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+				Content          string     `json:"content"`
+				ReasoningContent string     `json:"reasoning_content,omitempty"`
+				ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -182,18 +188,21 @@ func (c *Client) ChatCompletion(model string, messages []Message, tools ...ToolD
 	}
 
 	responseText := ""
+	reasoningText := ""
 	finishReason := ""
 	var toolCalls []ToolCall
 	if len(result.Choices) > 0 {
 		responseText = result.Choices[0].Message.Content
+		reasoningText = result.Choices[0].Message.ReasoningContent
 		toolCalls = result.Choices[0].Message.ToolCalls
 		finishReason = result.Choices[0].FinishReason
 	}
 
 	return &ChatResponse{
-		Content:      responseText,
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
+		Content:          responseText,
+		ReasoningContent: reasoningText,
+		ToolCalls:        toolCalls,
+		FinishReason:     finishReason,
 		Usage: Usage{
 			PromptTokens:     result.Usage.PromptTokens,
 			CompletionTokens: result.Usage.CompletionTokens,

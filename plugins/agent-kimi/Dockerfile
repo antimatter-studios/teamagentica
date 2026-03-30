@@ -27,14 +27,22 @@ COPY plugins/agent-kimi/ plugins/agent-kimi/
 WORKDIR /build/plugins/agent-kimi
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-kimi .
 
+# -- Kimi CLI installer --
+FROM python:3.12-alpine AS kimi-installer
+RUN pip install --no-cache-dir kimi-cli
+
 # -- Prod stage --
-FROM alpine:3.19 AS prod
+FROM python:3.12-alpine AS prod
 
 RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica
 
+# Copy Python environment with kimi-cli installed.
+COPY --from=kimi-installer /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=kimi-installer /usr/local/bin/kimi /usr/local/bin/kimi
+
 COPY --from=builder /agent-kimi /usr/local/bin/agent-kimi
-RUN mkdir -p /data && chown teamagentica:teamagentica /data
+RUN mkdir -p /data/kimi-home && chown -R teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica
 COPY plugins/agent-kimi/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml

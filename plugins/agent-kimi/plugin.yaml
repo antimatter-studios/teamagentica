@@ -2,18 +2,26 @@ id: agent-kimi
 name: "Kimi K2 Agent"
 description: "AI agent powered by Moonshot's Kimi K2 with 128K context and thinking mode"
 group: agents
-version: "1.0.18"
+version: "1.0.30"
 image: "teamagentica-agent-kimi:latest"
 author: teamagentica
 tags: [chat, ai, agent, kimi, moonshot]
 capabilities: ["agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]
 config_schema:
+  KIMI_BACKEND:
+    type: select
+    label: Backend
+    default: api_key
+    options: [api_key, cli]
+    help_text: "api_key calls Moonshot API directly; cli uses kimi-cli with MCP tool support"
+    order: 0
   KIMI_API_KEY:
     type: string
     label: "API Key"
-    required: true
+    required: false
     secret: true
+    help_text: "Required for api_key backend"
     order: 1
   KIMI_MODEL:
     type: select

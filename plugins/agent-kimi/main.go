@@ -14,6 +14,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimicli"
 )
 
 //go:embed system-prompt.md
@@ -53,15 +54,18 @@ func main() {
 	}
 
 	apiKey := pluginConfig["KIMI_API_KEY"]
-	model := pluginConfig["KIMI_MODEL"]
-	if model == "" {
-		model = "kimi-k2-turbo-preview"
-	}
-	dataPath := pluginConfig["KIMI_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	backend := configOrDefault(pluginConfig, "KIMI_BACKEND", "api_key")
+	model := configOrDefault(pluginConfig, "KIMI_MODEL", "kimi-k2-turbo-preview")
+	dataPath := configOrDefault(pluginConfig, "KIMI_DATA_PATH", "/data")
+	cliBinary := configOrDefault(pluginConfig, "KIMI_CLI_BINARY", "/usr/local/bin/kimi")
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
+
+	cliTimeout := 300
+	if v := pluginConfig["KIMI_CLI_TIMEOUT"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cliTimeout = n
+		}
+	}
 
 	port := defaultPort
 	if portStr := pluginConfig["AGENT_KIMI_PORT"]; portStr != "" {
@@ -75,10 +79,78 @@ func main() {
 	h := handlers.NewHandler(apiKey, model, dataPath, debug, defaultSystemPrompt)
 	h.SetSDK(sdkClient)
 
+	// Initialise CLI backend if configured.
+	if backend == "cli" {
+		log.Println("[cli] initialising Kimi CLI backend")
+		kimiHome := dataPath + "/kimi-home"
+		workdir := dataPath + "/kimi-workspace"
+		for _, dir := range []string{kimiHome, workdir} {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				log.Printf("WARNING: failed to create %s: %v", dir, err)
+			}
+		}
+
+		// Write CLI config with provider credentials.
+		if apiKey != "" {
+			if err := kimicli.WriteConfig(kimiHome, apiKey, model); err != nil {
+				log.Printf("WARNING: failed to write kimi-cli config: %v", err)
+			}
+		}
+
+		cliClient := kimicli.NewClient(cliBinary, workdir, kimiHome, cliTimeout, debug)
+		h.SetKimiCLI(cliClient)
+
+		// MCP bridge: localhost HTTP proxy → infra-mcp-server via mTLS.
+		configureMCP := func(mcpPluginID string) {
+			proxy, err := sdkClient.StartMCPBridge(mcpPluginID)
+			if err != nil {
+				log.Printf("[mcp] failed to start MCP proxy: %v", err)
+				return
+			}
+			configPath, err := kimicli.WriteMCPConfig(kimiHome, proxy.URL)
+			if err != nil {
+				log.Printf("[mcp] failed to write MCP config: %v", err)
+			} else {
+				h.SetMCPConfigFile(configPath)
+				log.Printf("[mcp] configured MCP proxy → %s (plugin=%s)", proxy.URL, mcpPluginID)
+			}
+		}
+
+		// Discover MCP server at startup.
+		go func() {
+			plugins, err := sdkClient.SearchPlugins("infra:mcp-server")
+			if err != nil {
+				log.Printf("[mcp] startup discovery failed: %v", err)
+				return
+			}
+			for _, p := range plugins {
+				if p.ID == "infra-mcp-server" {
+					configureMCP(p.ID)
+					return
+				}
+			}
+			log.Printf("[mcp] infra-mcp-server not found at startup, waiting for event")
+		}()
+
+		// Hot-reload on MCP server events.
+		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+			configureMCP("infra-mcp-server")
+		}))
+
+		sdkClient.OnEvent("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+			if err := kimicli.RemoveMCPConfig(kimiHome); err != nil {
+				log.Printf("[mcp] failed to remove MCP config: %v", err)
+			}
+			h.SetMCPConfigFile("")
+			log.Printf("[mcp] MCP server disabled, config removed")
+		}))
+	}
+
 	router.GET("/health", h.Health)
 	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
 	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
+	router.POST("/chat/stream", h.ChatStream)
 	router.GET("/mcp", h.DiscoveredTools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
@@ -115,6 +187,13 @@ func main() {
 		Handler: router,
 	}
 	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+}
+
+func configOrDefault(m map[string]string, key, fallback string) string {
+	if v, ok := m[key]; ok && v != "" {
+		return v
+	}
+	return fallback
 }
 
 func getHostname() string {
