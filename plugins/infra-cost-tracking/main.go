@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -74,23 +73,11 @@ func main() {
 	router.GET("/usage", h.Summary)
 	router.GET("/usage/records", h.ListRecords)
 	router.GET("/usage/users", h.UsageUsers)
-	router.POST("/events/usage", h.HandleUsageEvent)
 
 	h.SetSDK(sdkClient)
 
-	// Subscribe to usage:report events with retry.
-	go func() {
-		for i := 0; i < 30; i++ {
-			if err := sdkClient.Subscribe("usage:report", "/events/usage"); err != nil {
-				log.Printf("subscribe failed (attempt %d): %v", i+1, err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-			log.Println("subscribed to usage:report events")
-			return
-		}
-		log.Println("WARNING: failed to subscribe to usage:report after 30 attempts")
-	}()
+	// Subscribe to usage:report events via the standard event bus.
+	sdkClient.OnEvent("usage:report", pluginsdk.NewNullDebouncer(h.ProcessUsageEvent))
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

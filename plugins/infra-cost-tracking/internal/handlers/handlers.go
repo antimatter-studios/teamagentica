@@ -197,6 +197,52 @@ func (h *Handler) HandleUsageEvent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "stored", "id": rec.ID})
 }
 
+// ProcessUsageEvent handles a usage:report event from the SDK event bus.
+func (h *Handler) ProcessUsageEvent(event pluginsdk.EventCallback) {
+	var report pluginsdk.UsageReport
+	if err := json.Unmarshal([]byte(event.Detail), &report); err != nil {
+		log.Printf("infra-cost-tracking: failed to parse usage detail from %s: %v", event.PluginID, err)
+		return
+	}
+
+	ts := time.Now().UTC()
+	if event.Timestamp != "" {
+		if parsed, err := time.Parse(time.RFC3339, event.Timestamp); err == nil {
+			ts = parsed
+		}
+	}
+
+	recordType := report.RecordType
+	if recordType == "" {
+		recordType = "token"
+	}
+
+	rec := &storage.UsageRecord{
+		PluginID:     event.PluginID,
+		Provider:     report.Provider,
+		Model:        report.Model,
+		RecordType:   recordType,
+		UserID:       report.UserID,
+		InputTokens:  report.InputTokens,
+		OutputTokens: report.OutputTokens,
+		TotalTokens:  report.TotalTokens,
+		CachedTokens: report.CachedTokens,
+		DurationMs:   report.DurationMs,
+		Status:       report.Status,
+		Prompt:       report.Prompt,
+		TaskID:       report.TaskID,
+		Timestamp:    ts,
+	}
+
+	if err := h.db.Insert(rec); err != nil {
+		log.Printf("infra-cost-tracking: failed to store usage from %s: %v", event.PluginID, err)
+		return
+	}
+
+	log.Printf("infra-cost-tracking: stored usage from %s provider=%s model=%s in=%d out=%d",
+		event.PluginID, report.Provider, report.Model, report.InputTokens, report.OutputTokens)
+}
+
 // UsageUsers returns distinct user IDs with record counts.
 // GET /usage/users
 func (h *Handler) UsageUsers(c *gin.Context) {
