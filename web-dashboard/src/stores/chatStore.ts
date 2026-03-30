@@ -93,9 +93,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   selectConversation: async (id: number) => {
     const { inFlightTasks } = get();
-    set({ loading: true, error: null, activeConversationId: id, ...deriveSending(inFlightTasks, id) });
+    set({ loading: true, error: null, activeConversationId: id, messages: [], ...deriveSending(inFlightTasks, id) });
     try {
       const data = await apiClient.chat.getConversation(id);
+      // Guard: only apply if this conversation is still active (user may have clicked another).
+      if (get().activeConversationId !== id) {
+        set({ loading: false });
+        return;
+      }
       set({
         messages: data.messages || [],
         loading: false,

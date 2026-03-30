@@ -128,11 +128,38 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
     }
   }, [activeConversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Only auto-scroll if user is near the bottom
+  // Track previous message count to detect new-message vs refresh scenarios
+  const prevMessageCountRef = useRef(0);
+
+  // Auto-scroll only when user is near bottom.
+  // On scroll handler keeps isNearBottomRef updated; we also snapshot position
+  // before render to catch cases where the scroll handler hasn't fired recently.
   useEffect(() => {
-    if (isNearBottomRef.current) {
+    const el = messagesContainerRef.current;
+    const msgCount = messages.length;
+    const prevCount = prevMessageCountRef.current;
+    prevMessageCountRef.current = msgCount;
+
+    // First load of a conversation — always scroll to bottom
+    if (prevCount === 0 && msgCount > 0) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
     }
+
+    // No new messages (refresh returned same count) — never scroll
+    if (msgCount <= prevCount) return;
+
+    // New messages appended — only scroll if user was near bottom
+    if (el) {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // After render, new messages add to scrollHeight. The user's scrollTop hasn't
+      // changed, so we subtract the approximate new content height. But a simpler
+      // heuristic: trust the onScroll handler's isNearBottomRef since it reflects
+      // the position *before* the new messages were rendered.
+      if (!isNearBottomRef.current) return;
+    }
+
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const handleSend = async () => {
@@ -141,6 +168,8 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
     setInput("");
     const attachmentIds = pendingFiles.map((f) => f.file_id);
     setPendingFiles([]);
+    // User just sent a message — always auto-scroll to follow the response
+    isNearBottomRef.current = true;
     await send(content || "(attached files)", attachmentIds.length > 0 ? attachmentIds : undefined);
   };
 

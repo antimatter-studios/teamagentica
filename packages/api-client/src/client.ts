@@ -107,6 +107,7 @@ export class HttpTransport {
     const doReq = () => this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "GET",
       headers: this.authHeaders(),
+      cache: "no-store" as RequestCache,
     });
     const res = await doReq();
     return this.handleResponse<T>(res, doReq);
@@ -116,6 +117,7 @@ export class HttpTransport {
     const doReq = () => this.doFetch(`${this.config.baseUrl}${path}`, {
       method: "GET",
       headers: this.authHeaders(),
+      cache: "no-store" as RequestCache,
     });
     const res = await doReq();
     if (res.status === 401) {
