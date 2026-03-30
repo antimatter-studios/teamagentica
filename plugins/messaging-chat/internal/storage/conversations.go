@@ -46,7 +46,7 @@ func (d *DB) UpdateConversation(conv *Conversation) error {
 	return d.db.Save(conv).Error
 }
 
-// MarkRead sets the conversation's LastReadAt to now.
+// MarkRead sets the conversation's LastReadAt to now without bumping updated_at.
 func (d *DB) MarkRead(id uint) error {
 	conv, err := d.GetConversation(id)
 	if err != nil {
@@ -54,7 +54,9 @@ func (d *DB) MarkRead(id uint) error {
 	}
 	now := time.Now()
 	conv.State.LastReadAt = &now
-	return d.db.Save(conv).Error
+	// Use UpdateColumn to avoid GORM auto-updating updated_at — reading a
+	// conversation should not change its sort position in the list.
+	return d.db.Model(conv).UpdateColumn("state", conv.State).Error
 }
 
 func (d *DB) DeleteConversation(id uint) error {
