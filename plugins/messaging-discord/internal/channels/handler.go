@@ -174,7 +174,7 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := discordgo.GuildChannelCreateData{
-		Name:     sanitizeChannelName(req.Name),
+		Name:     SanitizeChannelName(req.Name),
 		Type:     discordgo.ChannelTypeGuildText,
 		ParentID: req.CategoryID,
 		Topic:    req.Topic,
@@ -378,8 +378,8 @@ func (h *Handler) SendMenu(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// sanitizeChannelName converts a name to Discord-safe format (lowercase, hyphens, max 100 chars).
-func sanitizeChannelName(name string) string {
+// SanitizeChannelName converts a name to Discord-safe format (lowercase, hyphens, max 100 chars).
+func SanitizeChannelName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, " ", "-")
 	// Remove characters that aren't alphanumeric, hyphens, or underscores.
