@@ -111,6 +111,12 @@ func main() {
 		}
 	}
 
+	// Channel-to-alias mapping store (SQLite, mirrors Telegram's topic store).
+	channelStore, err := channels.NewStore("/data/channel_mappings.db")
+	if err != nil {
+		log.Fatalf("Failed to open channel mapping store: %v", err)
+	}
+
 	// --- Bot startup from BOTS config (type: bot_token) ---
 	botEntries := parseBots(pluginConfig["BOTS"])
 
@@ -133,6 +139,7 @@ func main() {
 		b.SetVersion(pluginsdk.DevVersion(manifest.Version))
 		b.SetSDK(sdkClient)
 		b.SetRelayClient(relay.NewClient(sdkClient, sourceID))
+		b.SetChannelStore(channelStore)
 		if guildID != "" {
 			b.SetGuildID(guildID)
 		}
@@ -273,10 +280,23 @@ func main() {
 		Handler: mux,
 	}
 
+	tlsConfig, err := pluginsdk.GetServerTLSConfig(sdkCfg)
+	if err != nil {
+		log.Fatalf("Failed to configure server TLS: %v", err)
+	}
+
 	go func() {
-		log.Printf("HTTP server listening on %s", server.Addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+		if tlsConfig != nil {
+			server.TLSConfig = tlsConfig
+			log.Printf("HTTP server listening on %s (mTLS enabled)", server.Addr)
+			if err := server.ListenAndServeTLS(sdkCfg.TLSCert, sdkCfg.TLSKey); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Server error: %v", err)
+			}
+		} else {
+			log.Printf("HTTP server listening on %s", server.Addr)
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Server error: %v", err)
+			}
 		}
 	}()
 

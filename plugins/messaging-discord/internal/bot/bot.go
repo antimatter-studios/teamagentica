@@ -64,6 +64,7 @@ type Bot struct {
 	sdk          *pluginsdk.Client
 	msgBuffer    *msgbuffer.Buffer
 	callbacks    *channels.CallbackStore
+	channelStore *channels.Store         // channel → target mapping
 	cmdOwners    map[string]commandOwner // slash command name → owning plugin
 
 	disconnectedAt atomic.Int64 // unix timestamp of last disconnect (0 = never)
@@ -84,6 +85,9 @@ type taskProgress struct {
 
 // New creates a new Bot instance. It does not open the connection yet.
 func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*Bot, error) {
+	// Force Discord Gateway API v10 — v9 no longer delivers MESSAGE_CREATE events.
+	discordgo.APIVersion = "10"
+
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, fmt.Errorf("creating discord session: %w", err)
@@ -93,6 +97,9 @@ func New(token string, kernelClient *kernel.Client, aliases *alias.AliasMap) (*B
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsMessageContent |
 		discordgo.IntentsGuilds
+
+	// Diagnostic: log all gateway events to debug missing MESSAGE_CREATE
+	session.LogLevel = discordgo.LogDebug
 
 	if !aliases.IsEmpty() {
 		log.Printf("Configured %d aliases", len(aliases.List()))
@@ -268,6 +275,9 @@ func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Auto-detected guild ID: %s", b.guildID)
 	}
 
+	// Register native channel commands first (these don't depend on other plugins).
+	b.registerNativeCommands()
+
 	// Discover slash commands in a background goroutine with retries — other plugins
 	// may not have registered with the kernel yet when onReady fires.
 	go b.discoverCommandsWithRetry(r.User.ID)
@@ -399,11 +409,12 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		return
 	}
 
-	// Check if this is a DM or the bot was mentioned
+	// Check if this is a DM, the bot was mentioned, or the channel is mapped.
 	isDM := m.GuildID == ""
 	isMentioned := b.isBotMentioned(m.Message)
+	isMapped := b.channelStore != nil && !isDM && b.channelStore.Lookup(m.ChannelID) != ""
 
-	if !isDM && !isMentioned {
+	if !isDM && !isMentioned && !isMapped {
 		return
 	}
 
@@ -492,6 +503,16 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 	// Show typing indicator.
 	s.ChannelTyping(channelID)
 
+	// If channel is mapped, auto-prepend target alias (same as Telegram topic mapping).
+	// Only prepend if the user hasn't already @mentioned someone.
+	if b.channelStore != nil {
+		if target := b.channelStore.Lookup(channelID); target != "" {
+			if b.aliases.IsEmpty() || b.aliases.Parse(text).Target == nil {
+				text = "@" + target + " " + text
+			}
+		}
+	}
+
 	// Image/video aliases are handled locally (platform-specific output).
 	if !b.aliases.IsEmpty() {
 		result := b.aliases.Parse(text)
@@ -568,6 +589,10 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 // onInteraction handles Discord interactions: slash commands and message component clicks.
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if i.Type == discordgo.InteractionApplicationCommand {
+		// Native commands (newchannel, deletechannel, channels) take priority.
+		if b.handleNativeCommand(s, i) {
+			return
+		}
 		b.handleSlashCommand(s, i, b.cmdOwners)
 		return
 	}
