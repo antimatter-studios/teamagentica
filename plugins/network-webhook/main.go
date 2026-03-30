@@ -171,6 +171,8 @@ func main() {
 
 	// Set up HTTP routes.
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /schema", sdkClient.SchemaHandler())
+	mux.HandleFunc("POST /events", sdkClient.EventHandler())
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

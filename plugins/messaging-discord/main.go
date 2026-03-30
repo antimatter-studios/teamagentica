@@ -231,6 +231,8 @@ func main() {
 
 	// HTTP server for config options, health, and tool endpoints.
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /schema", sdkClient.SchemaHandler())
+	mux.HandleFunc("POST /events", sdkClient.EventHandler())
 
 	mux.HandleFunc("GET /config/options/{field}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

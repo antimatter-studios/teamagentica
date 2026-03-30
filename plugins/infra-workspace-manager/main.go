@@ -115,6 +115,10 @@ func main() {
 	h = handlers.NewHandler(workspaceDir, baseDomain, debug, db)
 	h.SetSDK(sdkClient)
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	router.GET("/health", h.Health)
 
 	// Environment discovery — what workspace types are available.

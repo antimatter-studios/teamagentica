@@ -79,6 +79,8 @@ func main() {
 	b.SetSDK(sdkClient)
 
 	router := gin.Default()
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 
 	// Health check.
 	router.GET("/health", func(c *gin.Context) {

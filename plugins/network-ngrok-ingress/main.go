@@ -138,6 +138,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /schema", sdkClient.SchemaHandler())
+	mux.HandleFunc("POST /events", sdkClient.EventHandler())
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		tunnelURLMu.RLock()

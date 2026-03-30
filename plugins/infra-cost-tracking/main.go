@@ -65,6 +65,10 @@ func main() {
 
 	h := handlers.NewHandler(db)
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	router.GET("/health", h.Health)
 	router.POST("/usage", h.ReportUsage)
 	router.GET("/usage", h.Summary)

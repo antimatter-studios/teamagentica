@@ -41,6 +41,8 @@ func main() {
 	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
 
 	r := gin.Default()
+	r.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	r.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

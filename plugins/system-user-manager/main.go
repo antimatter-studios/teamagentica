@@ -90,6 +90,8 @@ func main() {
 
 	// --- Create router ---
 	router := gin.Default()
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	h := handlers.New(db, sdkClient, auditLogger)
 
 	// Health

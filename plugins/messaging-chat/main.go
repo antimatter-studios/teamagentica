@@ -89,6 +89,8 @@ func main() {
 	h = handlers.NewHandler(db, files, rc, sdkClient, aliases, debug)
 
 	router := gin.Default()
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.GET("/health", h.Health)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/agents", h.ListAgents)
@@ -140,6 +142,13 @@ func main() {
 		// Future: handle PLUGIN_DEBUG toggle here.
 		_ = detail
 	}))
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", httpPort),
