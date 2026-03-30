@@ -23,14 +23,20 @@ enabled = true
 `, serverURL)
 
 	if strings.Contains(content, "[mcp_servers.teamagentica]") {
-		// Replace existing section.
 		content = replaceMCPSection(content, mcpSection)
 	} else {
-		// Append the section.
 		if content != "" && !strings.HasSuffix(content, "\n") {
 			content += "\n"
 		}
 		content += "\n" + mcpSection
+	}
+
+	// Ensure sandbox allows network access for MCP server connections.
+	sandboxSection := `[sandbox_workspace_write]
+network_access = true
+`
+	if !strings.Contains(content, "[sandbox_workspace_write]") {
+		content += "\n" + sandboxSection
 	}
 
 	if err := os.MkdirAll(codexHome, 0755); err != nil {
@@ -40,6 +46,9 @@ enabled = true
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("write config.toml: %w", err)
 	}
+	// Ensure the file is readable by Codex CLI sandbox subprocess,
+	// since WriteFile doesn't change permissions on existing files.
+	os.Chmod(configPath, 0644)
 
 	log.Printf("[codex-cli] wrote MCP config to %s (url=%s)", configPath, serverURL)
 	return nil

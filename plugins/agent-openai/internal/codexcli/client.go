@@ -35,6 +35,7 @@ type Client struct {
 	codexHome string
 	timeout   time.Duration
 	debug     bool
+	tlsCA     string // CA cert path for MCP server connections.
 
 	// Active login process state.
 	loginMu   sync.Mutex
@@ -54,8 +55,17 @@ func NewClient(binary, workdir, codexHome string, timeoutSec int, debug bool) *C
 	}
 }
 
+// SetTLS configures the CA certificate for Codex CLI MCP server connections.
+func (c *Client) SetTLS(ca string) {
+	c.tlsCA = ca
+}
+
 func (c *Client) env() []string {
-	return append(os.Environ(), "CODEX_HOME="+c.codexHome)
+	env := append(os.Environ(), "CODEX_HOME="+c.codexHome)
+	if c.tlsCA != "" {
+		env = append(env, "SSL_CERT_FILE="+c.tlsCA)
+	}
+	return env
 }
 
 // IsAuthenticated checks if the Codex CLI has stored credentials.
@@ -324,7 +334,7 @@ func (c *Client) ChatCompletion(model string, messages []openai.Message, imageUR
 	} else {
 		cmd.Dir = c.workdir
 	}
-	cmd.Env = append(os.Environ(), "CODEX_HOME="+c.codexHome)
+	cmd.Env = c.env()
 
 	if c.debug {
 		log.Printf("[codex-cli] running: %s %s (prompt via stdin, %d bytes)", c.binary, strings.Join(args, " "), len(prompt))
@@ -523,7 +533,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 		} else {
 			cmd.Dir = c.workdir
 		}
-		cmd.Env = append(os.Environ(), "CODEX_HOME="+c.codexHome)
+		cmd.Env = c.env()
 		cmd.Stdin = strings.NewReader(prompt)
 
 		stdout, err := cmd.StdoutPipe()

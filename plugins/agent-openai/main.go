@@ -115,6 +115,10 @@ func main() {
 			log.Printf("WARNING: skipping subscription backend init due to directory creation failure")
 		} else {
 			cliClient := codexcli.NewClient(cliBinary, workdir, codexHome, cliTimeout, debug)
+			if sdkCfg.TLSCA != "" {
+				cliClient.SetTLS(sdkCfg.TLSCA)
+				log.Printf("[cli] TLS CA configured for Codex CLI subprocess")
+			}
 			h.SetCodexCLI(cliClient)
 
 			if cliClient.IsAuthenticated() {
@@ -160,31 +164,51 @@ func main() {
 		h.ApplyConfig(detail.Config)
 	}))
 
-	// Subscribe to MCP server events.
+	// MCP bridge: localhost plain HTTP proxy → infra-mcp-server via mTLS.
+	// Codex CLI (which can't present client certs) connects to this proxy.
 	if backend == "subscription" {
 		codexHome := dataPath + "/codex-home"
 
-		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-			var detail struct {
-				Endpoint string `json:"endpoint"`
-			}
-			if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-				log.Printf("[mcp] failed to parse mcp_server:enabled detail: %v", err)
+		// Helper to start proxy and configure Codex CLI.
+		configureMCP := func(mcpPluginID string) {
+			proxy, err := sdkClient.StartMCPBridge(mcpPluginID)
+			if err != nil {
+				log.Printf("[mcp] failed to start MCP proxy: %v", err)
 				return
 			}
-			if detail.Endpoint == "" {
-				log.Printf("[mcp] mcp_server:enabled event has no endpoint")
-				return
-			}
-			if err := codexcli.WriteMCPConfig(codexHome, detail.Endpoint); err != nil {
+			if err := codexcli.WriteMCPConfig(codexHome, proxy.URL); err != nil {
 				log.Printf("[mcp] failed to write MCP config: %v", err)
+			} else {
+				log.Printf("[mcp] configured MCP proxy → %s (plugin=%s)", proxy.URL, mcpPluginID)
 			}
+		}
+
+		// Proactively discover MCP server at startup.
+		go func() {
+			plugins, err := sdkClient.SearchPlugins("infra:mcp-server")
+			if err != nil {
+				log.Printf("[mcp] startup discovery failed: %v", err)
+				return
+			}
+			for _, p := range plugins {
+				if p.ID == "infra-mcp-server" {
+					configureMCP(p.ID)
+					return
+				}
+			}
+			log.Printf("[mcp] infra-mcp-server not found at startup, waiting for event")
+		}()
+
+		// Hot-reload when MCP server restarts.
+		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+			configureMCP("infra-mcp-server")
 		}))
 
 		sdkClient.OnEvent("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			if err := codexcli.RemoveMCPConfig(codexHome); err != nil {
 				log.Printf("[mcp] failed to remove MCP config: %v", err)
 			}
+			log.Printf("[mcp] MCP server disabled, config removed")
 		}))
 	}
 
@@ -200,7 +224,6 @@ func main() {
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	// Run server with graceful shutdown.
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", defaultPort),
 		Handler: router,
