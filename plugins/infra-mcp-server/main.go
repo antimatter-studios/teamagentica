@@ -67,11 +67,17 @@ func main() {
 	router := gin.Default()
 	h := handlers.NewHandler(manifest.ID, debug)
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	// Register routes.
 	router.GET("/health", h.Health)
 	router.GET("/info", h.Info)
-	router.GET("/mcp", h.Tools)
-	router.POST("/mcp", h.MCP)
+	// MCP protocol: POST (client requests), GET (SSE), DELETE (session cleanup).
+	router.Any("/mcp", h.MCP)
+	// Push-based tool registration from plugins.
+	router.POST("/tools/register", h.RegisterTools)
 
 	h.SetSDK(sdkClient)
 

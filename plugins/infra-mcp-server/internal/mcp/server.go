@@ -10,21 +10,26 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	mcplib "github.com/mark3labs/mcp-go/mcp"
+	mcpsrv "github.com/mark3labs/mcp-go/server"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-// Server implements the MCP protocol logic.
+// Server wraps mcp-go's MCPServer with our tool discovery and routing logic.
 type Server struct {
-	sdk     *pluginsdk.Client
-	aliases *alias.AliasMap
-	debug   bool
+	sdk      *pluginsdk.Client
+	aliases  *alias.AliasMap
+	debug    bool
+	mcpSrv   *mcpsrv.MCPServer
+	httpSrv  *mcpsrv.StreamableHTTPServer
 }
 
 // NewServer creates an MCP server backed by the plugin SDK for tool routing.
 func NewServer(sdk *pluginsdk.Client, debug bool) *Server {
 	s := &Server{sdk: sdk, debug: debug}
+
 	// Seed aliases from kernel.
 	infos, err := sdk.FetchAliases()
 	if err != nil {
@@ -34,173 +39,147 @@ func NewServer(sdk *pluginsdk.Client, debug bool) *Server {
 		s.aliases = alias.NewAliasMap(infos)
 		log.Printf("mcp-server: loaded %d aliases", len(infos))
 	}
+
+	// Create mcp-go server with tool capabilities (listChanged=true).
+	s.mcpSrv = mcpsrv.NewMCPServer(
+		"teamagentica-mcp-server",
+		"1.0.0",
+		mcpsrv.WithToolCapabilities(true),
+	)
+
+	// Register builtin meta-tools.
+	s.registerBuiltinTools()
+
+	// Discover and register plugin tools.
+	s.RefreshTools()
+
+	// Create the streamable HTTP transport.
+	s.httpSrv = mcpsrv.NewStreamableHTTPServer(s.mcpSrv)
+
 	return s
 }
 
-// UpdateAliases replaces the alias map with new entries (for live event updates).
-func (s *Server) UpdateAliases(infos []alias.AliasInfo) {
-	s.aliases.Replace(infos)
-	InvalidateCache() // Force tool re-discovery with new alias names.
+// HTTPServer returns the streamable HTTP handler for mounting on a router.
+func (s *Server) HTTPServer() *mcpsrv.StreamableHTTPServer {
+	return s.httpSrv
 }
 
-// Aliases returns the current alias map (for use by handlers).
+// UpdateAliases replaces the alias map and re-registers tools.
+func (s *Server) UpdateAliases(infos []alias.AliasInfo) {
+	s.aliases.Replace(infos)
+	InvalidateCache()
+	s.RefreshTools()
+}
+
+// Aliases returns the current alias map.
 func (s *Server) Aliases() *alias.AliasMap {
 	return s.aliases
 }
 
-// resolveAlias resolves an alias name to a plugin ID and optional model.
-// Returns the original name unchanged if it's not an alias.
-func (s *Server) resolveAlias(name string) (pluginID, model string) {
-	target := s.aliases.Resolve(name)
-	if target != nil {
-		return target.PluginID, target.Model
-	}
-	return name, ""
-}
-
-// HandleMessage processes a single MCP JSON-RPC request and returns a response.
-func (s *Server) HandleMessage(raw []byte) *Response {
-	var req Request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			Error:   &RPCError{Code: -32700, Message: "Parse error"},
-		}
-	}
-
-	if req.JSONRPC != "2.0" {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   &RPCError{Code: -32600, Message: "Invalid Request: jsonrpc must be 2.0"},
-		}
-	}
-
-	if s.debug {
-		log.Printf("mcp-server: method=%s", req.Method)
-	}
-
-	switch req.Method {
-	case "initialize":
-		return s.handleInitialize(req)
-	case "notifications/initialized":
-		// Client ack — no response needed for notifications.
-		return nil
-	case "tools/list":
-		return s.handleToolsList(req)
-	case "tools/call":
-		return s.handleToolsCall(req)
-	case "ping":
-		return &Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{}}
-	default:
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   &RPCError{Code: -32601, Message: fmt.Sprintf("Method not found: %s", req.Method)},
-		}
-	}
-}
-
-func (s *Server) handleInitialize(req Request) *Response {
-	return &Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result: InitializeResult{
-			ProtocolVersion: "2025-03-26",
-			ServerInfo: ServerInfo{
-				Name:    "teamagentica-mcp-server",
-				Version: "1.0.0",
-			},
-			Capabilities: Capabilities{
-				Tools: &ToolsCapability{ListChanged: true},
-			},
-		},
-	}
-}
-
-func (s *Server) handleToolsList(req Request) *Response {
+// RefreshTools re-discovers plugin tools and syncs them into the mcp-go server.
+func (s *Server) RefreshTools() {
 	tools := DiscoverTools(s.sdk, s.aliases)
 
-	// Build MCP tool definitions from discovered plugin tools.
-	mcpTools := make([]ToolDef, 0, len(tools)+3)
+	// Build the new tool set: builtin + discovered.
+	var serverTools []mcpsrv.ServerTool
 
-	// Add platform meta-tools.
-	mcpTools = append(mcpTools, s.builtinTools()...)
-
-	// Add plugin tools.
 	for _, t := range tools {
-		schema := t.Parameters
-		if schema == nil {
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		dt := t // capture for closure
+		// Build Tool struct directly — using NewTool + WithRawInputSchema
+		// causes a conflict (both InputSchema and RawInputSchema set).
+		tool := mcplib.Tool{
+			Name:           dt.FullName,
+			Description:    dt.Desc,
+			RawInputSchema: dt.inputSchema(),
 		}
-		mcpTools = append(mcpTools, ToolDef{
-			Name:        t.FullName,
-			Description: t.Desc,
-			InputSchema: schema,
+		serverTools = append(serverTools, mcpsrv.ServerTool{
+			Tool:    tool,
+			Handler: s.makeToolHandler(dt),
 		})
 	}
 
-	return &Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  ToolsListResult{Tools: mcpTools},
+	// SetTools replaces all non-builtin tools atomically.
+	// We re-add builtins too since SetTools replaces everything.
+	serverTools = append(serverTools, s.builtinServerTools()...)
+	s.mcpSrv.SetTools(serverTools...)
+
+	if s.debug {
+		log.Printf("mcp-server: registered %d tools with mcp-go", len(serverTools))
 	}
 }
 
-func (s *Server) handleToolsCall(req Request) *Response {
-	var params ToolsCallParams
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error:   &RPCError{Code: -32602, Message: "Invalid params: " + err.Error()},
+// makeToolHandler creates a mcp-go ToolHandlerFunc that routes to the correct plugin.
+func (s *Server) makeToolHandler(dt discoveredTool) mcpsrv.ToolHandlerFunc {
+	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		if s.debug {
+			log.Printf("mcp-server: tools/call name=%s", req.Params.Name)
 		}
-	}
 
-	if s.debug {
-		log.Printf("mcp-server: tools/call name=%s args=%s", params.Name, string(params.Arguments))
-	}
+		args := req.GetRawArguments()
+		argsJSON, _ := json.Marshal(args)
 
-	// Handle builtin tools.
-	switch params.Name {
-	case "list_agents":
-		return s.callListAgents(req)
-	case "list_tools":
-		return s.callListTools(req)
-	case "send_message":
-		return s.callSendMessage(req, params)
-	}
-
-	// Route to plugin tool.
-	result, err := s.executePluginTool(params)
-	if err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolsCallResult{
-				Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Error: %v", err)}},
-				IsError: true,
-			},
+		// Agent chat tools need a properly formatted chat request body.
+		var body *bytes.Reader
+		if dt.Name == "chat" && dt.AliasName != "" {
+			body = s.buildChatBody(dt, argsJSON)
+		} else if len(argsJSON) > 0 {
+			body = bytes.NewReader(argsJSON)
+		} else {
+			body = bytes.NewReader([]byte("{}"))
 		}
+
+		callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		defer cancel()
+
+		resp, err := s.sdk.RouteToPlugin(callCtx, dt.PluginID, "POST", dt.Endpoint, body)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("Error executing %s: %v", dt.FullName, err)), nil
+		}
+
+		// Parse result for media handling.
+		return s.parseToolResult(string(resp)), nil
+	}
+}
+
+// buildChatBody constructs a chat request for agent delegation tools.
+func (s *Server) buildChatBody(dt discoveredTool, argsJSON []byte) *bytes.Reader {
+	var args struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return bytes.NewReader(argsJSON)
 	}
 
-	// Check if the response contains media and store to sss3-storage, returning references.
-	content := s.parseToolResult(result)
-
-	return &Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  ToolsCallResult{Content: content},
+	identity := fmt.Sprintf("You are @%s (%s", dt.AliasName, dt.PluginID)
+	if dt.AliasModel != "" {
+		identity += ", model: " + dt.AliasModel
 	}
+	identity += "). You are one of several AI agents in a collaborative platform."
+
+	if block := s.aliases.SystemPromptBlock(); block != "" {
+		identity += "\n\n" + block
+	}
+
+	chatReq := map[string]interface{}{
+		"message": args.Message,
+		"conversation": []map[string]string{
+			{"role": "system", "content": identity},
+			{"role": "user", "content": args.Message},
+		},
+	}
+	if dt.AliasModel != "" {
+		chatReq["model"] = dt.AliasModel
+	}
+	reqBody, _ := json.Marshal(chatReq)
+	return bytes.NewReader(reqBody)
 }
 
 // parseToolResult inspects a plugin tool's JSON response. If it contains
 // image_data, the binary is stored to sss3-storage and a {{media:key}} marker
-// is returned as text (no raw base64 in the LLM context). Video URLs become
-// {{media_url:...}} markers. Otherwise the raw JSON is returned as text.
-func (s *Server) parseToolResult(result string) []ContentBlock {
+// is returned as text. Video URLs become {{media_url:...}} markers.
+func (s *Server) parseToolResult(result string) *mcplib.CallToolResult {
 	var resp struct {
-		Status   string `json:"status"`
+		Status    string `json:"status"`
 		ImageData string `json:"image_data"`
 		MimeType  string `json:"mime_type"`
 		Text      string `json:"text"`
@@ -209,7 +188,7 @@ func (s *Server) parseToolResult(result string) []ContentBlock {
 		VideoURL  string `json:"video_url"`
 	}
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
-		return []ContentBlock{{Type: "text", Text: result}}
+		return mcplib.NewToolResultText(result)
 	}
 
 	// Handle image data — store to sss3, return reference marker.
@@ -217,21 +196,20 @@ func (s *Server) parseToolResult(result string) []ContentBlock {
 		data, err := base64.StdEncoding.DecodeString(resp.ImageData)
 		if err != nil {
 			log.Printf("mcp-server: failed to decode base64 image: %v", err)
-			return []ContentBlock{{Type: "text", Text: result}}
+			return mcplib.NewToolResultText(result)
 		}
 
 		key, err := s.storeMedia(data, resp.MimeType)
 		if err != nil {
 			log.Printf("mcp-server: failed to store media: %v", err)
-			// Fallback: return text-only summary without the huge base64.
-			return []ContentBlock{{Type: "text", Text: fmt.Sprintf("Image generated (model=%s) but storage failed: %v", resp.Model, err)}}
+			return mcplib.NewToolResultText(fmt.Sprintf("Image generated (model=%s) but storage failed: %v", resp.Model, err))
 		}
 
 		summary := fmt.Sprintf("Image generated (model=%s). {{media:%s}}", resp.Model, key)
 		if resp.Text != "" {
 			summary = resp.Text + "\n" + summary
 		}
-		return []ContentBlock{{Type: "text", Text: summary}}
+		return mcplib.NewToolResultText(summary)
 	}
 
 	// Handle external video URL — return reference marker.
@@ -240,10 +218,10 @@ func (s *Server) parseToolResult(result string) []ContentBlock {
 		if resp.Text != "" {
 			summary = resp.Text + "\n" + summary
 		}
-		return []ContentBlock{{Type: "text", Text: summary}}
+		return mcplib.NewToolResultText(summary)
 	}
 
-	return []ContentBlock{{Type: "text", Text: result}}
+	return mcplib.NewToolResultText(result)
 }
 
 // storeMedia writes binary data to sss3-storage under media/generated/{uuid}.{ext}.
@@ -276,121 +254,55 @@ func (s *Server) storeMedia(data []byte, mimeType string) (string, error) {
 	return key, nil
 }
 
-func (s *Server) executePluginTool(params ToolsCallParams) (string, error) {
-	tools := DiscoverTools(s.sdk, s.aliases)
-	var matched *discoveredTool
-	for i, t := range tools {
-		if t.FullName == params.Name {
-			matched = &tools[i]
-			break
-		}
+// registerBuiltinTools adds the platform meta-tools to the mcp-go server.
+func (s *Server) registerBuiltinTools() {
+	for _, st := range s.builtinServerTools() {
+		s.mcpSrv.AddTool(st.Tool, st.Handler)
 	}
-	if matched == nil {
-		return "", fmt.Errorf("tool %s not found", params.Name)
-	}
-
-	pluginID := matched.PluginID
-	endpoint := matched.Endpoint
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	var body *bytes.Reader
-
-	// Agent chat tools need a properly formatted chat request body.
-	if matched.Name == "chat" && matched.AliasName != "" {
-		var args struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments for %s: %w", params.Name, err)
-		}
-
-		// Build identity system prompt so the agent knows who it is.
-		identity := fmt.Sprintf("You are @%s (%s", matched.AliasName, matched.PluginID)
-		if matched.AliasModel != "" {
-			identity += ", model: " + matched.AliasModel
-		}
-		identity += "). You are one of several AI agents in a collaborative platform."
-
-		// List other available agents/tools for context.
-		if block := s.aliases.SystemPromptBlock(); block != "" {
-			identity += "\n\n" + block
-		}
-
-		chatReq := map[string]interface{}{
-			"message": args.Message,
-			"conversation": []map[string]string{
-				{"role": "system", "content": identity},
-				{"role": "user", "content": args.Message},
-			},
-		}
-		if matched.AliasModel != "" {
-			chatReq["model"] = matched.AliasModel
-		}
-		reqBody, _ := json.Marshal(chatReq)
-		body = bytes.NewReader(reqBody)
-	} else if params.Arguments != nil && len(params.Arguments) > 0 {
-		body = bytes.NewReader(params.Arguments)
-	} else {
-		body = bytes.NewReader([]byte("{}"))
-	}
-
-	resp, err := s.sdk.RouteToPlugin(ctx, pluginID, "POST", endpoint, body)
-	if err != nil {
-		return "", fmt.Errorf("execute tool %s: %w", params.Name, err)
-	}
-
-	return string(resp), nil
 }
 
-// builtinTools returns the platform meta-tool definitions.
-func (s *Server) builtinTools() []ToolDef {
-	return []ToolDef{
+// builtinServerTools returns builtin tools as mcp-go ServerTool entries.
+func (s *Server) builtinServerTools() []mcpsrv.ServerTool {
+	return []mcpsrv.ServerTool{
 		{
-			Name:        "list_agents",
-			Description: "List all available AI agent plugins and their status",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+			Tool: mcplib.NewTool("list_agents",
+				mcplib.WithDescription("List all available AI agent plugins and their status"),
+			),
+			Handler: s.handleListAgents,
 		},
 		{
-			Name:        "list_tools",
-			Description: "List all available tool plugins and their capabilities",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+			Tool: mcplib.NewTool("list_tools",
+				mcplib.WithDescription("List all available tool plugins and their capabilities"),
+			),
+			Handler: s.handleListTools,
 		},
 		{
-			Name:        "send_message",
-			Description: "Send a message to another AI agent plugin for processing. Use this to delegate tasks to specialized agents.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_id":{"type":"string","description":"The plugin ID of the agent to send the message to (e.g. agent-gemini, agent-kimi)"},"message":{"type":"string","description":"The message to send to the agent"},"model":{"type":"string","description":"Optional: specific model to use on the target agent"}},"required":["agent_id","message"]}`),
+			Tool: mcplib.NewTool("send_message",
+				mcplib.WithDescription("Send a message to another AI agent plugin for processing. Use this to delegate tasks to specialized agents."),
+				mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("The plugin ID of the agent to send the message to (e.g. agent-gemini, agent-kimi)")),
+				mcplib.WithString("message", mcplib.Required(), mcplib.Description("The message to send to the agent")),
+				mcplib.WithString("model", mcplib.Description("Optional: specific model to use on the target agent")),
+			),
+			Handler: s.handleSendMessage,
 		},
 	}
 }
 
-func (s *Server) callListAgents(req Request) *Response {
+func (s *Server) handleListAgents(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	agents, err := s.sdk.SearchPlugins("agent:chat")
 	if err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolsCallResult{
-				Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Error discovering agents: %v", err)}},
-				IsError: true,
-			},
-		}
+		return mcplib.NewToolResultError(fmt.Sprintf("Error discovering agents: %v", err)), nil
 	}
-
 	data, _ := json.MarshalIndent(agents, "", "  ")
-	return &Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result: ToolsCallResult{
-			Content: []ContentBlock{{Type: "text", Text: string(data)}},
-		},
-	}
+	return mcplib.NewToolResultText(string(data)), nil
 }
 
-func (s *Server) callListTools(req Request) *Response {
-	tools := DiscoverTools(s.sdk, s.aliases)
+func (s *Server) handleListTools(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	// Refresh tools into mcp-go registry so tools/list stays in sync.
+	InvalidateCache()
+	s.RefreshTools()
 
+	tools := DiscoverTools(s.sdk, s.aliases)
 	type toolInfo struct {
 		Name        string `json:"name"`
 		PluginID    string `json:"plugin_id"`
@@ -400,62 +312,33 @@ func (s *Server) callListTools(req Request) *Response {
 	for i, t := range tools {
 		infos[i] = toolInfo{Name: t.FullName, PluginID: t.PluginID, Description: t.Desc}
 	}
-
 	data, _ := json.MarshalIndent(infos, "", "  ")
-	return &Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result: ToolsCallResult{
-			Content: []ContentBlock{{Type: "text", Text: string(data)}},
-		},
-	}
+	return mcplib.NewToolResultText(string(data)), nil
 }
 
-func (s *Server) callSendMessage(req Request, params ToolsCallParams) *Response {
-	var args struct {
-		AgentID string `json:"agent_id"`
-		Message string `json:"message"`
-		Model   string `json:"model"`
-	}
-	if err := json.Unmarshal(params.Arguments, &args); err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolsCallResult{
-				Content: []ContentBlock{{Type: "text", Text: "Invalid arguments: " + err.Error()}},
-				IsError: true,
-			},
-		}
+func (s *Server) handleSendMessage(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	agentID := req.GetString("agent_id", "")
+	message := req.GetString("message", "")
+	model := req.GetString("model", "")
+
+	if agentID == "" || message == "" {
+		return mcplib.NewToolResultError("agent_id and message are required"), nil
 	}
 
-	if args.AgentID == "" || args.Message == "" {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolsCallResult{
-				Content: []ContentBlock{{Type: "text", Text: "agent_id and message are required"}},
-				IsError: true,
-			},
-		}
-	}
-
-	// Resolve alias to actual plugin ID (e.g. "nb2" → "tool-nanobanana").
-	pluginID, aliasModel := s.resolveAlias(args.AgentID)
+	// Resolve alias to actual plugin ID.
+	pluginID, aliasModel := s.resolveAlias(agentID)
 	if s.debug {
-		log.Printf("mcp-server: send_message agent_id=%s resolved to plugin=%s model=%s", args.AgentID, pluginID, aliasModel)
+		log.Printf("mcp-server: send_message agent_id=%s resolved to plugin=%s model=%s", agentID, pluginID, aliasModel)
 	}
 
-	// Build a chat request matching agent expectations: {message, conversation, model}.
-	// Build identity system prompt so the agent knows who it is.
-	identity := fmt.Sprintf("You are @%s (%s). You are one of several AI agents in a collaborative platform.", args.AgentID, pluginID)
+	identity := fmt.Sprintf("You are @%s (%s). You are one of several AI agents in a collaborative platform.", agentID, pluginID)
 	chatReq := map[string]interface{}{
-		"message": args.Message,
+		"message": message,
 		"conversation": []map[string]string{
 			{"role": "system", "content": identity},
-			{"role": "user", "content": args.Message},
+			{"role": "user", "content": message},
 		},
 	}
-	model := args.Model
 	if model == "" {
 		model = aliasModel
 	}
@@ -464,26 +347,22 @@ func (s *Server) callSendMessage(req Request, params ToolsCallParams) *Response 
 	}
 	body, _ := json.Marshal(chatReq)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	resp, err := s.sdk.RouteToPlugin(ctx, pluginID, "POST", "/chat", bytes.NewReader(body))
+	resp, err := s.sdk.RouteToPlugin(callCtx, pluginID, "POST", "/chat", bytes.NewReader(body))
 	if err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolsCallResult{
-				Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("Error routing to %s (plugin=%s): %v", args.AgentID, pluginID, err)}},
-				IsError: true,
-			},
-		}
+		return mcplib.NewToolResultError(fmt.Sprintf("Error routing to %s (plugin=%s): %v", agentID, pluginID, err)), nil
 	}
 
-	return &Response{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result: ToolsCallResult{
-			Content: []ContentBlock{{Type: "text", Text: string(resp)}},
-		},
+	return mcplib.NewToolResultText(string(resp)), nil
+}
+
+// resolveAlias resolves an alias name to a plugin ID and optional model.
+func (s *Server) resolveAlias(name string) (pluginID, model string) {
+	target := s.aliases.Resolve(name)
+	if target != nil {
+		return target.PluginID, target.Model
 	}
+	return name, ""
 }

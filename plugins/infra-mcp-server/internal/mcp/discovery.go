@@ -25,6 +25,14 @@ type discoveredTool struct {
 	Parameters json.RawMessage `json:"parameters"`
 }
 
+// inputSchema returns the Parameters as a JSON schema, defaulting to empty object.
+func (dt discoveredTool) inputSchema() json.RawMessage {
+	if dt.Parameters != nil && len(dt.Parameters) > 0 {
+		return dt.Parameters
+	}
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
 // toolCache caches discovered tools with TTL.
 type toolCache struct {
 	mu        sync.RWMutex
@@ -34,6 +42,62 @@ type toolCache struct {
 }
 
 var cache = &toolCache{ttl: 60 * time.Second}
+
+// pushedToolStore stores tools registered via POST /tools/register.
+type pushedToolStore struct {
+	mu    sync.RWMutex
+	tools map[string][]rawTool // plugin_id → tools
+}
+
+// rawTool is a tool definition from a plugin.
+type rawTool struct {
+	PluginID    string
+	Name        string
+	Description string
+	Endpoint    string
+	Parameters  json.RawMessage
+}
+
+var pushed = &pushedToolStore{tools: make(map[string][]rawTool)}
+
+// RegisterPushedTools stores tools for a plugin, replacing any previous entry.
+func RegisterPushedTools(pluginID string, tools []rawTool) {
+	pushed.mu.Lock()
+	pushed.tools[pluginID] = tools
+	pushed.mu.Unlock()
+	log.Printf("mcp-server: %s pushed %d tools", pluginID, len(tools))
+}
+
+// pushedToolsByPlugin returns a copy of all pushed tools keyed by plugin ID.
+func pushedToolsByPlugin() map[string][]rawTool {
+	pushed.mu.RLock()
+	defer pushed.mu.RUnlock()
+	out := make(map[string][]rawTool, len(pushed.tools))
+	for k, v := range pushed.tools {
+		out[k] = v
+	}
+	return out
+}
+
+// ToRawTools converts a handler-level tool list into rawTool entries.
+func ToRawTools(pluginID string, tools []struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Endpoint    string          `json:"endpoint"`
+	Parameters  json.RawMessage `json:"parameters"`
+}) []rawTool {
+	out := make([]rawTool, len(tools))
+	for i, t := range tools {
+		out[i] = rawTool{
+			PluginID:    pluginID,
+			Name:        t.Name,
+			Description: t.Description,
+			Endpoint:    t.Endpoint,
+			Parameters:  t.Parameters,
+		}
+	}
+	return out
+}
 
 // DiscoverTools queries kernel for tool:* plugins and builds MCP tool entries.
 // If aliases are provided, tool-type aliases generate alias-named entries
@@ -68,17 +132,15 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Fetch raw tools from each plugin.
-	type rawTool struct {
-		PluginID    string
-		Name        string
-		Description string
-		Endpoint    string
-		Parameters  json.RawMessage
-	}
-	pluginTools := make(map[string][]rawTool) // pluginID → tools
+	// Start with pushed tools (registered via POST /tools/register).
+	pluginTools := pushedToolsByPlugin()
 
+	// Pull-based fallback: fetch from plugins that haven't pushed.
 	for _, p := range plugins {
+		if _, hasPushed := pluginTools[p.ID]; hasPushed {
+			continue // already have pushed tools for this plugin
+		}
+
 		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/mcp", nil)
 		if err != nil {
 			log.Printf("mcp-server: failed to get tools from %s: %v", p.ID, err)

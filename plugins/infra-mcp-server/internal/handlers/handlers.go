@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -54,9 +56,36 @@ func (h *Handler) Info(c *gin.Context) {
 	})
 }
 
-func (h *Handler) Tools(c *gin.Context) {
-	tools := mcpserver.DiscoverTools(h.sdk, h.mcpSrv.Aliases())
-	c.JSON(http.StatusOK, gin.H{
-		"tools": tools,
-	})
+// MCP handles all MCP protocol requests via mcp-go's StreamableHTTPServer.
+// Supports POST (client requests), GET (SSE stream), DELETE (session cleanup).
+func (h *Handler) MCP(c *gin.Context) {
+	h.mcpSrv.HTTPServer().ServeHTTP(c.Writer, c.Request)
+}
+
+// RegisterTools accepts push-based tool registration from plugins.
+// POST /tools/register with {plugin_id, tools: [{name, description, endpoint, parameters}]}
+func (h *Handler) RegisterTools(c *gin.Context) {
+	var req struct {
+		PluginID string `json:"plugin_id" binding:"required"`
+		Tools    []struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Endpoint    string          `json:"endpoint"`
+			Parameters  json.RawMessage `json:"parameters"`
+		} `json:"tools" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	tools := mcpserver.ToRawTools(req.PluginID, req.Tools)
+	mcpserver.RegisterPushedTools(req.PluginID, tools)
+
+	// Invalidate cache and refresh mcp-go registry.
+	mcpserver.InvalidateCache()
+	h.mcpSrv.RefreshTools()
+
+	log.Printf("mcp-server: %s registered %d tools via push", req.PluginID, len(req.Tools))
+	c.JSON(http.StatusOK, gin.H{"registered": len(req.Tools)})
 }
