@@ -30,6 +30,7 @@ type Handler struct {
 	claudeCLI     *claudecli.Client
 	usage         *usage.Tracker
 	mcpConfig     string // path to MCP config file, if available
+	mcpPluginID   string // plugin ID of infra-mcp-server for proxy routing
 	workspaceDir  string // base directory for workspace mounts
 }
 

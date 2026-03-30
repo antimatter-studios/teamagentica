@@ -99,6 +99,10 @@ func main() {
 			log.Printf("WARNING: skipping CLI backend init due to directory creation failure")
 		} else {
 			cliClient := claudecli.NewClient(cliBinary, workdir, claudeDir, cliTimeout, debug)
+			if sdkCfg.TLSCert != "" {
+				cliClient.SetTLS(sdkCfg.TLSCert, sdkCfg.TLSKey, sdkCfg.TLSCA)
+				log.Printf("[cli] mTLS configured for Claude CLI subprocess")
+			}
 			if pluginConfig["CLAUDE_SKIP_PERMISSIONS"] == "true" {
 				cliClient.SetSkipPermissions(true)
 				log.Println("[cli] skip-permissions enabled — all tools auto-approved")
@@ -120,6 +124,8 @@ func main() {
 
 	// Register routes.
 	router.GET("/health", h.Health)
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
 	router.POST("/chat/stream", h.ChatStream)
 	router.GET("/mcp", h.DiscoveredTools)
@@ -128,6 +134,9 @@ func main() {
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
+
+	// MCP proxy: forward requests to infra-mcp-server via SDK mTLS.
+	router.Any("/mcp-proxy", gin.WrapF(h.MCPProxyRaw))
 
 	// Auth routes (proxied via kernel /api/route/:id/auth/*).
 	router.GET("/auth/status", h.AuthStatus)
@@ -147,10 +156,40 @@ func main() {
 		h.ApplyConfig(detail.Config)
 	}))
 
-	// Subscribe to MCP server events.
+	// MCP server integration: CLI subprocess connects to the plugin's own
+	// /mcp-proxy route on localhost, which forwards to infra-mcp-server via SDK mTLS.
 	if backend == "cli" {
 		claudeDir := dataPath + "/claude-home"
+		proxyURL := fmt.Sprintf("https://localhost:%d/mcp-proxy", defaultPort)
 
+		// Helper to configure MCP when the server is discovered.
+		configureMCP := func(mcpPluginID string) {
+			h.SetMCPPluginID(mcpPluginID)
+			if err := claudecli.WriteMCPConfig(claudeDir, proxyURL); err != nil {
+				log.Printf("[mcp] failed to write MCP config: %v", err)
+			} else {
+				h.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
+				log.Printf("[mcp] configured MCP proxy → %s (plugin=%s)", proxyURL, mcpPluginID)
+			}
+		}
+
+		// Proactively discover MCP server at startup (don't wait for event).
+		go func() {
+			plugins, err := sdkClient.SearchPlugins("infra:mcp-server")
+			if err != nil {
+				log.Printf("[mcp] startup discovery failed: %v", err)
+				return
+			}
+			for _, p := range plugins {
+				if p.ID == "infra-mcp-server" {
+					configureMCP(p.ID)
+					return
+				}
+			}
+			log.Printf("[mcp] infra-mcp-server not found at startup, waiting for event")
+		}()
+
+		// Also subscribe to events for hot-reload when MCP server restarts.
 		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			var detail struct {
 				Endpoint string `json:"endpoint"`
@@ -159,15 +198,8 @@ func main() {
 				log.Printf("[mcp] failed to parse mcp_server:enabled detail: %v", err)
 				return
 			}
-			if detail.Endpoint == "" {
-				log.Printf("[mcp] mcp_server:enabled event has no endpoint")
-				return
-			}
-			if err := claudecli.WriteMCPConfig(claudeDir, detail.Endpoint); err != nil {
-				log.Printf("[mcp] failed to write MCP config: %v", err)
-			} else {
-				h.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
-			}
+			// Extract plugin ID from endpoint hostname (e.g. "http://teamagentica-plugin-infra-mcp-server:8081/mcp").
+			configureMCP("infra-mcp-server")
 		}))
 
 		sdkClient.OnEvent("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
@@ -175,6 +207,8 @@ func main() {
 				log.Printf("[mcp] failed to remove MCP config: %v", err)
 			}
 			h.SetMCPConfig("")
+			h.SetMCPPluginID("")
+			log.Printf("[mcp] MCP server disabled, config removed")
 		}))
 	}
 

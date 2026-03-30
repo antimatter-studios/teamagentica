@@ -21,6 +21,9 @@ type Client struct {
 	timeout         time.Duration
 	debug           bool
 	skipPermissions bool
+	tlsCert         string // mTLS client cert for MCP server connections.
+	tlsKey          string
+	tlsCA           string
 }
 
 // NewClient creates a new Claude CLI client.
@@ -39,11 +42,26 @@ func (c *Client) SetSkipPermissions(skip bool) {
 	c.skipPermissions = skip
 }
 
+// SetTLS configures mTLS client certs for the Claude CLI subprocess.
+func (c *Client) SetTLS(cert, key, ca string) {
+	c.tlsCert = cert
+	c.tlsKey = key
+	c.tlsCA = ca
+}
+
 func (c *Client) env() []string {
 	env := os.Environ()
 	env = append(env, "CLAUDE_CONFIG_DIR="+c.claudeDir)
 	// Disable interactive prompts.
 	env = append(env, "CI=1")
+	// mTLS for MCP server connections.
+	if c.tlsCert != "" {
+		env = append(env, "CLAUDE_CODE_CLIENT_CERT="+c.tlsCert)
+		env = append(env, "CLAUDE_CODE_CLIENT_KEY="+c.tlsKey)
+	}
+	if c.tlsCA != "" {
+		env = append(env, "NODE_EXTRA_CA_CERTS="+c.tlsCA)
+	}
 	return env
 }
 
