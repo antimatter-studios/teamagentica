@@ -25,6 +25,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/msgbuffer"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/kernel"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/relay"
+	"github.com/antimatter-studios/teamagentica/plugins/messaging-telegram/internal/topics"
 )
 
 const maxMessageLength = 4096
@@ -43,6 +44,7 @@ type Bot struct {
 	relayClient *relay.Client
 	msgBuffer   *msgbuffer.Buffer
 	dataDir     string // persistent storage directory
+	topicStore  *topics.Store
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -67,6 +69,7 @@ type Bot struct {
 // taskProgress tracks a pending task group for progress updates.
 type taskProgress struct {
 	ChatID     int64
+	TopicID    int                // forum topic thread ID (0 = general chat)
 	MessageID  int                // Telegram message ID for editMessageText
 	Cancel     context.CancelFunc // cancel typing loop
 	Streaming  bool               // true once we receive the first streaming event
@@ -87,6 +90,11 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		log.Printf("Configured %d aliases", len(aliases.List()))
 	}
 
+	topicStore, err := topics.NewStore(filepath.Join(dataDir, "topics.db"))
+	if err != nil {
+		return nil, fmt.Errorf("opening topics store: %w", err)
+	}
+
 	childCtx, cancel := context.WithCancel(ctx)
 
 	b := &Bot{
@@ -99,6 +107,7 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 		debug:        debug,
 		aliases:      aliases,
 		dataDir:      dataDir,
+		topicStore:   topicStore,
 		ctx:          childCtx,
 		cancel:       cancel,
 		pollStopCh:   make(chan struct{}),
@@ -110,8 +119,8 @@ func New(ctx context.Context, token string, kernelClient *kernel.Client, pluginI
 	b.loadKnownChats()
 
 	b.msgBuffer = msgbuffer.New(1*time.Second, func(channelID string, text string, mediaURLs []string) {
-		chatID, _ := strconv.ParseInt(channelID, 10, 64)
-		b.processBuffered(chatID, text, mediaURLs)
+		chatID, topicID := parseChannelKey(channelID)
+		b.processBuffered(chatID, topicID, text, mediaURLs)
 	})
 
 	return b, nil
@@ -202,7 +211,13 @@ func (b *Bot) StartPolling() {
 				b.emitEvent("poll", fmt.Sprintf("getUpdates offset=%d timeout=%ds", offset, b.pollTimeout))
 			}
 
-			updates, err := b.api.GetUpdates(u)
+			// Use raw MakeRequest instead of GetUpdates so we preserve
+			// fields like message_thread_id that tgbotapi v5 drops.
+			params := tgbotapi.Params{
+				"offset":  fmt.Sprintf("%d", offset),
+				"timeout": fmt.Sprintf("%d", b.pollTimeout),
+			}
+			resp, err := b.api.MakeRequest("getUpdates", params)
 			if err != nil {
 				// Check if we were stopped during the long poll.
 				select {
@@ -239,18 +254,32 @@ func (b *Bot) StartPolling() {
 				continue
 			}
 
-			if len(updates) > 0 {
-				b.emitEvent("poll_result", fmt.Sprintf("received %d update(s)", len(updates)))
+			// Parse updates from raw JSON, preserving the raw bytes per-update.
+			var rawUpdates []json.RawMessage
+			if err := json.Unmarshal(resp.Result, &rawUpdates); err != nil {
+				log.Printf("Failed to parse getUpdates result: %v", err)
+				continue
 			}
 
-			for _, update := range updates {
+			if len(rawUpdates) > 0 {
+				b.emitEvent("poll_result", fmt.Sprintf("received %d update(s)", len(rawUpdates)))
+			}
+
+			for _, rawUpdate := range rawUpdates {
+				var update tgbotapi.Update
+				if err := json.Unmarshal(rawUpdate, &update); err != nil {
+					log.Printf("Failed to parse update: %v", err)
+					continue
+				}
 				offset = update.UpdateID + 1
 				msg := update.Message
 				if msg == nil {
 					msg = update.ChannelPost
 				}
 				if msg != nil {
-					b.handleMessage(msg)
+					// Extract MessageThreadID from the raw JSON (preserved from Telegram).
+					threadID := getMessageThreadID(rawUpdate)
+					b.handleMessage(msg, threadID)
 				} else if b.debug {
 					// Log what kind of update this is so we can diagnose dropped messages.
 					kind := "unknown"
@@ -447,6 +476,9 @@ func (b *Bot) HandleWebhookUpdate(body []byte) error {
 		msg = update.ChannelPost
 	}
 
+	// Extract MessageThreadID from raw JSON (tgbotapi v5 doesn't expose it).
+	threadID := getMessageThreadID(body)
+
 	if b.debug {
 		from := "unknown"
 		text := ""
@@ -459,14 +491,14 @@ func (b *Bot) HandleWebhookUpdate(body []byte) error {
 				text = msg.Caption
 			}
 		}
-		log.Printf("[webhook] update_id=%d from=%s text=%q has_message=%v",
-			update.UpdateID, from, text, msg != nil)
-		b.emitEvent("webhook_update", fmt.Sprintf("update_id=%d from=%s text=%s",
-			update.UpdateID, from, truncate(text, 100)))
+		log.Printf("[webhook] update_id=%d from=%s text=%q has_message=%v thread=%d",
+			update.UpdateID, from, text, msg != nil, threadID)
+		b.emitEvent("webhook_update", fmt.Sprintf("update_id=%d from=%s text=%s thread=%d",
+			update.UpdateID, from, truncate(text, 100), threadID))
 	}
 
 	if msg != nil {
-		b.handleMessage(msg)
+		b.handleMessage(msg, threadID)
 	} else {
 		log.Printf("[webhook] update %d has no message (may be callback/edit/etc)", update.UpdateID)
 	}
@@ -487,6 +519,9 @@ func (b *Bot) registerCommands() {
 	commands := []tgbotapi.BotCommand{
 		{Command: "clear", Description: "Clear conversation history"},
 		{Command: "aliases", Description: "List configured @mention aliases"},
+		{Command: "newchannel", Description: "Create a dedicated topic for an agent"},
+		{Command: "deletechannel", Description: "Remove agent routing from current topic"},
+		{Command: "channels", Description: "Show all agent topics"},
 		{Command: "help", Description: "Show available commands"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(commands...)
@@ -500,7 +535,8 @@ func (b *Bot) registerCommands() {
 
 // handleMessage processes an incoming Telegram message.
 // Commands are handled immediately; all other messages are buffered per-chat.
-func (b *Bot) handleMessage(msg *tgbotapi.Message) {
+// threadID is the forum topic's MessageThreadID (0 for general chat).
+func (b *Bot) handleMessage(msg *tgbotapi.Message, threadID int) {
 	// Track chats (groups + DMs) for startup announcements.
 	if msg.Chat != nil {
 		b.trackChat(msg.Chat.ID)
@@ -582,8 +618,11 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	}
 
 	// Commands bypass the buffer — handle immediately.
-	if text == "/help" || text == "/start" || text == "/clear" || text == "/reset" || text == "/aliases" {
-		b.handleCommand(msg.Chat.ID, text)
+	cmd := strings.TrimSuffix(strings.Split(text, " ")[0], "@"+b.api.Self.UserName)
+	switch cmd {
+	case "/help", "/start", "/clear", "/reset", "/aliases",
+		"/newchannel", "/deletechannel", "/channels":
+		b.handleCommand(msg.Chat.ID, threadID, text)
 		return
 	}
 
@@ -591,27 +630,60 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		typing := tgbotapi.NewChatAction(msg.Chat.ID, tgbotapi.ChatTyping)
-		b.api.Send(typing)
+		if threadID > 0 {
+			b.sendTypingToTopic(msg.Chat.ID, threadID)
+		} else {
+			typing := tgbotapi.NewChatAction(msg.Chat.ID, tgbotapi.ChatTyping)
+			b.api.Send(typing)
+		}
 	}()
 
 	var userID int64
 	if msg.From != nil {
 		userID = msg.From.ID
 	}
-	log.Printf("[message] buffering from @%s (user=%d chat=%d): %s", username, userID, msg.Chat.ID, text)
+	log.Printf("[message] buffering from @%s (user=%d chat=%d topic=%d): %s", username, userID, msg.Chat.ID, threadID, text)
 
 	// Buffer the message — will be flushed after debounce window.
-	b.msgBuffer.Add(fmt.Sprintf("%d", msg.Chat.ID), text, imageURLs)
+	// Encode topicID into channelID so processBuffered can recover it.
+	channelKey := fmt.Sprintf("%d", msg.Chat.ID)
+	if threadID > 0 {
+		channelKey = fmt.Sprintf("%d:%d", msg.Chat.ID, threadID)
+	}
+	b.msgBuffer.Add(channelKey, text, imageURLs)
+}
+
+// parseChannelKey splits a "chatID" or "chatID:topicID" buffer key.
+func parseChannelKey(key string) (int64, int) {
+	parts := strings.SplitN(key, ":", 2)
+	chatID, _ := strconv.ParseInt(parts[0], 10, 64)
+	topicID := 0
+	if len(parts) == 2 {
+		if v, err := strconv.Atoi(parts[1]); err == nil {
+			topicID = v
+		}
+	}
+	return chatID, topicID
 }
 
 // handleCommand processes slash commands immediately without buffering.
-func (b *Bot) handleCommand(chatID int64, text string) {
-	switch text {
+func (b *Bot) handleCommand(chatID int64, topicID int, text string) {
+	// Strip bot username suffix and extract args (e.g. "/create_agent_channel@BotName @alias" → cmd + args).
+	parts := strings.SplitN(text, " ", 2)
+	cmd := strings.TrimSuffix(parts[0], "@"+b.api.Self.UserName)
+	args := ""
+	if len(parts) > 1 {
+		args = strings.TrimSpace(parts[1])
+	}
+
+	switch cmd {
 	case "/help", "/start":
 		helpMsg := "Available commands:\n\n" +
 			"/clear — Clear conversation history\n" +
 			"/aliases — List configured @mention aliases\n" +
+			"/newchannel @alias — Create a dedicated topic for an agent\n" +
+			"/deletechannel — Remove agent routing from current topic\n" +
+			"/channels — Show all agent topics\n" +
 			"/help — Show this message\n\n"
 
 		if !b.aliases.IsEmpty() {
@@ -620,27 +692,51 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		} else {
 			helpMsg += "Or just send any message to chat with the AI."
 		}
-		b.sendResponse(chatID, helpMsg)
+		b.sendToChat(chatID, topicID, helpMsg)
 
 	case "/clear", "/reset":
 		b.kernelClient.ClearHistory(chatID)
-		b.sendResponse(chatID, "Conversation cleared.")
+		b.sendToChat(chatID, topicID, "Conversation cleared.")
 
 	case "/aliases":
-		b.handleAliasesCommand(chatID)
+		b.handleAliasesCommand(chatID, topicID)
+
+	case "/newchannel":
+		b.handleCreateAgentChannel(chatID, topicID, args)
+
+	case "/deletechannel":
+		b.handleDeleteAgentChannel(chatID, topicID, args)
+
+	case "/channels":
+		b.handleListAgentChannels(chatID, topicID)
 	}
 }
 
 // processBuffered handles the merged text and media after the debounce timer fires.
 // Called from the MessageBuffer flush callback.
-func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
+func (b *Bot) processBuffered(chatID int64, topicID int, text string, imageURLs []string) {
 	// Per-message context for cancellation.
 	msgCtx, msgCancel := context.WithCancel(b.ctx)
 	defer msgCancel()
 
 	// Send typing indicator and refresh it while waiting.
 	b.wg.Add(1)
-	go b.sendTypingLoop(msgCtx, chatID)
+	go b.sendTypingLoopTopic(msgCtx, chatID, topicID)
+
+	// If this message is in a mapped agent topic, prepend the alias automatically.
+	if topicID > 0 {
+		if mappedAlias := b.topicStore.Lookup(chatID, topicID); mappedAlias != "" {
+			// Only prepend if the user hasn't already @mentioned someone.
+			if !b.aliases.IsEmpty() {
+				result := b.aliases.Parse(text)
+				if result.Target == nil {
+					text = "@" + mappedAlias + " " + text
+				}
+			} else {
+				text = "@" + mappedAlias + " " + text
+			}
+		}
+	}
 
 	// Image/video aliases are handled locally (platform-specific output).
 	if !b.aliases.IsEmpty() {
@@ -661,18 +757,22 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 
 	// All text routing goes through the relay (alias, coordinator, workspace).
 	if b.relayClient != nil {
+		// Encode topicID into channelID for conversation isolation.
 		channelID := fmt.Sprintf("%d", chatID)
+		if topicID > 0 {
+			channelID = fmt.Sprintf("%d:%d", chatID, topicID)
+		}
 		accepted, err := b.relayClient.Chat(channelID, text, imageURLs)
 		if err != nil {
 			msgCancel()
 			var ue *relay.UserError
 			if errors.As(err, &ue) {
 				log.Printf("[relay] user error chat=%d: %s", chatID, ue.Message)
-				b.sendResponse(chatID, ue.Message)
+				b.sendToChat(chatID, topicID, ue.Message)
 			} else {
 				log.Printf("Relay error: %v", err)
 				b.emitEvent("error", fmt.Sprintf("relay: %v", err))
-				b.sendResponse(chatID, "Sorry, I encountered an error processing your message.")
+				b.sendToChat(chatID, topicID, "Sorry, I encountered an error processing your message.")
 			}
 			return
 		}
@@ -680,8 +780,13 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 		log.Printf("[relay] accepted task_group=%s channel=%s", accepted.TaskGroupID, channelID)
 
 		// Send initial "Thinking..." message and track it for progress updates.
-		thinkMsg := tgbotapi.NewMessage(chatID, "Thinking...")
-		sent, err := b.api.Send(thinkMsg)
+		var sent tgbotapi.Message
+		if topicID > 0 {
+			sent, err = b.sendToTopic(chatID, topicID, "Thinking...")
+		} else {
+			thinkMsg := tgbotapi.NewMessage(chatID, "Thinking...")
+			sent, err = b.api.Send(thinkMsg)
+		}
 		if err != nil {
 			msgCancel()
 			log.Printf("Error sending thinking message: %v", err)
@@ -693,17 +798,18 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 		b.tasksMu.Lock()
 		b.taskChats[accepted.TaskGroupID] = taskProgress{
 			ChatID:    chatID,
+			TopicID:   topicID,
 			MessageID: sent.MessageID,
 			Cancel:    msgCancel,
 		}
 		b.tasksMu.Unlock()
-		log.Printf("[relay] registered task_group=%s chat=%d msg=%d", accepted.TaskGroupID, chatID, sent.MessageID)
+		log.Printf("[relay] registered task_group=%s chat=%d topic=%d msg=%d", accepted.TaskGroupID, chatID, topicID, sent.MessageID)
 
 		// Cycle the "Thinking..." message with random phrases.
 		b.wg.Add(1)
 		go b.thinkingCycleLoop(msgCtx, chatID, sent.MessageID)
 
-		b.emitEvent("task_accepted", fmt.Sprintf("task_group=%s chat=%d", accepted.TaskGroupID, chatID))
+		b.emitEvent("task_accepted", fmt.Sprintf("task_group=%s chat=%d topic=%d", accepted.TaskGroupID, chatID, topicID))
 		// Don't cancel msgCtx here — the typing loop continues until
 		// the progress event handler calls cancel on completion.
 		return
@@ -713,7 +819,7 @@ func (b *Bot) processBuffered(chatID int64, text string, imageURLs []string) {
 	msgCancel()
 	log.Printf("No relay client configured — cannot route message")
 	b.emitEvent("error", "no relay client configured")
-	b.sendResponse(chatID, "Message routing is not available. The agent relay is not configured.")
+	b.sendToChat(chatID, topicID, "Message routing is not available. The agent relay is not configured.")
 }
 
 // handleImageGenerate submits an image generation request to a specific provider.
@@ -909,14 +1015,13 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		tp.Cancel()
 
 		// Delete the progress message and send the final response.
-		del := tgbotapi.NewDeleteMessage(tp.ChatID, tp.MessageID)
-		b.api.Send(del)
+		b.deleteTopicMessage(tp.ChatID, tp.MessageID)
 
 		response := ev.Response
 		if ev.Responder != "" {
 			response = formatAttributedResponse(ev.Responder, response)
 		}
-		if err := b.sendResponse(tp.ChatID, response); err != nil {
+		if err := b.sendToChat(tp.ChatID, tp.TopicID, response); err != nil {
 			log.Printf("[progress] error sending final response: %v", err)
 		}
 
@@ -925,7 +1030,7 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		delete(b.taskChats, ev.TaskGroupID)
 		b.tasksMu.Unlock()
 
-		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s chat=%d", ev.TaskGroupID, tp.ChatID))
+		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s chat=%d topic=%d", ev.TaskGroupID, tp.ChatID, tp.TopicID))
 
 	case "streaming":
 		// Streaming token update — edit the progress message with accumulated text.
@@ -1052,6 +1157,34 @@ func (b *Bot) sendTypingLoop(ctx context.Context, chatID int64) {
 	}
 }
 
+// sendTypingLoopTopic sends typing to a topic (or general chat if topicID==0).
+// Caller must call b.wg.Add(1) before spawning this goroutine.
+func (b *Bot) sendTypingLoopTopic(ctx context.Context, chatID int64, topicID int) {
+	defer b.wg.Done()
+
+	if topicID > 0 {
+		b.sendTypingToTopic(chatID, topicID)
+	} else {
+		b.api.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+	}
+
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if topicID > 0 {
+				b.sendTypingToTopic(chatID, topicID)
+			} else {
+				b.api.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+			}
+		}
+	}
+}
+
 // formatAttributedResponse prefixes a response with the responder's name
 // so users can see who authored the message.
 func formatAttributedResponse(name, response string) string {
@@ -1062,9 +1195,9 @@ func formatAttributedResponse(name, response string) string {
 }
 
 // handleAliasesCommand lists all configured @mention aliases.
-func (b *Bot) handleAliasesCommand(chatID int64) {
+func (b *Bot) handleAliasesCommand(chatID int64, topicID int) {
 	if b.aliases.IsEmpty() {
-		b.sendResponse(chatID, "No aliases configured.\n\nSet the ALIASES environment variable to enable @mention routing.\nExample: ALIASES=codex=agent-openai,claude=agent-claude")
+		b.sendToChat(chatID, topicID, "No aliases configured.\n\nSet the ALIASES environment variable to enable @mention routing.\nExample: ALIASES=codex=agent-openai,claude=agent-claude")
 		return
 	}
 
@@ -1087,7 +1220,7 @@ func (b *Bot) handleAliasesCommand(chatID int64) {
 	}
 
 	sb.WriteString("\nUsage: @nickname <message>")
-	b.sendResponse(chatID, sb.String())
+	b.sendToChat(chatID, topicID, sb.String())
 }
 
 // extractMediaURLs extracts photo, video, voice, audio, and document media
@@ -1153,20 +1286,31 @@ func stripToolPrefix(pluginID string) string {
 	return strings.TrimPrefix(pluginID, "tool-")
 }
 
-// sendResponse sends a message, splitting into chunks if over 4096 chars.
-func (b *Bot) sendResponse(chatID int64, response string) error {
+// sendToChat sends a message to a chat, routing to the correct forum topic if topicID > 0.
+func (b *Bot) sendToChat(chatID int64, topicID int, response string) error {
 	if len(response) == 0 {
 		response = "(empty response)"
 	}
 
 	chunks := splitMessage(response, maxMessageLength)
 	for _, chunk := range chunks {
-		msg := tgbotapi.NewMessage(chatID, chunk)
-		if _, err := b.api.Send(msg); err != nil {
-			return fmt.Errorf("sending message chunk: %w", err)
+		if topicID > 0 {
+			if _, err := b.sendToTopic(chatID, topicID, chunk); err != nil {
+				return fmt.Errorf("sending message chunk to topic: %w", err)
+			}
+		} else {
+			msg := tgbotapi.NewMessage(chatID, chunk)
+			if _, err := b.api.Send(msg); err != nil {
+				return fmt.Errorf("sending message chunk: %w", err)
+			}
 		}
 	}
 	return nil
+}
+
+// sendResponse sends a message to the general chat (no topic). Kept for compatibility.
+func (b *Bot) sendResponse(chatID int64, response string) error {
+	return b.sendToChat(chatID, 0, response)
 }
 
 // splitMessage splits text into chunks of at most maxLen characters,
