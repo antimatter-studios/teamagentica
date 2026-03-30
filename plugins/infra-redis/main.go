@@ -61,6 +61,10 @@ func main() {
 
 	router := gin.Default()
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	// Health check.
 	router.GET("/health", func(c *gin.Context) {
 		if err := rdb.Ping(c.Request.Context()).Err(); err != nil {

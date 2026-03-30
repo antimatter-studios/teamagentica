@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -16,31 +17,26 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// PeerResolver resolves a plugin ID to its event callback URL using the
-// SDK peer registry cache. Returns ("", false) if the plugin is unknown.
-type PeerResolver interface {
-	PeerEventURL(pluginID string) (string, bool)
+// PluginRouter routes requests to other plugins via the SDK P2P mechanism.
+type PluginRouter interface {
+	RouteToPlugin(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error)
 }
 
 // EventHandler exposes REST endpoints for the platform event system.
 // Internally it uses Redis Streams for persistence and fan-out via push.
 type EventHandler struct {
-	rdb      *redis.Client
-	peers    PeerResolver
-	debug    bool
-	pushHTTP *http.Client
+	rdb    *redis.Client
+	router PluginRouter
+	debug  bool
 }
 
 // NewEventHandler creates a new handler backed by the given Redis client.
-// The PeerResolver is used to look up subscriber event URLs for push delivery.
-func NewEventHandler(rdb *redis.Client, peers PeerResolver, debug bool) *EventHandler {
+// The PluginRouter is used to deliver events to subscribers via RouteToPlugin.
+func NewEventHandler(rdb *redis.Client, router PluginRouter, debug bool) *EventHandler {
 	return &EventHandler{
-		rdb:   rdb,
-		peers: peers,
-		debug: debug,
-		pushHTTP: &http.Client{
-			Timeout: 3 * time.Second,
-		},
+		rdb:    rdb,
+		router: router,
+		debug:  debug,
 	}
 }
 
@@ -129,7 +125,7 @@ func (h *EventHandler) Publish(c *gin.Context) {
 }
 
 // fanOutToSubscribers pushes an event to all plugins subscribed to the given
-// event type. Resolves each subscriber's event URL via the peer registry cache.
+// event type. Uses RouteToPlugin for standard SDK P2P delivery.
 func (h *EventHandler) fanOutToSubscribers(eventType, source, detail, ts string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -155,28 +151,13 @@ func (h *EventHandler) fanOutToSubscribers(eventType, source, detail, ts string)
 			continue
 		}
 
-		url, ok := h.peers.PeerEventURL(pluginID)
-		if !ok {
-			if h.debug {
-				log.Printf("events: fanout skip %s (no peer address)", pluginID)
-			}
-			continue
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := h.pushHTTP.Do(req)
+		_, err := h.router.RouteToPlugin(ctx, pluginID, "POST", "/events", bytes.NewReader(payload))
 		if err != nil {
 			if h.debug {
 				log.Printf("events: fanout to %s failed: %v", pluginID, err)
 			}
 			continue
 		}
-		resp.Body.Close()
 	}
 }
 
