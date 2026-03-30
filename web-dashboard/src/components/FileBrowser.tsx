@@ -124,9 +124,10 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
   const restoredFromUrl = useRef(false);
 
   // Notify parent of navigation so it can update the URL.
-  const notifyPath = useCallback((providerId: string, pfx: string, trash?: boolean) => {
+  const notifyPath = useCallback((providerId: string, pfx: string, trash?: boolean, fileKey?: string) => {
     const trashSegment = trash ? ".trash/" : "";
-    onPathChange?.(pfx ? `${providerId}/${trashSegment}${pfx}` : `${providerId}/${trashSegment}`);
+    const base = pfx ? `${providerId}/${trashSegment}${pfx}` : `${providerId}/${trashSegment}`;
+    onPathChange?.(fileKey ? `${base}${filenameFromKey(fileKey)}` : base);
   }, [onPathChange]);
 
   // Wrap browse to also notify parent.
@@ -158,17 +159,40 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     let urlPrefix = slashIdx === -1 ? "" : initialPath.slice(slashIdx + 1);
     const isTrash = urlPrefix.startsWith(".trash/");
     if (isTrash) urlPrefix = urlPrefix.slice(".trash/".length);
+
+    // Check if URL points to a file (no trailing slash and has a dot in the last segment).
+    let pendingFile: string | null = null;
+    if (urlPrefix && !urlPrefix.endsWith("/")) {
+      const lastSlash = urlPrefix.lastIndexOf("/");
+      const filename = lastSlash === -1 ? urlPrefix : urlPrefix.slice(lastSlash + 1);
+      if (filename.includes(".")) {
+        pendingFile = filename;
+        urlPrefix = lastSlash === -1 ? "" : urlPrefix.slice(0, lastSlash + 1);
+      }
+    }
+
     const provider = providers.find((p) => p.id === providerId);
     if (provider) {
       selectProvider(provider);
-      if (isTrash) {
-        setTrashMode(true);
-        if (urlPrefix) browseTrash(urlPrefix);
-      } else if (urlPrefix) {
-        browse(urlPrefix);
-      }
+      const doBrowse = async () => {
+        if (isTrash) {
+          setTrashMode(true);
+          if (urlPrefix) await browseTrash(urlPrefix);
+        } else if (urlPrefix) {
+          await browse(urlPrefix);
+        }
+        // After browsing, find and open the file from the loaded file list.
+        if (pendingFile) {
+          const state = useFileStore.getState();
+          const match = state.files.find(
+            (f) => filenameFromKey(f.key) === pendingFile
+          );
+          if (match) viewFile(match);
+        }
+      };
+      doBrowse();
     }
-  }, [providers, initialPath, selectProvider, browse, browseTrash, setTrashMode]);
+  }, [providers, initialPath, selectProvider, browse, browseTrash, setTrashMode, viewFile]);
 
   const handleUpload = () => fileInputRef.current?.click();
 
@@ -267,13 +291,10 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                 refreshVersion={sidebarVersion}
                 onSelectProvider={handleSelectProvider}
                 onNavigate={(pfx) => {
-                  if (trashMode) {
-                    setTrashMode(false);
-                    if (pfx) setTimeout(() => browse(pfx), 0);
-                    notifyPath(p.id, pfx);
-                  } else {
-                    handleBrowse(pfx);
-                  }
+                  if (trashMode) setTrashMode(false);
+                  if (selectedProvider?.id !== p.id) selectProvider(p);
+                  browse(pfx);
+                  notifyPath(p.id, pfx);
                 }}
                 onTrashClick={() => {
                   if (selectedProvider?.id !== p.id) handleSelectProvider(p);
@@ -377,7 +398,10 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
               <FileViewer
                 file={viewingFile}
                 pluginId={selectedProvider.id}
-                onClose={() => viewFile(null)}
+                onClose={() => {
+                  viewFile(null);
+                  notifyPath(selectedProvider.id, prefix, trashMode);
+                }}
               />
             ) : (
               <>
@@ -519,7 +543,11 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                               {canPreview(f) && (
                                 <button
                                   className="file-action-btn"
-                                  onClick={(e) => { e.stopPropagation(); viewFile(f); }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    viewFile(f);
+                                    if (selectedProvider) notifyPath(selectedProvider.id, prefix, false, f.key);
+                                  }}
                                   title="View"
                                 >
                                   &#x1F441;&#xFE0E;
