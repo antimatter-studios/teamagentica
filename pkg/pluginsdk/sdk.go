@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -216,7 +215,6 @@ type Registration struct {
 	Name         string                       `json:"name,omitempty"`
 	Host         string                       `json:"host"`
 	Port         int                          `json:"port"`
-	EventPort    int                          `json:"event_port,omitempty"`
 	Capabilities []string                     `json:"capabilities"`
 	Version      string                       `json:"version"`
 	Candidate    bool                         `json:"candidate,omitempty"` // true if running as a candidate container
@@ -265,9 +263,8 @@ func LoadConfig() Config {
 
 // peerEntry holds a cached plugin address for direct P2P communication.
 type peerEntry struct {
-	Host      string
-	HTTPPort  int
-	EventPort int
+	Host     string
+	HTTPPort int
 }
 
 // Client manages the plugin's relationship with the kernel.
@@ -278,9 +275,7 @@ type Client struct {
 	routeClient  *http.Client // longer timeout for RouteToPlugin (AI chat)
 	stopCh       chan struct{}
 
-	// Internal event server for receiving kernel callbacks.
-	eventServer     *http.Server
-	eventPort       int
+	// Event handler dispatch — populated by OnEvent(), dispatched by EventHandler().
 	eventDebouncers map[string]Debouncer
 	eventMu         sync.RWMutex
 	registeredCh    chan struct{} // closed after successful kernel registration
@@ -364,18 +359,10 @@ func (c *Client) kernelURL() string {
 }
 
 // Start registers with the kernel and begins the heartbeat loop.
-// Always starts an internal server on an ephemeral port to serve /schema and
-// event callbacks. Includes EventPort in registration for kernel proxying.
 // Retries registration with exponential backoff (1s, 2s, 4s, 8s, max 30s).
-// This is non-blocking.
+// This is non-blocking. Plugins must mount SchemaHandler() and EventHandler()
+// on their own router before calling Start().
 func (c *Client) Start(ctx context.Context) {
-	// Always start internal server (serves /schema + event callbacks).
-	if err := c.startInternalServer(); err != nil {
-		log.Printf("pluginsdk: WARNING: failed to start internal server: %v", err)
-	} else {
-		c.registration.EventPort = c.eventPort
-	}
-
 	go func() {
 		// Registration with exponential backoff.
 		backoff := 1 * time.Second
@@ -728,6 +715,27 @@ func (c *Client) WhenPluginAvailable(capability string, fn func(PluginInfo)) {
 	}))
 }
 
+// RegisterToolsWithMCP pushes this plugin's tool definitions to the MCP server.
+// Call from a WhenPluginAvailable("infra:mcp-server", ...) callback.
+func (c *Client) RegisterToolsWithMCP(mcpPluginID string, tools interface{}) error {
+	payload := map[string]interface{}{
+		"plugin_id": c.registration.ID,
+		"tools":     tools,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal tools: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = c.RouteToPlugin(ctx, mcpPluginID, "POST", "/tools/register", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("register tools with %s: %w", mcpPluginID, err)
+	}
+	log.Printf("pluginsdk: registered %s tools with MCP server %s", c.registration.ID, mcpPluginID)
+	return nil
+}
+
 // buildSchemaJSON returns the schema map to serve on GET /schema.
 // Uses Schema if set, otherwise builds from legacy ConfigSchema/WorkspaceSchema.
 func (c *Client) buildSchemaJSON() map[string]interface{} {
@@ -750,154 +758,9 @@ func (c *Client) buildSchemaJSON() map[string]interface{} {
 	return schema
 }
 
-// startInternalServer starts an internal HTTP server on an ephemeral port.
-// Serves GET /schema (live plugin schema) and POST /events (kernel callbacks).
-func (c *Client) startInternalServer() error {
-	ln, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return fmt.Errorf("listen ephemeral port: %w", err)
-	}
-	c.eventPort = ln.Addr().(*net.TCPAddr).Port
-
-	mux := http.NewServeMux()
-
-	// Always serve schema.
-	if c.registration.SchemaFunc != nil {
-		// Dynamic schema — call function on each request.
-		mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
-			data := c.registration.SchemaFunc()
-			if c.registration.ToolsFunc != nil {
-				data["tools"] = c.registration.ToolsFunc()
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(data)
-		})
-	} else if schemaData := c.buildSchemaJSON(); schemaData != nil {
-		// Inject tools if available.
-		if c.registration.ToolsFunc != nil {
-			schemaData["tools"] = c.registration.ToolsFunc()
-		}
-		// Static schema — marshal once.
-		schemaBytes, err := json.Marshal(schemaData)
-		if err != nil {
-			log.Printf("pluginsdk: WARNING: failed to marshal schema: %v", err)
-		} else {
-			mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(schemaBytes)
-			})
-		}
-	} else if c.registration.ToolsFunc != nil {
-		// No schema but tools available — serve tools-only schema.
-		schemaData := map[string]interface{}{"tools": c.registration.ToolsFunc()}
-		schemaBytes, _ := json.Marshal(schemaData)
-		mux.HandleFunc("GET /schema", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(schemaBytes)
-		})
-	}
-
-	// Event callback handler.
-	mux.HandleFunc("POST /events", c.handleEventCallback)
-
-	// Lifecycle event handler — receives plugin:ready / plugin:stopped / plugin:registry-sync
-	// directly from the kernel via HTTP POST (not through Redis event bus).
-	mux.HandleFunc("POST /sdk/lifecycle", c.handleLifecycleEvent)
-
-	c.eventServer = &http.Server{Handler: mux}
-
-	// Use TLS on the internal server when mTLS is enabled so the kernel
-	// (which always uses pluginScheme → "https") can reach /schema and /events.
-	if tlsCfg, err := GetServerTLSConfig(c.config); err != nil {
-		log.Printf("pluginsdk: WARNING: failed to configure TLS for internal server: %v — serving plain HTTP", err)
-	} else if tlsCfg != nil {
-		ln = tls.NewListener(ln, tlsCfg)
-		log.Printf("pluginsdk: internal server listening on :%d (schema + events, mTLS)", c.eventPort)
-	} else {
-		log.Printf("pluginsdk: internal server listening on :%d (schema + events)", c.eventPort)
-	}
-
-	go func() {
-		if err := c.eventServer.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("pluginsdk: internal server error: %v", err)
-		}
-	}()
-	return nil
-}
-
-// handleEventCallback handles POST /events — dispatches to registered handlers.
-func (c *Client) handleEventCallback(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-
-	var event EventCallback
-	if err := json.Unmarshal(body, &event); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-
-	c.eventMu.RLock()
-	debouncer, ok := c.eventDebouncers[event.EventType]
-	c.eventMu.RUnlock()
-
-	if ok {
-		debouncer.Submit(event)
-	} else {
-		log.Printf("pluginsdk: no handler for event type %q", event.EventType)
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-// handleLifecycleEvent handles POST /sdk/lifecycle — receives plugin lifecycle
-// events directly from the kernel (not via Redis). Updates the peer registry
-// so plugins can maintain direct P2P connections.
-func (c *Client) handleLifecycleEvent(w http.ResponseWriter, r *http.Request) {
-	var event struct {
-		Type    string `json:"type"` // plugin:ready, plugin:stopped, plugin:registry-sync
-		Plugin  string `json:"plugin_id,omitempty"`
-		Host    string `json:"host,omitempty"`
-		Port    int    `json:"http_port,omitempty"`
-		EvtPort int    `json:"event_port,omitempty"`
-		// For registry-sync: bulk address map.
-		Registry []struct {
-			ID        string `json:"id"`
-			Host      string `json:"host"`
-			HTTPPort  int    `json:"http_port"`
-			EventPort int    `json:"event_port"`
-		} `json:"registry,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-
-	switch event.Type {
-	case "plugin:ready":
-		if event.Plugin != "" && event.Host != "" {
-			c.setPeer(event.Plugin, event.Host, event.Port, event.EvtPort)
-		}
-	case "plugin:stopped":
-		if event.Plugin != "" {
-			c.invalidatePeer(event.Plugin)
-		}
-	case "plugin:registry-sync":
-		c.peersMu.Lock()
-		c.peers = make(map[string]peerEntry, len(event.Registry))
-		for _, p := range event.Registry {
-			if p.Host != "" {
-				c.peers[p.ID] = peerEntry{Host: p.Host, HTTPPort: p.HTTPPort, EventPort: p.EventPort}
-			}
-		}
-		c.peersMu.Unlock()
-		log.Printf("pluginsdk: registry-sync received, %d peers", len(event.Registry))
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
+// handleEventCallback has been replaced by EventHandler() in helpers.go.
+// Lifecycle events (plugin:ready, plugin:stopped, plugin:registry-sync) are
+// now handled inline within EventHandler() via handleLifecycleEvent().
 
 // ── Webhook helpers ──────────────────────────────────────────────────────────
 
@@ -1502,15 +1365,14 @@ func (c *Client) resolvePeerFromKernel(pluginID string) (peerEntry, bool) {
 	}
 
 	var result struct {
-		Host      string `json:"host"`
-		HTTPPort  int    `json:"http_port"`
-		EventPort int    `json:"event_port"`
+		Host     string `json:"host"`
+		HTTPPort int    `json:"http_port"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&result) != nil || result.Host == "" {
 		return peerEntry{}, false
 	}
 
-	entry := peerEntry{Host: result.Host, HTTPPort: result.HTTPPort, EventPort: result.EventPort}
+	entry := peerEntry{Host: result.Host, HTTPPort: result.HTTPPort}
 	c.peersMu.Lock()
 	c.peers[pluginID] = entry
 	c.peersMu.Unlock()
@@ -1527,25 +1389,10 @@ func (c *Client) invalidatePeer(pluginID string) {
 }
 
 // setPeer updates the peer cache for a plugin (e.g. on plugin:ready lifecycle event).
-func (c *Client) setPeer(pluginID, host string, httpPort, eventPort int) {
+func (c *Client) setPeer(pluginID, host string, httpPort, _ int) {
 	c.peersMu.Lock()
-	c.peers[pluginID] = peerEntry{Host: host, HTTPPort: httpPort, EventPort: eventPort}
+	c.peers[pluginID] = peerEntry{Host: host, HTTPPort: httpPort}
 	c.peersMu.Unlock()
-}
-
-// PeerEventURL returns the event callback URL for a plugin from the peer cache.
-// Returns ("", false) if the plugin is not in the cache or has no event port.
-// Used by infra-redis to fan out events to subscribers via push.
-func (c *Client) PeerEventURL(pluginID string) (string, bool) {
-	entry, ok := c.resolvePeer(pluginID)
-	if !ok || entry.EventPort == 0 {
-		return "", false
-	}
-	scheme := "http"
-	if c.config.TLSCert != "" {
-		scheme = "https"
-	}
-	return fmt.Sprintf("%s://%s:%d/events", scheme, entry.Host, entry.EventPort), true
 }
 
 // loadPeerRegistry bulk-loads all running plugin addresses from the kernel.
@@ -1572,10 +1419,9 @@ func (c *Client) loadPeerRegistry() {
 
 	var result struct {
 		Plugins []struct {
-			ID        string `json:"id"`
-			Host      string `json:"host"`
-			HTTPPort  int    `json:"http_port"`
-			EventPort int    `json:"event_port"`
+			ID       string `json:"id"`
+			Host     string `json:"host"`
+			HTTPPort int    `json:"http_port"`
 		} `json:"plugins"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&result) != nil {
@@ -1585,7 +1431,7 @@ func (c *Client) loadPeerRegistry() {
 	c.peersMu.Lock()
 	for _, p := range result.Plugins {
 		if p.Host != "" {
-			c.peers[p.ID] = peerEntry{Host: p.Host, HTTPPort: p.HTTPPort, EventPort: p.EventPort}
+			c.peers[p.ID] = peerEntry{Host: p.Host, HTTPPort: p.HTTPPort}
 		}
 	}
 	c.peersMu.Unlock()
@@ -1593,6 +1439,25 @@ func (c *Client) loadPeerRegistry() {
 	if len(result.Plugins) > 0 {
 		log.Printf("pluginsdk: loaded %d peer addresses from registry", len(result.Plugins))
 	}
+}
+
+// RouteHTTPClient returns the mTLS-configured HTTP client used for plugin routing.
+// Useful for callers that need to make custom HTTP requests with full header control.
+func (c *Client) RouteHTTPClient() *http.Client {
+	return c.routeClient
+}
+
+// ResolvePeerURL resolves a plugin ID to a direct URL for the given path.
+// Returns empty string if the peer cannot be resolved.
+func (c *Client) ResolvePeerURL(pluginID, path string) string {
+	if entry, ok := c.resolvePeer(pluginID); ok {
+		return c.peerURL(entry, path)
+	}
+	// Try resolving from kernel.
+	if entry, ok := c.resolvePeerFromKernel(pluginID); ok {
+		return c.peerURL(entry, path)
+	}
+	return ""
 }
 
 // peerURL builds a direct URL to a peer plugin.
@@ -1826,15 +1691,6 @@ func (c *Client) Stop() {
 		d.Stop()
 	}
 	c.eventMu.RUnlock()
-
-	// Shutdown event server.
-	if c.eventServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := c.eventServer.Shutdown(ctx); err != nil {
-			log.Printf("pluginsdk: event server shutdown error: %v", err)
-		}
-	}
 
 	if err := c.deregister(); err != nil {
 		log.Printf("pluginsdk: deregister failed: %v", err)
