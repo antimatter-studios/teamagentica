@@ -196,6 +196,10 @@ func main() {
 	h := handlers.New(provider)
 	handlerRef = h
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	// Health
 	router.GET("/health", h.Health)
 
@@ -252,6 +256,13 @@ func main() {
 		resp.Body.Close()
 		log.Printf("[config] Mem0 reload triggered (status %d)", resp.StatusCode)
 	}))
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, handlerRef.ToolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

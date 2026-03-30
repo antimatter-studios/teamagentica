@@ -266,10 +266,19 @@ func parseAtPrefix(text string) (string, string, bool) {
 	}
 	rest := text[1:]
 	spaceIdx := strings.IndexAny(rest, " \t\n")
+	var name, remainder string
 	if spaceIdx < 0 {
-		return strings.ToLower(rest), "", true
+		name = rest
+	} else {
+		name = rest[:spaceIdx]
+		remainder = strings.TrimSpace(rest[spaceIdx+1:])
 	}
-	return strings.ToLower(rest[:spaceIdx]), strings.TrimSpace(rest[spaceIdx+1:]), true
+	// Strip trailing punctuation so "@chat, hello" resolves to alias "chat".
+	name = strings.TrimRight(name, ",.;:!?")
+	if name == "" {
+		return "", "", false
+	}
+	return strings.ToLower(name), remainder, true
 }
 
 // --- Memory integration ---
@@ -1126,8 +1135,8 @@ func (r *relay) disconnect(workspaceID string) {
 // maxAgentCallDepth is the maximum recursion depth for chat_to_agent calls.
 const maxAgentCallDepth = 3
 
-// handleMCP returns the tool definitions exposed by the relay.
-func (r *relay) handleMCP(c *gin.Context) {
+// toolDefs returns the MCP tool definitions for the relay.
+func (r *relay) toolDefs() []gin.H {
 	// Build the list of available agent aliases for the description.
 	aliases := r.routes.Aliases()
 	var agentNames []string
@@ -1140,7 +1149,7 @@ func (r *relay) handleMCP(c *gin.Context) {
 		agentList = strings.Join(agentNames, ", ")
 	}
 
-	tools := []gin.H{
+	return []gin.H{
 		{
 			"name":        "chat_to_agent",
 			"description": fmt.Sprintf("Delegate a task to another agent by alias. Available agents: %s. Use this when you need a specialist agent to handle part of a request.", agentList),
@@ -1161,8 +1170,11 @@ func (r *relay) handleMCP(c *gin.Context) {
 			},
 		},
 	}
+}
 
-	c.JSON(http.StatusOK, gin.H{"tools": tools})
+// handleMCP returns the tool definitions exposed by the relay.
+func (r *relay) handleMCP(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"tools": r.toolDefs()})
 }
 
 // handleChatToAgent executes the chat_to_agent tool — delegates a message to another agent.
@@ -1572,6 +1584,10 @@ func main() {
 
 	ginRouter := gin.Default()
 
+	// SDK helper handlers.
+	ginRouter.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	ginRouter.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	ginRouter.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -1615,6 +1631,13 @@ func main() {
 			return
 		}
 		c.JSON(http.StatusOK, rows)
+	})
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, r.toolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
 	})
 
 	server := &http.Server{

@@ -65,6 +65,10 @@ func main() {
 	h = handlers.New(db)
 	h.SetSDK(sdkClient)
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	// Health
 	router.GET("/health", h.Health)
 
@@ -101,6 +105,13 @@ func main() {
 	// Notify subscribers (e.g. relay) that personas are ready.
 	// Handles the race where the relay starts before this plugin.
 	h.BroadcastReady()
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", defaultPort),

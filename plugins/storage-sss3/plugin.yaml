@@ -2,7 +2,7 @@ id: storage-sss3
 name: "S3 Storage"
 description: "S3-compatible object storage powered by stupid-simple-s3"
 group: storage
-version: "1.0.17"
+version: "1.0.20"
 image: "teamagentica-storage-sss3:latest"
 author: teamagentica
 tags: [storage, s3, files, media, tool]

@@ -2,7 +2,7 @@ id: infra-agent-memory-mem0
 name: "Agent Memory: Semantic (Mem0)"
 description: "Semantic fact extraction and vector search — powered by Mem0 with embedded Qdrant"
 group: infrastructure
-version: "0.1.12"
+version: "0.1.15"
 image: "teamagentica-infra-agent-memory-mem0:latest"
 author: teamagentica
 tags: [memory, semantic, facts, mem0, qdrant]

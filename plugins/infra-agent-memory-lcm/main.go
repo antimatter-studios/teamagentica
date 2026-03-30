@@ -98,6 +98,10 @@ func main() {
 
 	router := gin.Default()
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	// Health — also pings LCM Node.js server.
 	router.GET("/health", func(c *gin.Context) {
 		resp, err := http.Get(lcmServerURL + "/health")
@@ -139,6 +143,13 @@ func main() {
 
 	// Internal LLM proxy — Node.js calls this for summarization.
 	router.POST("/internal/llm/complete", llmCompleteHandler(sdkClient, proxy))
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, toolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", defaultPort),

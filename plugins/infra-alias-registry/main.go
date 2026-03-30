@@ -55,6 +55,10 @@ func main() {
 	router := gin.Default()
 	h = handlers.New(db, sdkClient)
 
+	// SDK helper handlers.
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
+
 	// Health
 	router.GET("/health", h.Health)
 
@@ -82,6 +86,13 @@ func main() {
 
 	// Signal that the registry is ready so plugins that started before us can re-fetch.
 	events.PublishAliasRegistryReady(sdkClient)
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

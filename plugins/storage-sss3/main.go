@@ -112,6 +112,8 @@ func main() {
 
 	// Set up routes.
 	router := gin.Default()
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	h = handlers.NewHandler(client, idx)
 
 	router.GET("/health", h.Health)
@@ -148,6 +150,13 @@ func main() {
 	router.NoRoute(gin.WrapH(httputil.NewSingleHostReverseProxy(sss3URL)))
 
 	h.SetSDK(sdkClient)
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

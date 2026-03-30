@@ -2,7 +2,7 @@ id: infra-agent-persona
 name: "Agent Persona Manager"
 description: "Manages agent personalities — system prompts, model overrides, and backend routing for agent aliases"
 group: infrastructure
-version: "1.1.18"
+version: "1.1.21"
 image: "teamagentica-infra-agent-persona:latest"
 author: teamagentica
 tags: [infrastructure, agents]

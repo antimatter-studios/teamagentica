@@ -2,7 +2,7 @@ id: infra-agent-memory-gateway
 name: "Agent Memory: Gateway"
 description: "Unified memory gateway — routes requests to semantic (Mem0) and episodic (LCM) memory backends"
 group: infrastructure
-version: "0.4.5"
+version: "0.4.8"
 image: "teamagentica-infra-agent-memory-gateway:latest"
 author: teamagentica
 tags: [memory, gateway, agents]

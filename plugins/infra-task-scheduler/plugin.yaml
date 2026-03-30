@@ -2,7 +2,7 @@ id: infra-task-scheduler
 name: "Task Scheduler"
 description: "Scheduled task system for automated workflows and recurring jobs"
 group: infrastructure
-version: "1.0.21"
+version: "1.0.24"
 image: "teamagentica-infra-task-scheduler:latest"
 author: teamagentica
 tags: [infrastructure, scheduler, automation, tasks]

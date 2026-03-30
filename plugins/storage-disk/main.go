@@ -106,6 +106,8 @@ func main() {
 	}
 
 	router := gin.Default()
+	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
+	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	h = handlers.NewHandler(dataPath, disksPath, debug)
 
 	router.GET("/health", h.Health)
@@ -149,6 +151,13 @@ func main() {
 	router.POST("/mcp/browse_trash", h.ToolBrowseTrash)
 	router.POST("/mcp/restore_from_trash", h.ToolRestoreFromTrash)
 	router.POST("/mcp/empty_trash", h.ToolEmptyTrash)
+
+	// Push tools to MCP server when it becomes available.
+	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
+			log.Printf("failed to register tools with MCP: %v", err)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
