@@ -15,6 +15,22 @@ func (b *Bot) handleCreateAgentChannel(chatID int64, topicID int, args string) {
 		return
 	}
 
+	// Validate: alias must exist and be chattable (agent, image, or video — not plain tools/storage).
+	target := b.aliases.Resolve(aliasName)
+	if target == nil {
+		available := b.aliases.ListChattableAliases()
+		if len(available) > 0 {
+			b.sendToChat(chatID, topicID, fmt.Sprintf("Unknown alias @%s.\n\nAvailable agents: @%s", aliasName, strings.Join(available, ", @")))
+		} else {
+			b.sendToChat(chatID, topicID, fmt.Sprintf("Unknown alias @%s. No agents are currently registered.", aliasName))
+		}
+		return
+	}
+	if !target.IsChatTarget() {
+		b.sendToChat(chatID, topicID, fmt.Sprintf("@%s is a tool/storage plugin and cannot be chatted with directly.\n\nOnly agents and agent-tools can have channels.", aliasName))
+		return
+	}
+
 	// If there's already a mapping for this alias, remove the old one (topic may have been deleted externally).
 	existing := b.topicStore.ListForChat(chatID)
 	for _, m := range existing {
