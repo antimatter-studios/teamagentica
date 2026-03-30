@@ -1,10 +1,10 @@
 # agent-openai
 
-AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities.
+AI agent powered by OpenAI GPT and Codex models with subscription and API key backends, workspace support, and MCP integration.
 
 ## Overview
 
-Wraps OpenAI's API. Supports two backends: **subscription mode** (uses the Codex CLI binary with device-code OAuth) and **API key mode** (direct OpenAI REST API with full tool-use loop). Reports usage to `infra-cost-tracking` via the SDK.
+Wraps OpenAI's API with two backends: **subscription mode** (uses the Codex CLI binary with device-code OAuth and workspace isolation) and **API key mode** (direct OpenAI REST API with full tool-use loop). Supports SSE streaming and hot config reload. Reports usage to `cost:tracking` as provider `openai`.
 
 ## Capabilities
 
@@ -29,9 +29,10 @@ Wraps OpenAI's API. Supports two backends: **subscription mode** (uses the Codex
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Health check with backend and configured status |
-| POST | `/chat` | Chat completion (see below) |
-| GET | `/tools` | List discovered tools from tool:* plugins |
-| GET | `/system-prompt` | Show coordinator and direct system prompts |
+| POST | `/chat` | Chat completion with tool-use loop |
+| POST | `/chat/stream` | SSE streaming chat completion |
+| GET | `/mcp` | List discovered tools from tool:* plugins |
+| GET | `/system-prompt` | Show system prompts |
 | GET | `/models` | List available models + current default |
 | GET | `/config/options/:field` | Dynamic select options (OPENAI_MODEL) |
 | GET | `/usage` | Accumulated usage summary |
@@ -46,7 +47,8 @@ Wraps OpenAI's API. Supports two backends: **subscription mode** (uses the Codex
 ## Events
 
 **Subscribes to:**
-- `mcp_server:enabled` -- writes MCP config for Codex CLI (subscription backend only)
+- `config:update` -- hot-reloads model, API key, backend, and debug flag without restart
+- `mcp_server:enabled` -- starts MCP bridge proxy and writes Codex CLI config (subscription backend only)
 - `mcp_server:disabled` -- removes MCP config
 
 **Emits:**
@@ -56,29 +58,28 @@ Wraps OpenAI's API. Supports two backends: **subscription mode** (uses the Codex
 
 ### Subscription backend (`OPENAI_BACKEND=subscription`)
 1. Uses the Codex CLI binary (`/usr/local/bin/codex`) for chat completions.
-2. Builds system prompt and prepends to conversation as a system message.
-3. Supports **workspace isolation** via `workspace_id` (maps to `/workspaces/<id>`).
-4. Calls `codexCLI.ChatCompletion()` with model, messages, image URLs, and workspace directory.
-5. **Model auto-switch**: when using subscription backend with the default `gpt-4o`, model is automatically changed to `gpt-5.3-codex`.
+2. Supports workspace isolation via `workspace_id` (maps to `/workspaces/<id>`).
+3. Model auto-switch: when using subscription backend with default `gpt-4o`, model is automatically changed to `gpt-5.3-codex`.
+4. MCP integration: SDK starts an MCP bridge (localhost plain HTTP proxy forwarding to infra-mcp-server via mTLS) so Codex CLI can access MCP tools without client certs.
 
 ### API key backend (`OPENAI_BACKEND=api_key`)
-1. Discovers tools from `tool:*` plugins (cached 60s), converts to OpenAI `ToolDef` format.
-2. Builds system prompt (coordinator or direct mode) and prepends to conversation.
-3. **Tool-use loop** (max 20 iterations, configurable via `TOOL_LOOP_LIMIT`): calls OpenAI API, checks for `tool_calls` finish reason, executes each tool via kernel proxy, appends results, and loops.
-4. Media attachments from tool results are extracted and returned separately.
-5. Supports custom API endpoint via `OPENAI_API_ENDPOINT`.
+1. Discovers tools from `tool:*` plugins (cached 60s), converts to OpenAI function definitions.
+2. Tool-use loop (max 20 iterations, configurable via `TOOL_LOOP_LIMIT`): calls OpenAI API, checks for `tool_calls` finish reason, executes tools via kernel proxy, appends results, and loops.
+3. Media attachments from tool results extracted and returned separately.
+4. Supports custom API endpoint via `OPENAI_API_ENDPOINT`.
 
-### System prompt injection
-- Coordinator mode: includes JSON task plan routing instructions with parallel execution support.
-- Direct mode: identifies as `@alias` and lists available tools.
+## Models
 
-## Gotchas / Notes
+- `gpt-4o` -- default for API key mode
+- `gpt-4o-mini` -- budget
+- `o4-mini` -- reasoning model
+- `gpt-5.1-codex` -- Codex-optimized
 
-- **Two completely different code paths** for subscription vs API key backends. Subscription mode delegates to the Codex CLI; API key mode implements the full tool loop in Go.
-- **Model auto-switch**: subscription backend silently changes `gpt-4o` to `gpt-5.3-codex` as the default.
-- **OAuth device-code flow** for subscription backend -- user authenticates via browser, then polls `/auth/poll`.
-- **MCP integration** is subscription-only: writes Codex-compatible MCP config on `mcp_server:enabled/disabled` events.
-- **Image support**: accepts `image_urls` in chat request, attached to the last user message.
-- **Workspace support**: `workspace_id` routes the Codex CLI to work in a specific directory.
+## Notes
+
+- Two completely different code paths for subscription vs API key backends.
+- Subscription backend silently changes `gpt-4o` to `gpt-5.3-codex` as the default model.
+- OAuth device-code flow for subscription backend -- user authenticates via browser, then polls `/auth/poll`.
+- MCP integration is subscription-only; proactively discovers infra-mcp-server at startup.
 - Tool names are prefixed as `pluginID__toolName` to avoid collisions.
 - `TOOL_LOOP_LIMIT` (default 20) and `CODEX_CLI_TIMEOUT` (default 300s) are tunable.

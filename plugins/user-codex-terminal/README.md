@@ -1,47 +1,42 @@
 # user-codex-terminal
 
-Web terminal with OpenAI Codex CLI -- AI-powered coding assistant in the browser.
+Workspace environment plugin that provides a web-based OpenAI Codex CLI terminal. Serves a workspace schema that workspace-manager uses to spawn devbox containers with ttyd.
 
-## Overview
-
-A workspace environment plugin that defines how to launch an OpenAI Codex terminal container. Serves a workspace schema for workspace-manager to consume. The terminal runs in a `teamagentica-devbox` container with ttyd.
-
-## Capabilities
+## Capability
 
 - `workspace:environment`
 
-## Dependencies
+## Dependency
 
 - `workspace:manager`
 
 ## Configuration
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `CODEX_APPROVAL_MODE` | select | no | `suggest` | Approval mode: `suggest`, `auto-edit`, `full-auto` |
-| `PLUGIN_DEBUG` | boolean | no | `false` | Debug mode |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `CODEX_APPROVAL_MODE` | select | `suggest` | `suggest` (asks before everything), `auto-edit` (auto-approves file changes), `full-auto` (auto-approves everything) |
+| `PLUGIN_DEBUG` | boolean | `false` | Enable debug logging |
 
-## API Endpoints
+`CODEX_APPROVAL_MODE` is dynamically read from config on each schema request via `SchemaFunc`.
+
+## Workspace Schema
+
+Returned to workspace-manager when launching a container:
+
+- **Image:** `teamagentica-devbox:latest`
+- **Port:** `7681` (ttyd web terminal)
+- **Shared mount:** `codex-shared` -> `/home/coder/.codex`
+- **Env:** `DEVBOX_APP=codex`, `CODEX_APPROVAL_MODE`, `TACLI_KERNEL=http://teamagentica-kernel:8080`
+
+## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/schema` | Plugin schema (config + workspace) |
 | GET | `/health` | Health check |
+| POST | `/events` | SDK event handler |
 
-## Events
+## Notes
 
-None.
-
-## How It Works
-
-1. Registers with `workspace:environment` capability
-2. Serves workspace schema:
-   - Image: `teamagentica-devbox:latest`
-   - Port: `7681`
-   - Shared mount: `codex-shared` -> `/home/coder/.codex`
-   - Env: `DEVBOX_APP=codex`, `CODEX_APPROVAL_MODE` from config
-3. Workspace-manager uses this schema to launch Codex terminal containers
-
-## Gotchas / Notes
-
-- `CODEX_APPROVAL_MODE` controls how much autonomy Codex has: `suggest` (asks before everything), `auto-edit` (auto-approves file changes), `full-auto` (auto-approves everything)
-- Config value is dynamically read on each schema request
+- The plugin itself is a thin schema-serving container -- all terminal functionality lives in the devbox image.
+- The shared mount persists Codex settings across workspace instances.

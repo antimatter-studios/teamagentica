@@ -1,86 +1,97 @@
 # infra-agent-relay
 
-Routes messages between messaging plugins and AI agents, with DAG-based multi-agent orchestration.
-
-## Overview
-
-The relay is the central routing hub for all chat messages. Messaging plugins (Discord, Telegram, WhatsApp, etc.) send messages here; the relay resolves which agent should handle them, optionally runs a coordinator that produces a DAG execution plan, executes the plan with parallel task execution, and returns the final response. It also integrates with infra-agent-memory-gateway for conversation history and infra-alias-registry for persona system prompts.
+Central message routing hub for all chat messages. Messaging plugins (Discord, Telegram, WhatsApp, web chat) send messages here; the relay resolves the target agent via persona lookup, injects conversation history and semantic memory, streams the response back via progress events, and exposes a `chat_to_agent` tool for inter-agent delegation.
 
 ## Capabilities
 
 - `infra:agent-relay`
+- `tool:agent-delegation`
 
 ## Dependencies
 
-- `tool:memory` — conversation history (optional, degrades gracefully)
-- `tool:aliases` — persona definitions and alias registry (optional)
+- `tool:memory` -- conversation history + semantic memory (optional, degrades gracefully)
+- `tool:aliases` -- alias registry for agent resolution (optional)
+- `tool:personas` -- persona definitions with system prompts (discovered dynamically)
 
 ## Configuration
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `DEFAULT_COORDINATOR` | select (dynamic) | _(unset)_ | Fallback coordinator alias. If unset, the first `relay:coordinator` event becomes the default. |
-| `MAX_ORCHESTRATION_TASKS` | number | `20` | Maximum tasks allowed in a coordinator's DAG plan |
+| `ORCHESTRATION_MODE` | select | `direct` | `direct` = single agent with tools (streaming, lower latency). `coordinator` = DAG orchestration for multi-agent planning. |
+| `MAX_ORCHESTRATION_TASKS` | number | `20` | Max tasks in a coordinator's DAG plan (coordinator mode only) |
 | `TASK_TIMEOUT_SECONDS` | number | `120` | Per-task deadline before failure |
-| `PLUGIN_DEBUG` | boolean | `false` | Log detailed request/response traffic |
+| `PLUGIN_DEBUG` | boolean | `false` | Verbose logging + debug trace DB at `/data/relay_traces.db` |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| POST | `/chat` | Main entry point — accepts `{source_plugin, channel_id, message, image_urls}` |
-| POST | `/config/coordinator` | Set coordinator for a source plugin (`{source_plugin, plugin_id/alias, model}`) |
-| POST | `/config/workspace/map` | Map a channel to a workspace bridge (`{source_plugin, channel_id, workspace_id, bridge_addr}`) |
-| POST | `/config/workspace/unmap` | Remove channel-to-workspace mapping |
-| GET | `/status` | Current routing state: connections, coordinators, workspace mappings |
+| GET | `/schema` | Plugin schema (includes route map) |
+| POST | `/events` | SDK event handler |
+| POST | `/chat` | Main entry point: `{source_plugin, channel_id, message, image_urls}` |
+| GET | `/mcp` | Tool definitions (chat_to_agent) |
+| POST | `/tools/chat_to_agent` | Delegate a message to another agent by alias |
+| POST | `/config/workspace/map` | Map channel to workspace bridge |
+| POST | `/config/workspace/unmap` | Remove channel-workspace mapping |
+| GET | `/status` | Current routing state: aliases, workspace mappings |
+| GET | `/debug/traces` | Debug trace list (when debug enabled) |
+| GET | `/debug/traces/:request_id` | Debug trace detail |
 
 ## Events
 
 **Subscribes to:**
-- `alias:update` — rebuilds the alias map from infra-alias-registry (2s debounce)
-- `relay:coordinator` — sets a coordinator for a source plugin via event
-- `config:update` — hot-reloads `DEFAULT_COORDINATOR`, `MAX_ORCHESTRATION_TASKS`, `TASK_TIMEOUT_SECONDS`
+
+| Event | Description |
+|-------|-------------|
+| `alias-registry:update` | Patches alias map on create/update/delete (no debounce) |
+| `alias-registry:ready` | Full alias refresh (1s debounce) |
+| `persona:update` | Refresh persona cache (1s debounce) |
+| `config:update` | Hot-reload timeout, debug, orchestration settings |
+| `relay:task:progress` | Forward async plugin progress to messaging plugins, resolve async waiters |
 
 **Emits:**
-- `relay:ready` — fired 500ms after startup
+
+| Event | Description |
+|-------|-------------|
+| `relay:progress` | Task status updates to source messaging plugin (addressed) |
 
 ## How It Works
 
-### Message routing priority
+### Message routing (POST /chat)
 
-1. **Workspace bridge** — if the channel is mapped to a workspace, the message is forwarded over TCP using a custom binary framing protocol.
-2. **@alias direct routing** — if the message starts with `@alias`, it bypasses orchestration and routes directly to that agent.
-3. **Coordinator + DAG orchestration** — the coordinator agent is called in orchestration mode. If it returns a JSON DAG plan, the relay executes it; if it returns plain text, that's the final answer.
+Returns `{task_group_id}` immediately (HTTP 202). All results delivered via `relay:progress` events.
 
-### DAG orchestration
-
-The coordinator returns a `{"tasks": [...]}` JSON plan where each task has `{id, alias, prompt, depends_on}`. The relay:
-- Validates task count against `MAX_ORCHESTRATION_TASKS`
-- Checks for circular dependencies via DFS cycle detection
-- Executes tasks in topological waves — tasks with satisfied dependencies run in parallel
-- Substitutes `{taskID}` placeholders in prompts with completed task results
-- Tasks with `alias: "self"` route back to the coordinator for synthesis
-- Terminal tasks (nothing depends on them) produce the final output
+1. **Workspace bridge** -- if channel is mapped to a workspace, forward over TCP (binary framing protocol, 16MB max).
+2. **@alias direct routing** -- if message starts with `@alias`, resolve via persona lookup and route directly to that agent. No persona = no chat (bare aliases are infrastructure-only).
+3. **Default agent** -- if no @alias, resolve the persona marked `is_default` and route to it.
 
 ### Persona injection
 
-For non-coordinator (worker) agent calls, the relay looks up the agent's alias in the persona cache. If a persona exists with a `system_prompt`, it's injected into the `agentChatRequest.SystemPrompt` field.
+For all agent calls, the relay looks up the persona's `system_prompt` and injects it into the request. The system prompt is enriched with available agent aliases (for `chat_to_agent` tool awareness).
 
 ### Memory integration
 
-- Before routing, fetches conversation history from infra-agent-memory-gateway using session ID `source_plugin:channel_id`
-- Stores incoming user messages and outgoing assistant messages (fire-and-forget)
-- Memory plugin discovery is cached for 60 seconds
+- Fetches conversation history from `infra-agent-memory-gateway` using session ID `source_plugin:channel_id`
+- Searches semantic memory (Mem0) for relevant facts, injected into system prompt
+- Stores user + assistant messages (fire-and-forget)
+- Extracts facts from conversations for long-term memory (fire-and-forget)
 
-### Alias merging
+### Streaming
 
-Kernel aliases are merged with persona aliases from infra-alias-registry. Personas with a `backend_alias` become routable agent entries; the model can be overridden per-persona.
+Agent responses are streamed via SSE from agent plugins. The relay emits `relay:progress` events with status `streaming` as chunks arrive, then `completed` with the full response.
 
-## Gotchas / Notes
+### Inter-agent delegation (chat_to_agent)
 
-- The `allowFirstAsDefault` flag causes the first `relay:coordinator` event to auto-set the default coordinator when `DEFAULT_COORDINATOR` is unset. This is a one-shot behavior.
-- Workspace bridge uses a custom binary TCP protocol (`bridge` package) with 16MB max payload, not HTTP.
-- The persona cache has a 60-second TTL — changes to personas in the alias registry take up to 60s to take effect in the relay.
-- The coordinator map is exposed via `GET /schema` for the TUI to display which messaging plugin maps to which coordinator.
-- If multiple terminal tasks exist and no synthesis task was included, results are concatenated as a fallback.
+Exposed as an MCP tool. Agents can delegate tasks to other agents by alias. Recursion depth capped at 3 to prevent infinite loops.
+
+### Async task handling
+
+Some agent tools (e.g. video generation) return a `{status: "processing", task_id: "..."}` response. The relay registers an async waiter and blocks until a `relay:task:progress` event resolves it.
+
+## Notes
+
+- Persona cache loaded on startup and refreshed reactively via `persona:update` events. No polling.
+- Memory plugin discovery cached for 60 seconds.
+- Debug traces stored in SQLite at `/data/relay_traces.db` when `PLUGIN_DEBUG` is enabled.
+- Uses Gin for HTTP routing.

@@ -4,13 +4,15 @@ Telegram bot integration for receiving and responding to messages via long polli
 
 ## Overview
 
-Connects to the Telegram Bot API using either long polling (default) or webhook mode. Routes all text through `infra-agent-relay` for coordinator/alias resolution. Supports multi-bot mode, user allowlisting, image/video generation via tool aliases, media extraction (photos, video, voice, audio, stickers, documents, locations), and automatic webhook/polling mode switching.
+Connects to the Telegram Bot API using either long polling (default) or webhook mode. Routes all text through `infra-agent-relay` for alias resolution, persona injection, and workspace routing. Supports multi-bot mode, user allowlisting, media extraction, forum topics with per-agent channels, and automatic webhook/polling mode switching.
 
 ## Capabilities
 
 - `messaging:telegram`
 - `messaging:bot`
 - `messaging:chat`
+
+**Dependency:** `infra:agent-relay`
 
 ## Configuration
 
@@ -31,16 +33,28 @@ Connects to the Telegram Bot API using either long polling (default) or webhook 
 | `GET` | `/config/options/{field}` | Dynamic config field options |
 | `POST` | `/webhook` | Receives Telegram webhook updates |
 
+## Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help`, `/start` | Show available commands and aliases |
+| `/clear`, `/reset` | Clear conversation history |
+| `/aliases` | List configured @mention aliases |
+| `/newchannel @alias` | Create a dedicated forum topic for an agent |
+| `/deletechannel` | Remove agent routing from current topic (or `/deletechannel @alias` from any chat) |
+| `/channels` | Show all agent topic mappings in the group |
+
 ## Events
 
 **Subscribes to:**
 
 | Event | Description |
 |-------|-------------|
-| `alias:update` | Hot-swaps alias map from registry (2s debounce) |
+| `alias-registry:update` | Hot-swaps alias map from registry (2s debounce) |
+| `alias-registry:ready` | Loads full alias set when registry starts (1s debounce) |
 | `config:update` | Updates message buffer duration at runtime |
 | `relay:ready` | Re-emits `relay:coordinator` assignments when relay restarts |
-| `webhook:ready` | Sends route info to `network-webhook-ingress` |
+| `relay:progress` | Updates Telegram messages with task/streaming progress |
 | `webhook:plugin:url` | Receives public webhook URL and switches from polling to webhook mode |
 
 **Emits:**
@@ -58,47 +72,33 @@ Connects to the Telegram Bot API using either long polling (default) or webhook 
 
 2. **Webhook mode** -- When `network-webhook-ingress` sends a `webhook:plugin:url` event, the bot stops polling, calls `setWebhook` on the Telegram API, and switches to receiving updates via `POST /webhook`. Falls back to polling if `setWebhook` fails.
 
-3. **Message buffering** -- Messages are debounced per-chat using `msgbuffer.Buffer` (default 1s). Multiple rapid messages are merged. Configurable via `MESSAGE_BUFFER_MS`.
+3. **Message buffering** -- Messages are debounced per-chat using `msgbuffer.Buffer` (default 0ms, configurable via `MESSAGE_BUFFER_MS`). Multiple rapid messages are merged.
 
 4. **Relay routing** -- All text goes to `infra-agent-relay` via the relay client. The relay handles @alias parsing, coordinator resolution, persona injection, and workspace routing.
 
-5. **Image/video aliases** -- If `@alias` resolves to an image/video tool, the bot handles it locally: calls the kernel's generation API and sends the result as a native Telegram photo/video.
+5. **Forum topics** -- In groups with Topics enabled, `/newchannel @alias` creates a dedicated forum topic linked to an agent. Messages in that topic auto-route to the alias without @mention. Mappings persist in a SQLite database (`/data/topics.db`).
 
-6. **User allowlisting** -- When `TELEGRAM_ALLOWED_USERS` is set, only listed user IDs can interact. Others are silently blocked with an event emitted.
+6. **User allowlisting** -- When `TELEGRAM_ALLOWED_USERS` is set, only listed user IDs can interact. Others are silently blocked.
 
-7. **Media extraction** -- Extracts URLs for photos (highest resolution), video, voice messages, audio files, stickers, and media-type documents. Also checks `ReplyToMessage` so users can reply to an image with a text prompt.
+7. **Media extraction** -- Extracts URLs for photos (highest resolution), video, voice messages, audio files, stickers, and media-type documents. Checks `ReplyToMessage` so users can reply to an image with a text prompt.
 
-8. **Known chats tracking** -- Persists chat IDs to `/data/known_chats.json`. Used for startup announcements. Stale chats (bot removed) are automatically pruned.
+8. **Known chats tracking** -- Persists chat IDs to `/data/known_chats.json` for startup announcements. Stale chats (bot removed) are automatically pruned.
 
 9. **Multi-bot mode** -- Multiple `BOTS` entries each get their own bot instance and source ID. Webhook mode only works for the primary (first) bot.
 
-10. **Commands** -- Registers `/help`, `/clear`, `/aliases` with Telegram's command menu. `/clear` sends a history-clear request to the kernel.
+10. **Typing indicator** -- Sends `ChatTyping` action immediately and refreshes every 4 seconds until the agent responds.
 
-11. **Typing indicator** -- Sends `ChatTyping` action immediately and refreshes every 4 seconds in a loop until the agent responds.
+11. **Task progress** -- Handles `relay:progress` events to edit Telegram messages with streaming/task status updates.
 
 ## Runtime Data
 
-### `/data/known_chats.json`
+- `/data/known_chats.json` -- Tracked chat IDs for startup announcements
+- `/data/topics.db` -- SQLite database mapping forum topics to agent aliases
 
-A JSON array of Telegram chat IDs (int64) that the bot has previously received messages from.
+## Notes
 
-```json
-[-1001234567890, 9876543210]
-```
-
-**Why this exists:** The Telegram Bot API has no endpoint for a bot to list its chats. Bots only learn about chats when they receive messages. This file persists those chat IDs across container restarts so the bot can send startup announcements to all known chats.
-
-**Written when:** A new message arrives from a chat the bot hasn't seen before.
-
-**Read when:** Bot starts up, to send a startup/reconnection announcement.
-
-**Cleanup:** If the bot tries to message a chat and gets a `Forbidden` or `chat not found` error, that chat ID is automatically removed.
-
-## Gotchas / Notes
-
-- **4096-char message limit** -- Telegram caps messages at 4096 characters. Long responses are split at newline/space boundaries.
-- **Polling vs webhook** -- Starts in polling mode by default. Switches to webhook automatically when `network-webhook-ingress` provides a URL. Multi-bot mode cannot use webhooks (each bot would need its own URL).
-- **Conflict backoff** -- If another instance is polling the same bot token, the bot backs off for `pollTimeout` seconds before retrying (Telegram returns 409 Conflict).
-- Supports mTLS for the HTTP server when TLS is configured in the SDK.
-- Video generation polls for completion (5s initial, 10s after 30s, 5min timeout) and sends native Telegram video on success, falling back to a link if native send fails.
+- 4096-char message limit -- long responses are split at newline/space boundaries.
+- Starts in polling mode by default; switches to webhook automatically when ingress provides a URL.
+- Conflict backoff -- if another instance polls the same bot token, backs off for `pollTimeout` seconds.
+- Supports mTLS when TLS is configured in the SDK.
 - Location and venue messages are converted to text descriptions.

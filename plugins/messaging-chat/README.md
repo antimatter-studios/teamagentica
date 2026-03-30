@@ -1,37 +1,47 @@
 # messaging-chat
 
-Web chat interface for conversing with AI agents via a REST API.
-
-## Overview
-
-Built-in web chat backend that provides a conversation-oriented REST API. Stores conversations and messages in a local SQLite database, routes all messages through `infra-agent-relay`, and serves file attachments from local disk or sss3 storage. Designed to be consumed by a web frontend (e.g. user-vscode-server).
+Web chat backend providing a REST API for conversations with AI agents. Stores conversations and messages in SQLite, routes messages through `infra-agent-relay`, and exposes MCP tools for programmatic chat access by other agents.
 
 ## Capabilities
 
 - `messaging:web`
 - `messaging:chat`
+- `tool:chat`
 
 ## Configuration
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `PLUGIN_DEBUG` | boolean | No | `false` | Log detailed request/response traffic |
+| `PLUGIN_DEBUG` | boolean | No | `false` | Verbose logging |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/config/options/:field` | Dynamic config field options |
-| `GET` | `/agents` | List available agent aliases |
-| `GET` | `/conversations` | List conversations for authenticated user |
-| `POST` | `/conversations` | Create a new conversation |
-| `GET` | `/conversations/:id` | Get conversation with all messages |
-| `PUT` | `/conversations/:id` | Update conversation (rename) |
-| `DELETE` | `/conversations/:id` | Delete conversation, messages, and attached files |
-| `POST` | `/conversations/:id/messages` | Send a message and get agent response |
-| `POST` | `/upload` | Upload a file attachment (max 10 MB) |
-| `GET` | `/files/*filepath` | Serve a file by ID (local disk) or storage key (sss3) |
+| GET | `/health` | Health check |
+| GET | `/schema` | Plugin schema |
+| POST | `/events` | SDK event handler |
+| GET | `/config/options/:field` | Dynamic config field options |
+| GET | `/agents` | List available agent aliases |
+| GET | `/conversations` | List conversations for authenticated user |
+| POST | `/conversations` | Create a new conversation |
+| GET | `/conversations/:id` | Get conversation with all messages |
+| PUT | `/conversations/:id` | Update conversation (rename) |
+| DELETE | `/conversations/:id` | Delete conversation + messages + files |
+| POST | `/conversations/:id/read` | Mark conversation as read |
+| POST | `/conversations/:id/messages` | Send message, get agent response |
+| POST | `/upload` | Upload file attachment (max 10 MB) |
+| GET | `/files/*filepath` | Serve file by ID or storage key |
+
+### MCP Tool Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/mcp` | Tool definitions for MCP discovery |
+| POST | `/mcp/list_conversations` | List conversations (filterable by user_id) |
+| POST | `/mcp/get_messages` | Read messages from a conversation |
+| POST | `/mcp/post_message` | Post an assistant message into a conversation |
+| POST | `/mcp/create_conversation` | Create a new conversation |
 
 ## Events
 
@@ -39,31 +49,24 @@ Built-in web chat backend that provides a conversation-oriented REST API. Stores
 
 | Event | Description |
 |-------|-------------|
-| `alias:update` | Hot-swaps alias map from registry (2s debounce) |
-| `config:update` | Receives config changes (PLUGIN_DEBUG toggle) |
-
-**Emits:** None directly (relay client handles agent communication).
+| `alias-registry:update` | Hot-swap alias map (2s debounce) |
+| `alias-registry:ready` | Initial alias load (1s debounce) |
+| `relay:progress` | Receive task progress updates from relay |
+| `config:update` | Receives config changes |
 
 ## How It Works
 
-1. **Authentication** -- Extracts `user_id` from a JWT Bearer token in the Authorization header. Each conversation is scoped to a user.
+1. Extracts `user_id` from JWT Bearer token. Each conversation is scoped to a user.
+2. `POST /conversations/:id/messages` stores the user message, sends to relay, receives agent response (with responder, model, usage, cost), stores assistant message.
+3. Channel ID format: `chat:{user_id}:{conversation_id}` for relay routing.
+4. File uploads go to local disk. On send, files are base64-encoded as data URLs for the agent. Agent response attachments are stored in sss3.
+5. Agent responses may contain `{{media:key}}` or `{{media_url:...}}` references, which are resolved and saved to sss3.
+6. Auto-titles conversations on first message (first 50 chars). Deletion cleans up both local files and sss3 keys.
+7. MCP tools registered with `infra-mcp-server` when available, allowing other agents to read/write chat conversations.
 
-2. **Message flow** -- `POST /conversations/:id/messages` stores the user message in SQLite, sends it to `infra-agent-relay` via the SDK's `RouteToPlugin`, receives the agent response (including responder alias, model, token usage, cost), and stores the assistant message.
+## Notes
 
-3. **Channel ID format** -- Messages are keyed as `chat:{user_id}:{conversation_id}` for relay routing. The relay handles @alias routing, coordinator resolution, persona injection, and conversation memory.
-
-4. **File attachments** -- User uploads go to local disk via `/upload`. On send, files are read and base64-encoded as data URLs for the agent. Agent response attachments (images/video from tools) are decoded and stored in sss3 storage.
-
-5. **Media reference resolution** -- Agent responses may contain `{{media:key}}` (sss3 references) or `{{media_url:...}}` (external/data URLs). These are resolved, saved to sss3, and stripped from the display text.
-
-6. **Alias routing** -- Messages starting with `@alias` are passed through as-is; the relay resolves them. The `/agents` endpoint lists agent-type aliases for the frontend.
-
-7. **Conversation lifecycle** -- Auto-titles on first message (first 50 chars of user text). Deleting a conversation cleans up both local files and sss3 storage keys in the background.
-
-## Gotchas / Notes
-
-- Uses **SQLite** (via GORM) at `/data/chat.db` for conversation history. This is local to the container -- not shared across replicas.
-- Allowed MIME types for upload: `image/{png,jpeg,gif,webp}`, `video/{mp4,webm,quicktime}`, `audio/{mpeg,ogg,wav,webm,mp4}`.
-- File serving checks local disk first, then falls back to sss3 storage -- supports both legacy file_id attachments and new storage-key attachments.
-- No multi-bot mode; single plugin instance per deployment.
-- Uses Gin as the HTTP framework (unlike Discord/Telegram which use net/http).
+- SQLite (GORM) at `/data/chat.db`. Local to the container.
+- Allowed upload MIME types: image (png, jpeg, gif, webp), video (mp4, webm, quicktime), audio (mpeg, ogg, wav, webm, mp4).
+- File serving checks local disk first, falls back to sss3 storage.
+- Uses Gin for HTTP routing.

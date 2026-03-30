@@ -1,46 +1,40 @@
 # user-opencode-terminal
 
-Web terminal with OpenCode CLI -- AI-powered coding assistant in the browser.
+Workspace environment plugin that provides a web-based OpenCode CLI terminal. Serves a workspace schema that workspace-manager uses to spawn devbox containers with ttyd.
 
-## Overview
-
-A workspace environment plugin that defines how to launch an OpenCode terminal container. Serves a static workspace schema for workspace-manager.
-
-## Capabilities
+## Capability
 
 - `workspace:environment`
 
-## Dependencies
+## Dependency
 
 - `workspace:manager`
 
 ## Configuration
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `PLUGIN_DEBUG` | boolean | no | `false` | Debug mode |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `PLUGIN_DEBUG` | boolean | `false` | Enable debug logging |
 
-## API Endpoints
+## Workspace Schema
+
+Returned to workspace-manager when launching a container:
+
+- **Image:** `teamagentica-devbox:latest`
+- **Port:** `7681` (ttyd web terminal)
+- **Shared mount:** `opencode-shared` -> `/home/coder/.opencode`
+- **Env:** `DEVBOX_APP=opencode`, `TACLI_KERNEL=http://teamagentica-kernel:8080`
+
+## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/schema` | Plugin schema (config + workspace) |
 | GET | `/health` | Health check |
+| POST | `/events` | SDK event handler |
 
-## Events
+## Notes
 
-None.
-
-## How It Works
-
-1. Registers with `workspace:environment` capability
-2. Serves workspace schema (static, via `Schema` field):
-   - Image: `teamagentica-devbox:latest`
-   - Port: `7681`
-   - Shared mount: `opencode-shared` -> `/home/coder/.opencode`
-   - Env: `DEVBOX_APP=opencode`
-3. Workspace-manager uses this schema to launch OpenCode terminal containers
-
-## Gotchas / Notes
-
-- Unlike claude-terminal and codex-terminal, this plugin uses the static `Schema` field instead of `SchemaFunc` since it has no dynamic config to inject
-- Simplest of the terminal plugins -- no special config knobs
+- The plugin itself is a thin schema-serving container -- all terminal functionality lives in the devbox image.
+- Uses static `Schema` field (no `SchemaFunc`) since there are no dynamic config values to inject.
+- Simplest of the terminal plugins -- no special config knobs.

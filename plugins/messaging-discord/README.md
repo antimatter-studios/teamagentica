@@ -1,10 +1,6 @@
 # messaging-discord
 
-Discord bot integration for receiving and responding to messages via the Discord gateway.
-
-## Overview
-
-Connects to Discord using the gateway WebSocket API (via discordgo). Responds to DMs and @mentions in guild channels. Routes all text through `infra-agent-relay` for coordinator/alias resolution. Supports multi-bot mode (multiple bot tokens mapped to different aliases), slash command discovery from other plugins, interactive menus, channel management, and image/video generation via tool aliases.
+Discord bot integration. Connects via the gateway WebSocket API (discordgo), listens for DMs and @mentions, and routes messages through `infra-agent-relay` for agent resolution. Supports multi-bot mode, slash command discovery, channel management, interactive menus, and media attachments.
 
 ## Capabilities
 
@@ -16,22 +12,25 @@ Connects to Discord using the gateway WebSocket API (via discordgo). Responds to
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `BOTS` | bot_token | Yes | -- | JSON array of `{alias, token}` entries. Single entry = single bot, multiple = multi-bot mode. |
-| `PLUGIN_DEBUG` | boolean | No | `false` | Log detailed request/response traffic |
+| `BOTS` | bot_token | Yes | -- | JSON array of `{alias, token}`. Single entry = single bot, multiple = multi-bot. |
+| `DISCORD_GUILD_ID` | string | No | auto-detected | Discord server (guild) ID |
+| `PLUGIN_DEBUG` | boolean | No | `false` | Verbose logging |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/config/options/{field}` | Dynamic config field options |
-| `GET` | `/discord-commands` | List registered slash command routes |
-| `GET` | `/tools` | List available channel management tools |
-| `POST` | `/channels/create-category` | Create a Discord channel category |
-| `POST` | `/channels/create` | Create a Discord channel |
-| `POST` | `/channels/list` | List Discord channels |
-| `POST` | `/channels/delete` | Delete a Discord channel |
-| `POST` | `/channels/send-menu` | Send an interactive select menu to a channel |
+| GET | `/health` | Health check |
+| GET | `/schema` | Plugin schema |
+| POST | `/events` | SDK event handler |
+| GET | `/config/options/{field}` | Dynamic config field options |
+| GET | `/discord-commands` | List registered slash commands |
+| GET | `/mcp` | Channel management tool definitions |
+| POST | `/channels/create-category` | Create a channel category |
+| POST | `/channels/create` | Create a channel |
+| POST | `/channels/list` | List channels |
+| POST | `/channels/delete` | Delete a channel |
+| POST | `/channels/send-menu` | Send an interactive select menu |
 
 ## Events
 
@@ -39,42 +38,33 @@ Connects to Discord using the gateway WebSocket API (via discordgo). Responds to
 
 | Event | Description |
 |-------|-------------|
-| `alias:update` | Hot-swaps alias map from registry (2s debounce) |
-| `config:update` | Toggles debug mode and message buffer duration at runtime |
-| `plugin:registered` | Re-discovers slash commands from all plugins (3s debounce) |
-| `relay:ready` | Re-emits `relay:coordinator` assignments when relay restarts |
+| `alias-registry:update` | Hot-swap alias map (2s debounce) |
+| `alias-registry:ready` | Initial alias load (1s debounce) |
+| `config:update` | Toggle debug, message buffer duration |
+| `plugin:registered` | Re-discover slash commands (3s debounce) |
+| `relay:ready` | Re-emit `relay:coordinator` assignments |
+| `relay:progress` | Update Discord messages with task status |
 
 **Emits:**
 
-| Event | Addressed? | Description |
-|-------|-----------|-------------|
-| `relay:coordinator` | Yes (to `infra-agent-relay`) | Maps source plugin to coordinator alias |
-| Various (`message_received`, `agent_response`, `error`, etc.) | No | Debug/observability events |
+| Event | Description |
+|-------|-------------|
+| `relay:coordinator` | Maps source plugin to coordinator alias (addressed to relay) |
 
 ## How It Works
 
-1. **Message reception** -- Listens for `MessageCreate` events. Ignores bot messages. Only processes DMs or messages where the bot is @mentioned. Strips the bot mention from the text.
+1. Listens for `MessageCreate` events. Ignores bot messages. Processes DMs and @mentions only.
+2. Messages are debounced per-channel via `msgbuffer.Buffer` (configurable via `MESSAGE_BUFFER_MS`). Multiple rapid messages merge before relay dispatch.
+3. All text goes to `infra-agent-relay` via `relay.Client.Chat()`. The relay handles @alias parsing, persona injection, and memory.
+4. If an alias resolves to an image/video target, the bot handles it locally via the kernel's generation API and sends the result as a Discord attachment.
+5. Discovers plugins with `discord:command` capability and registers slash commands with Discord. Commands route to owning plugins.
+6. Other plugins can send select menus via `/channels/send-menu`; selections route through the relay as messages.
+7. Multi-bot mode: each `BOTS` entry gets its own Discord session and source ID (`messaging-discord:{alias}`).
+8. Startup announcements post to text channels listing available commands and aliases (throttled, only after >1min disconnects).
 
-2. **Message buffering** -- Messages are debounced per-channel using `msgbuffer.Buffer` (default 1s). Multiple rapid messages in the same channel are merged before sending to the relay. Configurable via `MESSAGE_BUFFER_MS`.
+## Notes
 
-3. **Relay routing** -- All text goes to `infra-agent-relay` via `relay.Client.Chat(channelID, text, mediaURLs)`. The relay handles @alias parsing, coordinator resolution, persona injection, and workspace routing.
-
-4. **Image/video aliases** -- If `@alias` resolves to a `TargetImage` or `TargetVideo`, the bot handles it locally: calls the kernel's image/video generation API and sends the result as a Discord file attachment or video link.
-
-5. **Slash commands** -- On connect, discovers plugins with `discord:command` capability, reads their `discord_commands` schema, and registers them with Discord. Commands are routed to the owning plugin via `RouteToPlugin`. Supports subcommands, embeds, and text responses.
-
-6. **Interactive menus** -- Other plugins can send select menus via `/channels/send-menu`. Menu selections are routed through the relay as new messages using a callback store.
-
-7. **Multi-bot mode** -- When multiple `BOTS` entries are configured, each gets its own Discord session and source ID (`messaging-discord:{alias}`). Each emits its own `relay:coordinator` event. The first bot is the "primary" used for channel management and slash commands.
-
-8. **Startup announcements** -- On connect (and after significant disconnects >1min), posts a status message to all text channels listing available slash commands and aliases.
-
-9. **Media extraction** -- Extracts image/video/audio URLs from message attachments, embeds, message snapshots (forwarded messages), and referenced messages.
-
-## Gotchas / Notes
-
-- **2000-char message limit** -- Discord caps messages at 2000 characters. Long responses are split at newline/space boundaries. Retry logic handles idle connection resets during long relay calls.
-- Slash command discovery retries up to 5 times with increasing delays (0, 3, 5, 10, 15 seconds) since other plugins may not be registered yet at startup.
-- The `DISCORD_GUILD_ID` config (read from plugin config but not in schema) is required for channel management and slash command registration.
-- Uses `discordgo` library. Intents: GuildMessages, DirectMessages, MessageContent, Guilds.
-- Connection loss/resume is tracked; reconnection announcements only fire after >1 minute downtime.
+- 2000-char Discord message limit; long responses split at newline/space boundaries.
+- Slash command discovery retries up to 5 times (0, 3, 5, 10, 15s delays).
+- Intents: GuildMessages, DirectMessages, MessageContent, Guilds.
+- Media extracted from attachments, embeds, message snapshots, and referenced messages.

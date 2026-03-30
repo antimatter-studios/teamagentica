@@ -1,10 +1,6 @@
 # tool-nanobanana
 
-AI image generation using Google Gemini's native image output.
-
-## Overview
-
-Wraps the Google Gemini API (`generativelanguage.googleapis.com/v1beta`) to generate images from text prompts. Returns base64-encoded image data synchronously. Also exposes a chat-format endpoint that returns images as markdown-compatible attachments.
+AI image generation using Google Gemini's native image output. Synchronous -- returns base64-encoded image data directly in the response.
 
 ## Capabilities
 
@@ -18,42 +14,41 @@ Wraps the Google Gemini API (`generativelanguage.googleapis.com/v1beta`) to gene
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `GEMINI_API_KEY` | string | yes | — | Google Gemini API key |
-| `NANOBANANA_MODEL` | select (dynamic) | no | `gemini-2.5-flash-image` | Model to use for generation |
+| `GEMINI_API_KEY` | string | yes | -- | Google Gemini API key |
+| `NANOBANANA_MODEL` | select (dynamic) | no | `gemini-2.5-flash-image` | Model to use |
 | `PLUGIN_DEBUG` | boolean | no | `false` | Log request/response traffic |
 
-## API Endpoints
+## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check with config status |
-| POST | `/generate` | Generate image from prompt (returns base64 image) |
-| POST | `/chat` | Chat-format wrapper around generate (returns attachments) |
-| GET | `/tools` | Tool schema for agent discovery |
-| GET | `/system-prompt` | System prompt for this tool |
+| GET | `/health` | Health check |
+| POST | `/generate` | Generate image from prompt (returns base64) |
+| POST | `/chat` | Chat-format wrapper (returns attachments) |
+| GET | `/models` | List available Gemini image models |
+| GET | `/mcp` | Tool schema for agent/MCP discovery |
+| GET | `/system-prompt` | System prompt |
 | GET | `/config/options/:field` | Dynamic select options (lists Gemini image models) |
-| GET | `/usage` | Accumulated usage summary |
+| GET | `/usage` | Usage summary |
 | GET | `/usage/records` | Raw request records, filterable by `?since=` |
 | GET | `/pricing` | Get pricing entries |
 | PUT | `/pricing` | Update pricing entries |
+| GET | `/schema` | Plugin schema (SDK) |
+| POST | `/events` | Event handler (SDK) |
+
+## Tools Exposed
+
+- **generate_image** -- text prompt to image. Parameters: `prompt` (required), `aspect_ratio` (1:1, 16:9, 9:16).
 
 ## Events
 
-- **Emits:** `generate_request`, `generate_complete`, `chat_request`, `chat_response`, `error`
-- **Reports usage** to `cost:tracking` via SDK on every generate/chat call
+- Emits: `generate_request`, `generate_complete`, `chat_request`, `chat_response`, `error`
+- Reports usage to `cost:tracking` on every generate/chat call
 
-## How It Works
+## How It Fits
 
-1. Agent or user sends a prompt to `/generate` or `/chat`
-2. Plugin calls Gemini `generateContent` with `responseModalities: ["TEXT", "IMAGE"]`
-3. Gemini returns inline base64 image data + optional text in the response candidates
-4. Plugin extracts image data and returns it directly (synchronous -- no polling)
-5. Usage is tracked both locally (file-based) and reported to the cost-tracking system
-6. `/chat` wraps the same flow but formats output with `attachments[]` for messaging integration
+Agents call `/generate` or `/chat` with a text prompt. The plugin calls Gemini `generateContent` with `responseModalities: ["TEXT", "IMAGE"]` and returns the base64 image synchronously. `/chat` wraps the same flow but formats output with `attachments[]` for messaging integration. Registers tools with MCP server when available.
 
-## Gotchas / Notes
+## Pricing
 
-- Image generation is **synchronous** (unlike video tools which are async/polling)
-- The `/config/options/NANOBANANA_MODEL` endpoint filters Gemini models to only those containing "image" in the name
-- HTTP timeout for generation is 60 seconds
-- Pricing is token-based (input/output per 1M) not per-request
+Token-based (per 1M input/output tokens), not per-request. See `plugin.yaml` for default rates per model.

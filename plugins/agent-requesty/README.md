@@ -4,7 +4,7 @@ AI router providing unified access to OpenAI, Anthropic, Google and more via Req
 
 ## Overview
 
-Wraps the Requesty API. Simple passthrough agent -- sends chat requests to Requesty and returns the response. No tool-use loop, no system prompt injection, no coordinator support. Provides access to multiple AI providers through a single API key.
+Wraps the Requesty API. Simple passthrough agent -- sends chat requests to Requesty and returns the response. No tool-use loop, no system prompt injection. Structurally identical to agent-openrouter, targeting the Requesty router instead.
 
 ## Capabilities
 
@@ -27,7 +27,7 @@ Wraps the Requesty API. Simple passthrough agent -- sends chat requests to Reque
 |---|---|---|
 | GET | `/health` | Health check |
 | POST | `/chat` | Chat completion (single call, no tool loop) |
-| GET | `/models` | List models from Requesty API (falls back to defaults) |
+| GET | `/models` | List models from Requesty API |
 | GET | `/config/options/:field` | Dynamic select options (REQUESTY_MODEL) |
 | GET | `/usage` | Accumulated usage summary |
 | GET | `/usage/records` | Raw request records, filterable by `?since=` |
@@ -36,7 +36,8 @@ Wraps the Requesty API. Simple passthrough agent -- sends chat requests to Reque
 
 ## Events
 
-**Subscribes to:** none
+**Subscribes to:**
+- `config:update` -- hot-reloads API key, model, and debug settings
 
 **Emits:**
 - `chat_request`, `chat_response`, `error`
@@ -48,14 +49,11 @@ Wraps the Requesty API. Simple passthrough agent -- sends chat requests to Reque
 3. Returns the response with token usage.
 4. Reports usage to cost-tracking as provider `requesty`.
 
-### Model listing
-- Fetches available models from the Requesty API when API key is set.
-- Falls back to hardcoded defaults if API call fails.
+Per-request model override is supported via the `model` field in the request body.
 
-## Gotchas / Notes
+## Notes
 
-- **No tool-use loop** -- this is a simple passthrough. Unlike agent-claude, agent-gemini, agent-openai, agent-inception, and agent-kimi, it does not discover or execute tools.
-- **No system prompt injection** -- does not build coordinator/direct system prompts.
-- **No `/tools`, `/system-prompt` endpoints** -- not registered.
+- No tool-use loop -- simple passthrough. Does not discover or execute tools.
+- No system prompt injection -- does not build coordinator/direct system prompts.
+- No `/mcp`, `/system-prompt` endpoints.
 - Model names use `provider/model` format (e.g. `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4-20250514`).
-- **Structurally identical to agent-openrouter** -- same simple passthrough architecture, just targeting the Requesty router instead.

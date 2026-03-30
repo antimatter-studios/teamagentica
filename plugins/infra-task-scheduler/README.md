@@ -1,79 +1,97 @@
 # infra-task-scheduler
 
-Scheduled task system for automated workflows and recurring jobs.
+Scheduled task system with two major functions: (1) timer and event-based job scheduling, and (2) a dispatch queue that assigns kanban tasks to AI agents and manages an implement-test-retry execution loop.
 
-## Overview
+## How It Works
 
-An in-memory scheduler that fires events on intervals. Supports one-shot (`once`) and repeating (`repeat`) events with Go duration intervals. Events are managed via REST API and firing history is kept in a capped log. Emits platform events when events are created/updated/deleted.
+### Job Scheduling
+
+Jobs can be triggered two ways:
+
+- **Timer** -- Go duration (`5m`, `1h`) or cron expression (`*/5 * * * *`). A 1-second tick loop checks for due jobs.
+- **Event** -- subscribes to SDK event types (e.g. `task-tracking:assign`) and fires matching jobs when events arrive.
+
+Jobs have `once` (fires then disables) or `repeat` (re-arms after firing) behavior. All state is persisted in SQLite.
+
+### Dispatch Queue
+
+When enabled, the dispatch system integrates with `tool-task-tracker` to automate agent work on kanban cards.
+
+**Triggers:**
+- `task-tracking:assign` -- creates a "triage" dispatch (agent proposes a plan)
+- `task-tracking:comment` -- creates a "reply" dispatch (agent responds to user comment, skips agent/system comments to prevent loops)
+
+**Execution flow:**
+1. Agent receives a prompt built from card details, comments, and context
+2. Agent responds with structured JSON: `{action, message}`
+3. Actions: `plan`, `execute`, `continue`, `replan`, `stop`, `reply`, `done`, `reopen`, `new_task`
+4. On `execute`: enters an implement-test-retry loop (up to 10 attempts), moving the card through columns (In Progress -> In Review -> Done/Failed)
+
+**Concurrency control:**
+- Global limit across all agents
+- Per-agent limits (JSON config, e.g. `{"claude":1,"gemini":2}`)
+- Dedup: skips duplicate assign events for same card+agent
+
+Messages are sent to agents via `infra-agent-relay` and card state is managed via `tool-task-tracker`.
+
+### MCP Tools
+
+Exposes 8 tools via MCP: `list_jobs`, `create_job`, `update_job`, `delete_job`, `trigger_job`, `get_log`, `list_dispatch_queue`, `retry_dispatch`.
 
 ## Capabilities
 
 - `infra:scheduler`
-
-## Dependencies
-
-None.
+- `tool:scheduler`
 
 ## Configuration
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `PLUGIN_DEBUG` | boolean | `false` | Log detailed request/response traffic |
+| `DISPATCH_ENABLED` | boolean | `true` | Process task assignment events and dispatch to agents |
+| `DISPATCH_GLOBAL_LIMIT` | string | (empty) | Max concurrent dispatches across all agents (empty = unlimited) |
+| `DISPATCH_AGENT_LIMITS` | string | (empty) | JSON: per-agent concurrency limits |
+| `DISPATCH_PROMPT_TEMPLATE` | string | (empty) | Override Go text/template for agent prompts |
+| `PLUGIN_DEBUG` | boolean | `false` | Debug logging |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| POST | `/events` | Create event (`{name, text, type, interval}`) |
-| GET | `/events` | List all events |
-| GET | `/events/:id` | Get single event |
-| PUT | `/events/:id` | Update event (partial: `{name, text, interval, enabled}`) |
-| DELETE | `/events/:id` | Delete event |
-| GET | `/log` | Firing log, newest first (supports `?limit=N`, default 50) |
+| POST | `/events` | Create job |
+| GET | `/events` | List all jobs |
+| GET | `/events/:id` | Get single job |
+| PUT | `/events/:id` | Update job (partial) |
+| DELETE | `/events/:id` | Delete job |
+| GET | `/log` | Execution log (supports `?limit=N`, default 50) |
+| GET | `/mcp` | MCP tool discovery |
+| POST | `/mcp/list_jobs` | MCP: list jobs |
+| POST | `/mcp/create_job` | MCP: create job |
+| POST | `/mcp/update_job` | MCP: update job |
+| POST | `/mcp/delete_job` | MCP: delete job |
+| POST | `/mcp/trigger_job` | MCP: manually fire a job |
+| POST | `/mcp/get_log` | MCP: get execution log |
+| GET | `/dispatch/queue` | List dispatch queue (supports `?status=&limit=`) |
+| GET | `/dispatch/queue/:id` | Get dispatch entry |
+| POST | `/dispatch/queue/:id/retry` | Retry a failed dispatch |
+| POST | `/mcp/list_dispatch_queue` | MCP: list dispatch queue |
+| POST | `/mcp/retry_dispatch` | MCP: retry failed dispatch |
 
 ## Events
 
-**Subscribes to:** none
+**Subscribes to:**
+- `task-tracking:assign` -- creates triage dispatch entries
+- `task-tracking:comment` -- creates reply dispatch entries
+- Any event patterns configured on event-type jobs
 
 **Emits:**
-- `event_created` — when a new event is created (detail: `"name (interval)"`)
-- `event_updated` — when an event is modified (detail: event name)
-- `event_deleted` — when an event is removed (detail: event ID)
+- `scheduler:fired` -- when a job fires
+- `dispatch:completed` -- when a dispatch execution loop finishes successfully
 
-## How It Works
+## Notes
 
-### Scheduler loop
-
-A background goroutine ticks every 1 second. On each tick, it checks all enabled events against `time.Now()`. Due events are fired (logged) and:
-- `once` events: disabled after firing
-- `repeat` events: `NextFire` is advanced by `Interval` from the current time
-
-### Event model
-
-| Field | Description |
-|-------|-------------|
-| `id` | UUID |
-| `name` | Human-readable name |
-| `text` | Payload text emitted on fire |
-| `type` | `once` or `repeat` |
-| `interval` | Go duration (`30s`, `5m`, `1h`, `24h`) |
-| `next_fire` | When the event will next fire |
-| `enabled` | Can be toggled on/off |
-| `fired_count` | How many times the event has fired |
-
-### Firing log
-
-Each firing creates a `LogEntry` with the event ID, name, text, and timestamp. The log is capped at 1000 entries (oldest dropped). Accessible via `GET /log`.
-
-### Re-enabling behavior
-
-If a disabled event is re-enabled and its `NextFire` is in the past, it's automatically rearmed to fire after one interval from now.
-
-## Gotchas / Notes
-
-- All state is in-memory — restarts lose all events and logs. There is no database.
-- The scheduler currently only logs firings locally — it does not deliver the event text to any target (no HTTP callback, no relay integration). The `text` field and log exist, but actual delivery/action on fire is not implemented.
-- Minimum interval is 1 second.
-- The 1-second tick resolution means events can fire up to ~1 second late.
-- `interval` in the JSON response is `interval_ns` (nanoseconds as a number) plus `interval` (human-readable string).
+- Database: `scheduler.db` in `/data/` (tables: jobs, execution_logs, dispatch_entries).
+- Timer tick resolution is 1 second -- jobs can fire up to ~1s late.
+- Stale "dispatched" entries from crashes are recovered to "pending" on startup.
+- Agent dispatch has a 5-minute timeout per execution step.
+- Pushes tool definitions to MCP server on availability.

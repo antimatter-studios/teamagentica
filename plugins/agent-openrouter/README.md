@@ -4,7 +4,7 @@ AI router providing access to hundreds of models from OpenAI, Anthropic, Google,
 
 ## Overview
 
-Wraps the OpenRouter API. Simple passthrough agent -- sends chat requests to OpenRouter and returns the response. No tool-use loop, no system prompt injection, no coordinator support. Ideal for accessing many providers through a single API key.
+Wraps the OpenRouter API. Simple passthrough agent -- sends chat requests to OpenRouter and returns the response. No tool-use loop, no system prompt injection. Ideal for accessing many providers through a single API key.
 
 ## Capabilities
 
@@ -27,7 +27,7 @@ Wraps the OpenRouter API. Simple passthrough agent -- sends chat requests to Ope
 |---|---|---|
 | GET | `/health` | Health check |
 | POST | `/chat` | Chat completion (single call, no tool loop) |
-| GET | `/models` | List models from OpenRouter API (falls back to defaults) |
+| GET | `/models` | List models from OpenRouter API |
 | GET | `/config/options/:field` | Dynamic select options (OPENROUTER_MODEL) |
 | GET | `/usage` | Accumulated usage summary |
 | GET | `/usage/records` | Raw request records, filterable by `?since=` |
@@ -36,7 +36,8 @@ Wraps the OpenRouter API. Simple passthrough agent -- sends chat requests to Ope
 
 ## Events
 
-**Subscribes to:** none
+**Subscribes to:**
+- `config:update` -- hot-reloads API key, model, and debug settings
 
 **Emits:**
 - `chat_request`, `chat_response`, `error`
@@ -48,14 +49,11 @@ Wraps the OpenRouter API. Simple passthrough agent -- sends chat requests to Ope
 3. Returns the response with token usage.
 4. Reports usage to cost-tracking as provider `openrouter`.
 
-### Model listing
-- Fetches available models from the OpenRouter API when API key is set.
-- Falls back to hardcoded defaults if API call fails.
+Per-request model override is supported via the `model` field in the request body.
 
-## Gotchas / Notes
+## Notes
 
-- **No tool-use loop** -- this is a simple passthrough. Unlike agent-claude, agent-gemini, agent-openai, agent-inception, and agent-kimi, it does not discover or execute tools.
-- **No system prompt injection** -- does not build coordinator/direct system prompts.
-- **No `/tools`, `/system-prompt` endpoints** -- not registered.
+- No tool-use loop -- simple passthrough. Does not discover or execute tools.
+- No system prompt injection -- does not build coordinator/direct system prompts.
+- No `/mcp`, `/system-prompt` endpoints.
 - Model names use `provider/model` format (e.g. `google/gemini-2.5-flash`, `anthropic/claude-sonnet-4`).
-- Pricing is tracked per-model through OpenRouter, but actual costs depend on the upstream provider.

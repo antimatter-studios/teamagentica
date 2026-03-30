@@ -1,27 +1,26 @@
 # tool-task-tracker
 
-Kanban-style task boards for teams and agents.
-
-## Overview
-
-A full CRUD kanban board system backed by SQLite. Supports boards, columns (statuses), cards (tasks), and comments. Exposes both a REST API for UI integration and MCP-style tool endpoints for AI agent use. Agents can list boards, create/move/update tasks, and add comments.
+Kanban-style task boards for teams and agents. Full CRUD for boards, columns, epics, cards (tasks), and comments, with both a REST API and MCP tool endpoints for AI agent use.
 
 ## Capabilities
 
 - `system:tasks`
 - `tool:tasks`
 
-## Dependencies
-
-None.
-
 ## Configuration
 
-No user-facing config fields (no `config_schema` in plugin.yaml).
+No user-facing config fields.
 
-## API Endpoints
+## Data Model
 
-### REST API
+- Board -> Column -> Card -> Comment hierarchy
+- Board -> Epic (optional grouping for cards)
+- Cards have auto-incrementing per-board numbers, card_type (task/bug), priority (low/medium/high/urgent), assignee (user ID or agent alias), labels (comma-separated), optional due date, optional epic
+- Columns have a `position` float for ordering
+- Soft deletes throughout; cascading deletes (board removes columns/epics/cards; column removes cards; card removes comments; epic unlinks cards)
+- User names resolved via SDK user cache for enriched API responses
+
+## REST API
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -30,47 +29,50 @@ No user-facing config fields (no `config_schema` in plugin.yaml).
 | POST | `/boards` | Create a board |
 | GET | `/boards/:id` | Get a board |
 | PUT | `/boards/:id` | Update a board |
-| DELETE | `/boards/:id` | Delete a board (cascades to columns + cards) |
-| GET | `/boards/:id/columns` | List columns for a board |
+| DELETE | `/boards/:id` | Delete a board |
+| GET | `/boards/:id/columns` | List columns |
 | POST | `/boards/:id/columns` | Create a column |
 | PUT | `/boards/:id/columns/:cid` | Update a column |
-| DELETE | `/boards/:id/columns/:cid` | Delete a column (cascades to cards) |
-| GET | `/boards/:id/cards` | List cards for a board |
+| DELETE | `/boards/:id/columns/:cid` | Delete a column |
+| GET | `/boards/:id/epics` | List epics |
+| POST | `/boards/:id/epics` | Create an epic |
+| PUT | `/boards/:id/epics/:eid` | Update an epic |
+| DELETE | `/boards/:id/epics/:eid` | Delete an epic |
+| GET | `/boards/:id/cards` | List cards |
+| GET | `/boards/:id/cards/search?q=` | Search cards by title/description/labels |
 | POST | `/boards/:id/cards` | Create a card |
+| GET | `/boards/:id/cards/number/:num` | Get card by board-scoped number |
 | PUT | `/boards/:id/cards/:cid` | Update a card |
-| DELETE | `/boards/:id/cards/:cid` | Delete a card (cascades to comments) |
-| GET | `/cards/:cid/comments` | List comments on a card |
+| DELETE | `/boards/:id/cards/:cid` | Delete a card |
+| GET | `/cards/:cid` | Get a single card by ID |
+| GET | `/cards/:cid/comments` | List comments |
 | POST | `/cards/:cid/comments` | Add a comment |
 | DELETE | `/cards/:cid/comments/:cmid` | Delete a comment |
 
-### MCP Tool Endpoints
+## MCP Tool Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/tools` | Tool schema for agent discovery |
-| POST | `/mcp/list_boards` | List boards with columns |
-| POST | `/mcp/list_tasks` | List tasks grouped by status |
-| POST | `/mcp/list_tasks_by_status` | List tasks in a specific column |
-| POST | `/mcp/create_task` | Create a task |
-| POST | `/mcp/set_task_state` | Move a task to another column |
-| POST | `/mcp/update_task` | Update task fields |
-| POST | `/mcp/add_comment` | Add a comment to a task |
+| Endpoint | Description |
+|----------|-------------|
+| `GET /mcp` | Tool schema for agent discovery |
+| `POST /mcp/list_boards` | List boards with columns |
+| `POST /mcp/list_tasks` | List tasks grouped by status |
+| `POST /mcp/list_tasks_by_status` | List tasks in a specific column |
+| `POST /mcp/list_epics` | List epics on a board |
+| `POST /mcp/create_epic` | Create an epic |
+| `POST /mcp/update_epic` | Update an epic |
+| `POST /mcp/delete_epic` | Delete an epic |
+| `POST /mcp/create_task` | Create a task |
+| `POST /mcp/set_task_state` | Move a task to another column |
+| `POST /mcp/update_task` | Update task fields |
+| `POST /mcp/search_tasks` | Search tasks by text query |
+| `POST /mcp/add_comment` | Add a comment to a task |
 
-## Events
+Tools are auto-registered with the MCP server plugin when available.
 
-None (no SDK event reporting).
+## Storage
 
-## How It Works
+SQLite at `/data/tasks.db` via GORM. WAL mode. Card numbers are backfilled on startup for any cards with number=0.
 
-- Data stored in SQLite at `/data/tasks.db` (GORM with auto-migration)
-- Board -> Column -> Card -> Comment hierarchy
-- Cards have priority (low/medium/high/urgent), assignee, labels (comma-separated), optional due date (unix ms)
-- Columns have a `position` float for ordering
-- Deletes cascade: deleting a board removes its columns and cards; deleting a column removes its cards; deleting a card removes its comments
+## Port
 
-## Gotchas / Notes
-
-- SQLite uses `_journal_mode=DELETE` and `_synchronous=FULL` for durability
-- The MCP endpoints accept JSON bodies (POST) while the REST API uses standard HTTP verbs
-- No authentication or per-user isolation -- all boards are shared
-- Port is hardcoded to 8093
+Hardcoded to 8093.

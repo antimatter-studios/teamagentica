@@ -1,10 +1,10 @@
 # agent-claude
 
-AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration.
+AI agent powered by Anthropic Claude models with CLI and API key backends, workspace support, MCP integration, and SSE streaming.
 
 ## Overview
 
-Wraps Anthropic's Claude models. Supports two backends: **CLI mode** (uses the `claude` CLI binary with OAuth authentication) and **API key mode** (direct Anthropic REST API calls with full tool-use loop). Reports usage to `infra-cost-tracking` via the SDK.
+Wraps Anthropic's Claude models with two backends: **CLI mode** (uses the `claude` CLI binary with OAuth authentication, workspace isolation, and MCP tool access) and **API key mode** (direct Anthropic REST API with full tool-use loop). Reports usage to `cost:tracking` as provider `anthropic`.
 
 ## Capabilities
 
@@ -22,6 +22,7 @@ Wraps Anthropic's Claude models. Supports two backends: **CLI mode** (uses the `
 | `CLAUDE_AUTH` | oauth | -- | Anthropic OAuth login (visible when backend=cli) |
 | `ANTHROPIC_API_KEY` | string (secret) | -- | API key (visible when backend=api_key) |
 | `CLAUDE_MODEL` | select (dynamic) | `claude-sonnet-4-6` | Model to use |
+| `CLAUDE_SKIP_PERMISSIONS` | boolean | `false` | Auto-approve all CLI tool use without prompting (visible when backend=cli) |
 | `PLUGIN_DEBUG` | boolean | `false` | Log request/response traffic |
 
 ## API Endpoints
@@ -29,13 +30,15 @@ Wraps Anthropic's Claude models. Supports two backends: **CLI mode** (uses the `
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Health check with backend and configured status |
-| POST | `/chat` | Chat completion (see below) |
-| GET | `/tools` | List discovered tools from tool:* plugins |
-| GET | `/system-prompt` | Show coordinator and direct system prompts |
+| POST | `/chat` | Chat completion with tool-use loop |
+| POST | `/chat/stream` | SSE streaming chat completion |
+| GET | `/mcp` | List discovered tools from tool:* plugins |
+| GET | `/system-prompt` | Show system prompts |
 | GET | `/models` | List available models + current default |
-| GET | `/config/options/:field` | Dynamic select options (e.g. CLAUDE_MODEL) |
+| GET | `/config/options/:field` | Dynamic select options (CLAUDE_MODEL) |
 | GET | `/usage` | Accumulated usage summary |
 | GET | `/usage/records` | Raw request records, filterable by `?since=` |
+| ANY | `/mcp-proxy` | Reverse proxy to infra-mcp-server via mTLS |
 | GET | `/auth/status` | CLI backend auth status |
 | POST | `/auth/device-code` | Start OAuth device-code flow |
 | POST | `/auth/submit-code` | Submit one-time code for OAuth |
@@ -56,28 +59,19 @@ Wraps Anthropic's Claude models. Supports two backends: **CLI mode** (uses the `
 ## How It Works
 
 ### CLI backend (`CLAUDE_BACKEND=cli`)
-1. Builds a single prompt string from the conversation history (system + user/assistant turns concatenated).
-2. Calls the `claude` CLI binary via `claudecli.ChatCompletion()` with model, prompt, system prompt, max turns, and optional MCP config.
-3. Supports **workspace isolation** via `workspace_id` (maps to `/workspaces/<id>`) and **session resumption** via `session_id`.
-4. Returns response text, token counts, cost, number of turns, and session ID.
+1. Builds a prompt string from conversation history.
+2. Calls the `claude` CLI binary with model, prompt, system prompt, max turns, and optional MCP config.
+3. Supports workspace isolation via `workspace_id` and session resumption via `session_id`.
+4. MCP integration: CLI subprocess connects to `/mcp-proxy` on localhost, which forwards to `infra-mcp-server` via mTLS.
 
 ### API key backend (`CLAUDE_BACKEND=api_key`)
-1. Discovers tools from all `tool:*` plugins via kernel's plugin search + `/tools` endpoint (cached 60s).
-2. Builds system prompt with coordinator routing instructions (if `is_coordinator=true`) or agent identity.
-3. Enters a **tool-use loop** (max 20 iterations): calls `anthropic.ChatCompletion()`, checks for `tool_use` stop reason, executes tools via kernel proxy (`sdk.RouteToPlugin`), appends results, and loops.
-4. Media attachments (images from tool results) are extracted and returned separately; base64 data is replaced with `[image generated]` before sending back to the model.
-5. Usage is reported both locally (in-memory tracker) and to the kernel via `sdk.ReportUsage()`.
+1. Discovers tools from `tool:*` plugins (cached 60s).
+2. Tool-use loop (max 20 iterations): calls Anthropic API, checks for `tool_use` stop reason, executes tools via kernel proxy, appends results, and loops.
+3. Media attachments (images from tool results) extracted and returned separately.
 
-### System prompt injection
-- Coordinator mode: includes routing instructions for JSON task plans with parallel execution and dependency chains.
-- Direct mode: identifies as `@alias` and lists available tools.
-- Tool descriptions are injected into the system prompt alongside function-calling definitions.
+## Notes
 
-## Gotchas / Notes
-
-- **Two completely different code paths** for CLI vs API key backends. CLI mode delegates tool use to the CLI binary itself; API key mode implements the full tool loop in Go.
-- **OAuth device-code flow** for CLI backend -- user authenticates via browser, plugin polls for completion.
-- **MCP integration** is CLI-only: listens for `mcp_server:enabled/disabled` events and writes config files to `$CLAUDE_HOME/.claude.json`.
-- **Hot config reload**: model, API key, and debug can change at runtime via `config:update` events without container restart.
-- **Session resumption**: CLI backend supports `session_id` to continue a previous conversation.
-- Tool names are prefixed as `pluginID__toolName` to avoid collisions across plugins.
+- Two completely different code paths for CLI vs API key backends.
+- OAuth device-code flow for CLI backend -- user authenticates via browser.
+- MCP integration is CLI-only; proactively discovers infra-mcp-server at startup.
+- Tool names are prefixed as `pluginID__toolName` to avoid collisions.
