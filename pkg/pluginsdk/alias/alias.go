@@ -26,6 +26,12 @@ type Target struct {
 	Capabilities []string // original capabilities, used for prompt generation
 }
 
+// IsChatTarget returns true if this target has a /chat endpoint and can be
+// addressed directly (agents and agent-tools like image/video generators).
+func (t Target) IsChatTarget() bool {
+	return t.Type == TargetAgent || t.Type == TargetImage || t.Type == TargetVideo
+}
+
 // AliasEntry is a single alias→target pair for listing.
 type AliasEntry struct {
 	Alias  string
@@ -220,6 +226,23 @@ func (m *AliasMap) ListAgentAliases() []string {
 	var names []string
 	for name, target := range aliases {
 		if target.Type == TargetAgent {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ListChattableAliases returns sorted alias names that have /chat endpoints
+// (agents, image generators, video generators — but not plain tools or storage).
+func (m *AliasMap) ListChattableAliases() []string {
+	aliases := m.getMap()
+	if aliases == nil {
+		return nil
+	}
+	var names []string
+	for name, target := range aliases {
+		if target.IsChatTarget() {
 			names = append(names, name)
 		}
 	}
