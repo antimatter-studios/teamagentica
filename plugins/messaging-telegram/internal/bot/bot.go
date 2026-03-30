@@ -994,6 +994,13 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		Message     string `json:"message"`
 		Response    string `json:"response,omitempty"`
 		Responder   string `json:"responder,omitempty"`
+		Attachments []struct {
+			MimeType  string `json:"mime_type"`
+			ImageData string `json:"image_data,omitempty"`
+			URL       string `json:"url,omitempty"`
+			Filename  string `json:"filename,omitempty"`
+			Type      string `json:"type,omitempty"`
+		} `json:"attachments,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(detail), &ev); err != nil {
 		log.Printf("[progress] failed to parse relay:progress: %v", err)
@@ -1023,6 +1030,13 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		}
 		if err := b.sendToChat(tp.ChatID, tp.TopicID, response); err != nil {
 			log.Printf("[progress] error sending final response: %v", err)
+		}
+
+		// Send any attachments (images, videos, etc.).
+		for _, att := range ev.Attachments {
+			if err := b.sendAttachment(tp.ChatID, tp.TopicID, att.MimeType, att.ImageData, att.URL, att.Filename); err != nil {
+				log.Printf("[progress] error sending attachment: %v", err)
+			}
 		}
 
 		// Clean up.
@@ -1306,6 +1320,65 @@ func (b *Bot) sendToChat(chatID int64, topicID int, response string) error {
 		}
 	}
 	return nil
+}
+
+// sendAttachment sends an image or file attachment to a chat, with topic support.
+// Supports base64-encoded data and URLs.
+func (b *Bot) sendAttachment(chatID int64, topicID int, mimeType, imageData, url, filename string) error {
+	// Determine file bytes — prefer base64 data, fall back to URL download.
+	var fileBytes []byte
+	if imageData != "" {
+		var err error
+		fileBytes, err = base64.StdEncoding.DecodeString(imageData)
+		if err != nil {
+			return fmt.Errorf("decode base64 attachment: %w", err)
+		}
+	} else if url != "" {
+		resp, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("download attachment from %s: %w", url, err)
+		}
+		defer resp.Body.Close()
+		fileBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("read attachment body: %w", err)
+		}
+	} else {
+		return nil // nothing to send
+	}
+
+	if filename == "" {
+		filename = "attachment"
+	}
+
+	isImage := strings.HasPrefix(mimeType, "image/")
+	isVideo := strings.HasPrefix(mimeType, "video/")
+
+	if isImage {
+		photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{Name: filename, Bytes: fileBytes})
+		if topicID > 0 {
+			photo.ReplyToMessageID = topicID
+		}
+		_, err := b.api.Send(photo)
+		return err
+	}
+
+	if isVideo {
+		video := tgbotapi.NewVideo(chatID, tgbotapi.FileBytes{Name: filename, Bytes: fileBytes})
+		if topicID > 0 {
+			video.ReplyToMessageID = topicID
+		}
+		_, err := b.api.Send(video)
+		return err
+	}
+
+	// Fallback: send as document.
+	doc := tgbotapi.NewDocument(chatID, tgbotapi.FileBytes{Name: filename, Bytes: fileBytes})
+	if topicID > 0 {
+		doc.ReplyToMessageID = topicID
+	}
+	_, err := b.api.Send(doc)
+	return err
 }
 
 // sendResponse sends a message to the general chat (no topic). Kept for compatibility.
