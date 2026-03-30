@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -68,8 +66,6 @@ func main() {
 	}
 
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 
 	h = handlers.NewHandler(apiKey, model, dataPath, debug)
 	h.SetSDK(sdkClient)
@@ -112,11 +108,7 @@ func main() {
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 func getHostname() string {
