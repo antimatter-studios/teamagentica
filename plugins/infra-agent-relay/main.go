@@ -224,6 +224,7 @@ type resolvedTarget struct {
 // to a concrete plugin + model. Returns nil if no persona exists for the name.
 // Bare aliases without personas are not chattable — they are infrastructure-only.
 func (r *relay) resolvePersona(name string, aliases *alias.AliasMap) *resolvedTarget {
+	// 1. Try persona lookup first (has system prompt, model override, etc.).
 	if p := r.lookupPersona(name); p != nil && p.BackendAlias != "" {
 		target := aliases.Resolve(p.BackendAlias)
 		if target != nil {
@@ -236,6 +237,18 @@ func (r *relay) resolvePersona(name string, aliases *alias.AliasMap) *resolvedTa
 				Model:        model,
 				SystemPrompt: p.SystemPrompt,
 				Alias:        name,
+			}
+		}
+	}
+
+	// 2. Fall back to bare alias if it's a chattable target (agent or agent-tool).
+	// This allows tool-agents like nb2 to be addressed directly without a persona.
+	if aliases != nil {
+		if target := aliases.Resolve(name); target != nil && target.IsChatTarget() {
+			return &resolvedTarget{
+				PluginID: target.PluginID,
+				Model:    target.Model,
+				Alias:    name,
 			}
 		}
 	}
