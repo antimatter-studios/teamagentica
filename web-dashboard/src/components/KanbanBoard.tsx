@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
+import { ProgressBar } from "./ProgressBar";
 import {
   DndContext,
   DragOverlay,
@@ -1636,6 +1637,10 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
                   const laneKey = lane.epic?.id ?? "__ungrouped";
                   const collapsed = collapsedEpics.has(laneKey);
                   const laneCardsByCol = cardsByColumnForLane(lane.cards);
+                  const doneColIds = new Set(columns.filter((c) => c.name.toLowerCase() === "done").map((c) => c.id));
+                  const allLaneCards = cards.filter((c) => lane.epic ? c.epic_id === lane.epic.id : !c.epic_id);
+                  const doneCount = allLaneCards.filter((c) => doneColIds.has(c.column_id)).length;
+                  const totalCount = lane.totalCards;
                   return (
                     <div key={laneKey} className="kn-swimlane">
                       <div
@@ -1652,10 +1657,13 @@ export default function KanbanBoard({ initialSlug, onBoardChange }: {
                         <span className="kn-swimlane-name">
                           {lane.epic?.name ?? "Ungrouped"}
                         </span>
-                        <span className="kn-swimlane-count">({lane.totalCards})</span>
+                        <span className="kn-swimlane-count">({doneCount}/{totalCount})</span>
                         {lane.epic?.description && (
                           <span className="kn-swimlane-desc">{lane.epic.description}</span>
                         )}
+                        <div className="kn-swimlane-progress-wrap">
+                          <ProgressBar done={doneCount} total={totalCount} />
+                        </div>
                       </div>
                       {!collapsed && lane.totalCards > 0 && lane.cards.length > 0 && (
                         <SortableContext items={columnIds} strategy={verticalListSortingStrategy}>
