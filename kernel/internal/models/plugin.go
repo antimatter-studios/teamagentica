@@ -15,7 +15,7 @@ type Plugin struct {
 	Host         string    `json:"host"`
 	GRPCPort     int       `json:"grpc_port"`
 	HTTPPort     int       `json:"http_port"`
-	EventPort    int       `json:"event_port"` // ephemeral port for SDK event callbacks (0 = use HTTPPort)
+	EventPort    int       `json:"event_port,omitempty"` // deprecated: events now go to HTTPPort via /events route
 	Capabilities JSONStringList `json:"capabilities" gorm:"type:json"`
 	Dependencies JSONStringList `json:"dependencies,omitempty" gorm:"type:json"` // required capability strings
 	Marketplace  string    `json:"marketplace" gorm:"default:'local'"`

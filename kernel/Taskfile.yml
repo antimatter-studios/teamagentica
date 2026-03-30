@@ -3,8 +3,9 @@ version: '3'
 tasks:
   build:
     desc: Build production kernel image
+    dir: ..
     cmds:
-      - docker build -t teamagentica-kernel:latest --target prod .
+      - docker build -t teamagentica-kernel:latest -f kernel/Dockerfile --target prod .
 
   connect:
     desc: Connect to kernel via tacli and generate a valid jwt token

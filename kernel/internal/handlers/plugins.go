@@ -22,6 +22,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/runtime"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
 // PluginHandler holds dependencies for plugin management endpoints.
@@ -50,16 +51,28 @@ func NewPluginHandler(rt runtime.ContainerRuntime, cfg *config.Config, clientTLS
 }
 
 // broadcastLifecycleEvent sends a lifecycle event to all running plugins via
-// direct HTTP POST to their event ports. This is NOT via Redis — it's a
-// kernel-direct notification so plugins can maintain their peer address caches
-// even when the event bus is unavailable.
-func (h *PluginHandler) broadcastLifecycleEvent(payload interface{}) {
+// direct HTTP POST to /events on their main API. This is NOT via Redis —
+// it's a kernel-direct notification so plugins can maintain their peer address
+// caches even when the event bus is unavailable.
+//
+// Uses pluginsdk.EventCallback so the format is identical to application events.
+func (h *PluginHandler) broadcastLifecycleEvent(eventType string, detail interface{}) {
 	var plugins []models.Plugin
-	h.db().Select("id", "host", "http_port", "event_port").
+	h.db().Select("id", "host", "http_port").
 		Where("status = ? AND host != ''", "running").
 		Find(&plugins)
 
-	data, err := json.Marshal(payload)
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return
+	}
+
+	event := pluginsdk.EventCallback{
+		EventType: eventType,
+		PluginID:  "kernel",
+		Detail:    string(detailJSON),
+	}
+	data, err := json.Marshal(event)
 	if err != nil {
 		return
 	}
@@ -67,15 +80,12 @@ func (h *PluginHandler) broadcastLifecycleEvent(payload interface{}) {
 	client := &http.Client{Timeout: 3 * time.Second, Transport: h.transport}
 
 	for _, p := range plugins {
-		port := p.EventPort
-		if port == 0 {
-			port = p.HTTPPort
-		}
+		port := p.HTTPPort
 		scheme := "http"
 		if h.clientTLS != nil {
 			scheme = "https"
 		}
-		url := fmt.Sprintf("%s://%s:%d/sdk/lifecycle", scheme, p.Host, port)
+		url := fmt.Sprintf("%s://%s:%d/events", scheme, p.Host, port)
 
 		go func(url string) {
 			req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(data)))
@@ -96,26 +106,23 @@ func (h *PluginHandler) broadcastLifecycleEvent(payload interface{}) {
 // plugins. Called on kernel startup to ensure all plugins have current addresses.
 func (h *PluginHandler) BroadcastRegistrySync() {
 	var plugins []models.Plugin
-	h.db().Select("id", "host", "http_port", "event_port", "status").
+	h.db().Select("id", "host", "http_port", "status").
 		Where("status = ? AND host != ''", "running").
 		Find(&plugins)
 
 	registry := make([]map[string]interface{}, 0, len(plugins))
 	for _, p := range plugins {
 		registry = append(registry, map[string]interface{}{
-			"id":         p.ID,
-			"host":       p.Host,
-			"http_port":  p.HTTPPort,
-			"event_port": p.EventPort,
+			"id":        p.ID,
+			"host":      p.Host,
+			"http_port": p.HTTPPort,
 		})
 	}
 
-	payload := map[string]interface{}{
+	h.broadcastLifecycleEvent("plugin:registry-sync", map[string]interface{}{
 		"type":     "plugin:registry-sync",
 		"registry": registry,
-	}
-
-	h.broadcastLifecycleEvent(payload)
+	})
 	log.Printf("kernel: broadcast registry-sync to %d plugins", len(plugins))
 }
 
@@ -255,7 +262,7 @@ func (h *PluginHandler) GetPluginAddress(c *gin.Context) {
 	id := c.Param("id")
 
 	var plugin models.Plugin
-	if result := h.db().Select("id", "host", "http_port", "event_port", "status").First(&plugin, "id = ?", id); result.Error != nil {
+	if result := h.db().Select("id", "host", "http_port", "status").First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
 	}
@@ -269,10 +276,9 @@ func (h *PluginHandler) GetPluginAddress(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":         plugin.ID,
-		"host":       plugin.Host,
-		"http_port":  plugin.HTTPPort,
-		"event_port": plugin.EventPort,
+		"id":        plugin.ID,
+		"host":      plugin.Host,
+		"http_port": plugin.HTTPPort,
 	})
 }
 
@@ -281,17 +287,16 @@ func (h *PluginHandler) GetPluginAddress(c *gin.Context) {
 // kernel restart via plugin:registry-sync).
 func (h *PluginHandler) GetPluginRegistry(c *gin.Context) {
 	var plugins []models.Plugin
-	h.db().Select("id", "host", "http_port", "event_port", "status").
+	h.db().Select("id", "host", "http_port", "status").
 		Where("status = ? AND host != ''", "running").
 		Find(&plugins)
 
 	entries := make([]gin.H, 0, len(plugins))
 	for _, p := range plugins {
 		entries = append(entries, gin.H{
-			"id":         p.ID,
-			"host":       p.Host,
-			"http_port":  p.HTTPPort,
-			"event_port": p.EventPort,
+			"id":        p.ID,
+			"host":      p.Host,
+			"http_port": p.HTTPPort,
 		})
 	}
 
@@ -1106,15 +1111,10 @@ func (h *PluginHandler) GetPluginSchemaSection(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", sectionData)
 }
 
-// fetchPluginSchema calls GET /schema on the plugin's internal server (event_port)
-// and returns the raw response body. Falls back to http_port if event_port is 0.
+// fetchPluginSchema calls GET /schema on the plugin's main API (http_port)
+// and returns the raw response body.
 func (h *PluginHandler) fetchPluginSchema(plugin models.Plugin) ([]byte, error) {
-	port := plugin.EventPort
-	if port == 0 {
-		port = plugin.HTTPPort
-	}
-
-	url := fmt.Sprintf("%s://%s:%d/schema", h.pluginScheme(), plugin.Host, port)
+	url := fmt.Sprintf("%s://%s:%d/schema", h.pluginScheme(), plugin.Host, plugin.HTTPPort)
 	client := &http.Client{Timeout: 5 * time.Second, Transport: h.transport}
 
 	resp, err := client.Get(url)

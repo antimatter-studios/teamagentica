@@ -83,7 +83,7 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 		"candidate_version":      "",
 		"candidate_host":         "",
 		"candidate_port":         0,
-		"candidate_event_port":   0,
+
 		"candidate_healthy":      false,
 		"candidate_deployed_at":  time.Now(),
 		"candidate_last_seen":    time.Time{},
@@ -141,7 +141,6 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 		"version":      plugin.CandidateVersion,
 		"host":         plugin.CandidateHost,
 		"http_port":    plugin.CandidatePort,
-		"event_port":   plugin.CandidateEventPort,
 		"status":       "running",
 		"last_seen":    time.Now(),
 		// Clear candidate.
@@ -150,7 +149,7 @@ func (h *PluginHandler) PromoteCandidate(c *gin.Context) {
 		"candidate_version":      "",
 		"candidate_host":         "",
 		"candidate_port":         0,
-		"candidate_event_port":   0,
+
 		"candidate_healthy":      false,
 		"candidate_deployed_at":  time.Time{},
 		"candidate_last_seen":    time.Time{},
@@ -197,7 +196,7 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 			"candidate_version":      "",
 			"candidate_host":         "",
 			"candidate_port":         0,
-			"candidate_event_port":   0,
+	
 			"candidate_healthy":      false,
 			"candidate_deployed_at":  time.Time{},
 			"candidate_last_seen":    time.Time{},
@@ -251,7 +250,7 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 		"candidate_version":      "",
 		"candidate_host":         "",
 		"candidate_port":         0,
-		"candidate_event_port":   0,
+
 		"candidate_healthy":      false,
 		"candidate_deployed_at":  time.Time{},
 		"candidate_last_seen":    time.Time{},

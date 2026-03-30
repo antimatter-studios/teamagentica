@@ -148,11 +148,10 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 	// Candidate registration — update candidate fields only.
 	if req.Candidate {
 		updates := map[string]interface{}{
-			"candidate_host":        req.Host,
-			"candidate_port":        req.Port,
-			"candidate_event_port":  req.EventPort,
-			"candidate_healthy":     true,
-			"candidate_last_seen":   now,
+			"candidate_host":      req.Host,
+			"candidate_port":      req.Port,
+			"candidate_healthy":   true,
+			"candidate_last_seen": now,
 		}
 		if req.Version != "" {
 			updates["candidate_version"] = req.Version
@@ -171,11 +170,10 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 
 	// Primary registration.
 	updates := map[string]interface{}{
-		"host":       req.Host,
-		"http_port":  req.Port,
-		"event_port": req.EventPort,
-		"status":     "running",
-		"last_seen":  now,
+		"host":      req.Host,
+		"http_port": req.Port,
+		"status":    "running",
+		"last_seen": now,
 	}
 
 	if req.Version != "" {
@@ -240,12 +238,11 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 
 	// Broadcast plugin:ready lifecycle event directly to all running plugins
 	// so they can update their peer address caches for P2P communication.
-	go h.broadcastLifecycleEvent(map[string]interface{}{
-		"type":       "plugin:ready",
-		"plugin_id":  req.ID,
-		"host":       req.Host,
-		"http_port":  req.Port,
-		"event_port": req.EventPort,
+	go h.broadcastLifecycleEvent("plugin:ready", map[string]interface{}{
+		"type":      "plugin:ready",
+		"plugin_id": req.ID,
+		"host":      req.Host,
+		"http_port": req.Port,
 	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "registered"})
@@ -314,7 +311,7 @@ func (h *PluginHandler) Deregister(c *gin.Context) {
 	})
 
 	// Broadcast plugin:stopped so peers invalidate their address caches.
-	go h.broadcastLifecycleEvent(map[string]interface{}{
+	go h.broadcastLifecycleEvent("plugin:stopped", map[string]interface{}{
 		"type":      "plugin:stopped",
 		"plugin_id": req.ID,
 	})

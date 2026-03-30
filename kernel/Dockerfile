@@ -4,11 +4,11 @@ FROM golang:1.25-alpine AS dev
 RUN apk add --no-cache gcc musl-dev sqlite
 RUN go install github.com/air-verse/air@latest
 
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY kernel/ kernel/
 
-COPY . .
+WORKDIR /build/kernel
 
 EXPOSE 8080
 CMD ["air", "-c", ".air.toml"]
@@ -18,12 +18,13 @@ FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache gcc musl-dev
 
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY kernel/ kernel/
 
-COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -o kernel .
+WORKDIR /build/kernel
+RUN go mod download
+RUN CGO_ENABLED=1 GOOS=linux go build -o /kernel .
 
 # ── Prod stage ──
 FROM alpine:3.19 AS prod
@@ -31,7 +32,7 @@ FROM alpine:3.19 AS prod
 RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
-COPY --from=builder /app/kernel .
+COPY --from=builder /kernel .
 
 RUN mkdir -p /data
 
