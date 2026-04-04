@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
@@ -89,8 +87,6 @@ func main() {
 	h = handlers.NewHandler(db, files, rc, sdkClient, aliases, debug)
 
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.GET("/health", h.Health)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/agents", h.ListAgents)
@@ -123,16 +119,16 @@ func main() {
 	}
 
 	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Handle progress updates from the relay (thinking, running, completed, failed).
-	sdkClient.OnEvent("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		h.HandleRelayProgress(event.Detail)
 	}))
 
 	// Subscribe to config updates for PLUGIN_DEBUG.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -144,17 +140,13 @@ func main() {
 	}))
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", httpPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(httpPort, router)
 }
 
 // convertRegistryAliases converts the alias registry event detail into []alias.AliasInfo.

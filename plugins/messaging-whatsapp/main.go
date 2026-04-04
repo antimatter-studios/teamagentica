@@ -79,9 +79,6 @@ func main() {
 	b.SetSDK(sdkClient)
 
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	// Health check.
 	router.GET("/health", func(c *gin.Context) {
 		configured := accessToken != "" && phoneNumberID != ""
@@ -114,11 +111,11 @@ func main() {
 	}
 
 	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Subscribe to config updates.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -140,11 +137,7 @@ func main() {
 		events.PublishStatus(sdkClient, "webhook:url", fmt.Sprintf("url=%s/webhook (Meta manages registration)", webhookURL))
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", httpPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(httpPort, router)
 }
 
 // convertRegistryAliases converts the alias registry event detail into []alias.AliasInfo.

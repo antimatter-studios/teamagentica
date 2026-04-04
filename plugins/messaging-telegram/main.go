@@ -182,11 +182,11 @@ func main() {
 	}
 
 	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Subscribe to soft config updates (immediate).
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -204,7 +204,7 @@ func main() {
 	}))
 
 	// Re-emit coordinator when the relay (re)starts — addressed events are consumed once.
-	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Relay ready — re-emitting coordinator assignments")
 		for _, entry := range botEntries {
 			sourceID := manifest.ID
@@ -250,8 +250,21 @@ func main() {
 		events.PublishStatus(sdkClient, "webhook", fmt.Sprintf("mode=webhook active url=%s", webhookURL))
 	})
 
+	// Give bots SDK access for chat command routing.
+	for _, b := range bots {
+		b.SetSDK(sdkClient)
+	}
+
+	// Subscribe to chat command registry updates from infra-chat-command-server.
+	sdkClient.Events().On("chat:commands:updated", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		log.Printf("chat:commands:updated — registering chat commands with Telegram")
+		for _, b := range bots {
+			b.UpdateChatCommands(event.Detail)
+		}
+	}))
+
 	// Handle relay progress events — update Telegram messages with task status.
-	sdkClient.OnEvent("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		if telegramBot != nil {
 			telegramBot.HandleRelayProgress(event.Detail)
 		}

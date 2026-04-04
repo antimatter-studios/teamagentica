@@ -337,25 +337,8 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	// Send to relay — returns task_group_id immediately.
-	// The actual response arrives via relay:progress events.
-	accepted, err := h.relay.Chat(channelID, messageText, imageURLs)
-	if err != nil {
-		var ue *relay.UserError
-		if errors.As(err, &ue) {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"error":        ue.Message,
-				"user_message": userMsg,
-			})
-		} else {
-			log.Printf("[chat] relay error: %v", err)
-			c.JSON(http.StatusBadGateway, gin.H{
-				"error":        "agent request failed: " + err.Error(),
-				"user_message": userMsg,
-			})
-		}
-		return
-	}
+	// Upsert progress message immediately so the frontend sees "thinking" right away.
+	h.db.UpsertProgressMessage(uint(convID), "Thinking...")
 
 	// Auto-title on first exchange.
 	if conv.Title == "New Chat" {
@@ -368,10 +351,33 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		h.db.UpdateConversation(conv)
 	}
 
+	// Return immediately — the relay call happens in the background.
+	// The actual response arrives via relay:progress events.
 	c.JSON(http.StatusAccepted, gin.H{
-		"user_message":   userMsg,
-		"task_group_id":  accepted.TaskGroupID,
+		"user_message": userMsg,
 	})
+
+	// Fire-and-forget: send to relay asynchronously.
+	go func() {
+		_, err := h.relay.Chat(channelID, messageText, imageURLs)
+		if err != nil {
+			log.Printf("[chat] relay error: %v", err)
+			// Replace the progress message with the error so the user sees it.
+			var errMsg string
+			var ue *relay.UserError
+			if errors.As(err, &ue) {
+				errMsg = ue.Message
+			} else {
+				errMsg = "Sorry, I encountered an error processing your message."
+			}
+			h.db.DeleteProgressMessages(uint(convID))
+			h.db.CreateMessage(&storage.Message{
+				ConversationID: uint(convID),
+				Role:           "assistant",
+				Content:        errMsg,
+			})
+		}
+	}()
 }
 
 // --- Media Reference Resolution ---

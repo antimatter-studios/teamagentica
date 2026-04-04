@@ -65,7 +65,7 @@ type Bot struct {
 	msgBuffer    *msgbuffer.Buffer
 	callbacks    *channels.CallbackStore
 	channelStore *channels.Store         // channel → target mapping
-	cmdOwners    map[string]commandOwner // slash command name → owning plugin
+	chatCmds     chatCmdState            // chat commands from infra-chat-command-server
 
 	disconnectedAt atomic.Int64 // unix timestamp of last disconnect (0 = never)
 
@@ -146,34 +146,6 @@ func (b *Bot) getCache() *redis.Client {
 	return b.cache
 }
 
-// RegisteredCommand is a serializable view of a registered slash command route.
-type RegisteredCommand struct {
-	Key      string `json:"key"`      // e.g. "workspace/list"
-	PluginID string `json:"plugin_id"` // owning plugin
-	Endpoint string `json:"endpoint"` // HTTP endpoint on the plugin
-}
-
-// ListRegisteredCommands returns the currently registered slash command routes.
-func (b *Bot) ListRegisteredCommands() []RegisteredCommand {
-	var out []RegisteredCommand
-	for key, owner := range b.cmdOwners {
-		out = append(out, RegisteredCommand{Key: key, PluginID: owner.pluginID, Endpoint: owner.endpoint})
-	}
-	return out
-}
-
-// RefreshCommands re-discovers and re-registers slash commands from all plugins.
-// Safe to call multiple times; replaces the owner map atomically.
-func (b *Bot) RefreshCommands() {
-	if b.botUserID == "" {
-		return // not connected yet
-	}
-	owners := b.discoverAndRegisterCommands(b.botUserID)
-	if len(owners) > 0 {
-		b.cmdOwners = owners
-	}
-}
-
 // SetRelayClient attaches the relay client for routing messages.
 func (b *Bot) SetRelayClient(rc *relay.Client) {
 	b.relayClient = rc
@@ -213,7 +185,7 @@ func (b *Bot) SetDebug(enabled bool) {
 // emitEvent sends a debug event to the kernel console.
 func (b *Bot) emitEvent(eventType, detail string) {
 	if b.sdk != nil {
-		b.sdk.ReportEvent(eventType, detail)
+		b.sdk.PublishEvent(eventType, detail)
 	}
 }
 
@@ -278,29 +250,6 @@ func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	// Register native channel commands first (these don't depend on other plugins).
 	b.registerNativeCommands()
 
-	// Discover slash commands in a background goroutine with retries — other plugins
-	// may not have registered with the kernel yet when onReady fires.
-	go b.discoverCommandsWithRetry(r.User.ID)
-}
-
-// discoverCommandsWithRetry attempts command discovery up to 5 times with increasing
-// delays, stopping as soon as at least one command owner is registered.
-func (b *Bot) discoverCommandsWithRetry(appID string) {
-	delays := []time.Duration{0, 3 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second}
-	for i, delay := range delays {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		owners := b.discoverAndRegisterCommands(appID)
-		if len(owners) > 0 {
-			b.cmdOwners = owners
-			b.updateBotStatus("Online and ready")
-			return
-		}
-		log.Printf("Slash command discovery attempt %d/%d: no commands found", i+1, len(delays))
-	}
-	log.Printf("Slash command discovery gave up after %d attempts", len(delays))
-	// Still set status even if no commands were discovered.
 	b.updateBotStatus("Online and ready")
 }
 
@@ -374,19 +323,17 @@ func (b *Bot) buildStartupMessage(status string) string {
 		lines = append(lines, fmt.Sprintf("**%s**", status))
 	}
 
-	// List available slash commands.
-	if len(b.cmdOwners) > 0 {
-		cmds := make(map[string]bool)
-		for key := range b.cmdOwners {
-			parts := strings.SplitN(key, "/", 2)
-			cmds["/"+parts[0]] = true
-		}
+	// List chat commands if registered.
+	b.chatCmds.mu.RLock()
+	if len(b.chatCmds.commands) > 0 {
 		var cmdList []string
-		for cmd := range cmds {
-			cmdList = append(cmdList, fmt.Sprintf("`%s`", cmd))
+		for _, cmd := range b.chatCmds.commands {
+			name := strings.ReplaceAll(cmd.Name, ":", "-")
+			cmdList = append(cmdList, fmt.Sprintf("`/%s`", name))
 		}
-		lines = append(lines, fmt.Sprintf("Slash commands: %s", strings.Join(cmdList, ", ")))
+		lines = append(lines, fmt.Sprintf("Commands: %s", strings.Join(cmdList, ", ")))
 	}
+	b.chatCmds.mu.RUnlock()
 
 	// List aliases if configured.
 	if !b.aliases.IsEmpty() {
@@ -530,23 +477,23 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 
 	// All text routing goes through the relay (alias, coordinator, workspace).
 	if b.relayClient != nil {
+		// Send "Thinking..." bubble immediately so the user sees feedback.
+		sent, err := s.ChannelMessageSend(channelID, "Thinking...")
+		if err != nil {
+			log.Printf("Error sending thinking message: %v", err)
+			return
+		}
+
 		accepted, err := b.relayClient.Chat(channelID, text, mediaURLs)
 		if err != nil {
 			var ue *relay.UserError
 			if errors.As(err, &ue) {
-				s.ChannelMessageSend(channelID, ue.Message)
+				s.ChannelMessageEdit(channelID, sent.ID, ue.Message)
 			} else {
 				log.Printf("Relay error: %v", err)
 				b.emitEvent("error", fmt.Sprintf("relay: %v", err))
-				s.ChannelMessageSend(channelID, "Sorry, I encountered an error processing your message.")
+				s.ChannelMessageEdit(channelID, sent.ID, "Sorry, I encountered an error processing your message.")
 			}
-			return
-		}
-
-		// Send initial "Thinking..." message and track it for progress updates.
-		sent, err := s.ChannelMessageSend(channelID, "Thinking...")
-		if err != nil {
-			log.Printf("Error sending thinking message: %v", err)
 			return
 		}
 
@@ -593,7 +540,18 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		if b.handleNativeCommand(s, i) {
 			return
 		}
-		b.handleSlashCommand(s, i, b.cmdOwners)
+		// Chat commands from infra-chat-command-server.
+		if b.HandleChatCommand(s, i) {
+			return
+		}
+		// Unknown command.
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Unknown command.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 		return
 	}
 
@@ -643,20 +601,21 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 
+	// Send followup as thinking message immediately so user sees feedback.
+	followup, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: "Thinking..."})
+	if err != nil {
+		log.Printf("Error sending followup: %v", err)
+		return
+	}
+
 	accepted, err := b.relayClient.Chat(channelID, callbackMsg, nil)
 	if err != nil {
 		log.Printf("Menu relay error: %v", err)
 		b.emitEvent("error", fmt.Sprintf("menu relay: %v", err))
-		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content: "Sorry, I encountered an error processing your selection.",
+		errMsg := "Sorry, I encountered an error processing your selection."
+		s.FollowupMessageEdit(i.Interaction, followup.ID, &discordgo.WebhookEdit{
+			Content: &errMsg,
 		})
-		return
-	}
-
-	// Send followup as thinking message, track for progress.
-	followup, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: "Thinking..."})
-	if err != nil {
-		log.Printf("Error sending followup: %v", err)
 		return
 	}
 

@@ -47,7 +47,7 @@ func (b *Bot) SetSDK(sdk *pluginsdk.Client) {
 // emitEvent sends a debug event to the kernel console.
 func (b *Bot) emitEvent(eventType, detail string) {
 	if b.sdk != nil {
-		b.sdk.ReportEvent(eventType, detail)
+		b.sdk.PublishEvent(eventType, detail)
 	}
 }
 

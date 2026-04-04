@@ -183,12 +183,11 @@ func main() {
 		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
 	}
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	// Register event handlers (local dispatch only — no subscription yet).
+	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
-	// Subscribe to soft config updates for dynamic changes (immediate).
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -209,16 +208,14 @@ func main() {
 		}
 	}))
 
-	// Re-discover slash commands when any plugin registers (debounced to coalesce startup bursts).
-	sdkClient.OnEvent("plugin:registered", pluginsdk.NewTimedDebouncer(3*time.Second, func(event pluginsdk.EventCallback) {
-		log.Printf("plugin:registered — refreshing slash commands")
+	sdkClient.Events().On("chat:commands:updated", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
+		log.Printf("chat:commands:updated — registering chat commands as Discord slash commands")
 		for _, b := range bots {
-			b.RefreshCommands()
+			b.UpdateChatCommands(event.Detail)
 		}
 	}))
 
-	// Re-emit coordinator when the relay (re)starts — addressed events are consumed once.
-	sdkClient.OnEvent("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("relay:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Relay ready — re-emitting coordinator assignments")
 		for _, entry := range botEntries {
 			sourceID := manifest.ID
@@ -229,8 +226,7 @@ func main() {
 		}
 	}))
 
-	// Handle relay progress events — update Discord messages with task status.
-	sdkClient.OnEvent("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		for _, b := range bots {
 			b.HandleRelayProgress(event.Detail)
 		}
@@ -257,15 +253,6 @@ func main() {
 		discordBot.SetCallbackStore(callbackStore)
 
 		chHandler := channels.NewHandler(discordBot.Session, discordBot.GuildID, callbackStore)
-
-		mux.HandleFunc("GET /discord-commands", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			cmds := discordBot.ListRegisteredCommands()
-			if cmds == nil {
-				cmds = []bot.RegisteredCommand{}
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"commands": cmds})
-		})
 
 		mux.HandleFunc("GET /mcp", chHandler.Tools)
 		mux.HandleFunc("POST /channels/create-category", chHandler.CreateCategory)

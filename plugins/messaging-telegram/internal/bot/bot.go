@@ -60,6 +60,7 @@ type Bot struct {
 	knownChats map[int64]bool // tracked chat IDs (groups + DMs)
 	cacheMu    sync.RWMutex
 	cache      *redis.Client // optional Redis cache for throttling
+	chatCmds   chatCmdState  // chat commands from infra-chat-command-server
 
 	// Task group tracking for progress updates.
 	tasksMu    sync.Mutex
@@ -626,6 +627,11 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message, threadID int) {
 		return
 	}
 
+	// Check chat commands from infra-chat-command-server.
+	if strings.HasPrefix(text, "/") && b.HandleChatCommand(msg.Chat.ID, threadID, text) {
+		return
+	}
+
 	// Start typing on first buffered message so user sees immediate feedback.
 	b.wg.Add(1)
 	go func() {
@@ -757,6 +763,25 @@ func (b *Bot) processBuffered(chatID int64, topicID int, text string, imageURLs 
 
 	// All text routing goes through the relay (alias, coordinator, workspace).
 	if b.relayClient != nil {
+		// Send "Thinking..." bubble immediately so the user sees feedback.
+		var sent tgbotapi.Message
+		var sendErr error
+		if topicID > 0 {
+			sent, sendErr = b.sendToTopic(chatID, topicID, "Thinking...")
+		} else {
+			thinkMsg := tgbotapi.NewMessage(chatID, "Thinking...")
+			sent, sendErr = b.api.Send(thinkMsg)
+		}
+		if sendErr != nil {
+			msgCancel()
+			log.Printf("Error sending thinking message: %v", sendErr)
+			return
+		}
+
+		// Start cycling the "Thinking..." message with random phrases immediately.
+		b.wg.Add(1)
+		go b.thinkingCycleLoop(msgCtx, chatID, sent.MessageID)
+
 		// Encode topicID into channelID for conversation isolation.
 		channelID := fmt.Sprintf("%d", chatID)
 		if topicID > 0 {
@@ -768,30 +793,18 @@ func (b *Bot) processBuffered(chatID int64, topicID int, text string, imageURLs 
 			var ue *relay.UserError
 			if errors.As(err, &ue) {
 				log.Printf("[relay] user error chat=%d: %s", chatID, ue.Message)
-				b.sendToChat(chatID, topicID, ue.Message)
+				edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, ue.Message)
+				b.api.Send(edit)
 			} else {
 				log.Printf("Relay error: %v", err)
 				b.emitEvent("error", fmt.Sprintf("relay: %v", err))
-				b.sendToChat(chatID, topicID, "Sorry, I encountered an error processing your message.")
+				edit := tgbotapi.NewEditMessageText(chatID, sent.MessageID, "Sorry, I encountered an error processing your message.")
+				b.api.Send(edit)
 			}
 			return
 		}
 
 		log.Printf("[relay] accepted task_group=%s channel=%s", accepted.TaskGroupID, channelID)
-
-		// Send initial "Thinking..." message and track it for progress updates.
-		var sent tgbotapi.Message
-		if topicID > 0 {
-			sent, err = b.sendToTopic(chatID, topicID, "Thinking...")
-		} else {
-			thinkMsg := tgbotapi.NewMessage(chatID, "Thinking...")
-			sent, err = b.api.Send(thinkMsg)
-		}
-		if err != nil {
-			msgCancel()
-			log.Printf("Error sending thinking message: %v", err)
-			return
-		}
 
 		// Register task for progress updates — the typing loop continues
 		// and the event handler will update the message.
@@ -804,10 +817,6 @@ func (b *Bot) processBuffered(chatID int64, topicID int, text string, imageURLs 
 		}
 		b.tasksMu.Unlock()
 		log.Printf("[relay] registered task_group=%s chat=%d topic=%d msg=%d", accepted.TaskGroupID, chatID, topicID, sent.MessageID)
-
-		// Cycle the "Thinking..." message with random phrases.
-		b.wg.Add(1)
-		go b.thinkingCycleLoop(msgCtx, chatID, sent.MessageID)
 
 		b.emitEvent("task_accepted", fmt.Sprintf("task_group=%s chat=%d topic=%d", accepted.TaskGroupID, chatID, topicID))
 		// Don't cancel msgCtx here — the typing loop continues until
