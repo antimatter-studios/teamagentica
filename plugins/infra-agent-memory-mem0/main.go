@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-memory-mem0/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/infra-agent-memory-mem0/internal/memory"
 )
@@ -231,18 +232,11 @@ func main() {
 
 	// Hot-reload config: resolve aliases again and tell Mem0 to reinitialize.
 	mem0URL := fmt.Sprintf("http://localhost:%d", mem0Port)
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("[config] failed to parse config:update: %v", err)
-			return
-		}
-		for k, v := range detail.Config {
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		for k, v := range p.Config {
 			pluginConfig[k] = v
 		}
-		applyConfig(sdkClient, proxy, detail.Config, port, mem0Port)
+		applyConfig(sdkClient, proxy, p.Config, port, mem0Port)
 
 		resp, err := http.Post(mem0URL+"/reload", "application/json", nil)
 		if err != nil {
@@ -251,7 +245,7 @@ func main() {
 		}
 		resp.Body.Close()
 		log.Printf("[config] Mem0 reload triggered (status %d)", resp.StatusCode)
-	}))
+	})
 
 	// Push tools to MCP server when it becomes available.
 	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {

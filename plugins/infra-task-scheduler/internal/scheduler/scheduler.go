@@ -20,7 +20,7 @@ import (
 // SDKClient is the interface the scheduler needs from pluginsdk.Client.
 type SDKClient interface {
 	PublishEvent(eventType, detail string)
-	OnEvent(eventType string, debouncer pluginsdk.Debouncer)
+	Events() *pluginsdk.EventClient
 	RouteToPlugin(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error)
 }
 
@@ -203,7 +203,7 @@ func (s *Scheduler) registerEventJobs() {
 
 		log.Printf("[scheduler] subscribing to event: %s", pattern)
 		handler := s.makeEventHandler(pattern)
-		s.sdk.OnEvent(pattern, pluginsdk.NewNullDebouncer(handler))
+		s.sdk.Events().On(pattern, pluginsdk.NewNullDebouncer(handler))
 		s.registeredEvents[pattern] = true
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/relay"
 	"github.com/antimatter-studios/teamagentica/plugins/messaging-chat/internal/storage"
@@ -128,16 +129,10 @@ func main() {
 	}))
 
 	// Subscribe to config updates for PLUGIN_DEBUG.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			return
-		}
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		// Future: handle PLUGIN_DEBUG toggle here.
-		_ = detail
-	}))
+		_ = p
+	})
 
 	// Push tools to MCP server when it becomes available.
 	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {

@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/index"
 	"github.com/antimatter-studios/teamagentica/plugins/storage-sss3/internal/s3client"
@@ -55,9 +56,9 @@ func main() {
 	sdkClient.Start(ctx)
 
 	// Subscribe to config updates.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		log.Printf("Received config:update (seq=%d)", event.Seq)
-	}))
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		log.Printf("Received config:update")
+	})
 
 	// Fetch plugin config from kernel API.
 	pluginConfig, err := sdkClient.FetchConfig()

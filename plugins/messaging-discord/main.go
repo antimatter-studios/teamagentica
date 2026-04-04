@@ -187,26 +187,19 @@ func main() {
 	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
 	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse config:update detail: %v", err)
-			return
-		}
-		dbg := detail.Config["PLUGIN_DEBUG"] == "true" || detail.Config["PLUGIN_DEBUG"] == "1"
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		dbg := p.Config["PLUGIN_DEBUG"] == "true" || p.Config["PLUGIN_DEBUG"] == "1"
 		for _, b := range bots {
 			b.SetDebug(dbg)
 		}
-		if v, ok := detail.Config["MESSAGE_BUFFER_MS"]; ok {
+		if v, ok := p.Config["MESSAGE_BUFFER_MS"]; ok {
 			if ms, err := strconv.Atoi(v); err == nil {
 				for _, b := range bots {
 					b.SetMessageBufferMS(ms)
 				}
 			}
 		}
-	}))
+	})
 
 	sdkClient.Events().On("chat:commands:updated", pluginsdk.NewTimedDebouncer(2*time.Second, func(event pluginsdk.EventCallback) {
 		log.Printf("chat:commands:updated — registering chat commands as Discord slash commands")

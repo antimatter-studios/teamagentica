@@ -100,8 +100,8 @@ func (s *Scheduler) initDispatch() {
 	}
 
 	// Register event handlers for task tracking events.
-	s.sdk.OnEvent("task-tracking:assign", pluginsdk.NewNullDebouncer(s.handleAssignEvent))
-	s.sdk.OnEvent("task-tracking:comment", pluginsdk.NewNullDebouncer(s.handleCommentEvent))
+	s.sdk.Events().On("task-tracking:assign", pluginsdk.NewNullDebouncer(s.handleAssignEvent))
+	s.sdk.Events().On("task-tracking:comment", pluginsdk.NewNullDebouncer(s.handleCommentEvent))
 }
 
 // handleAssignEvent creates a triage dispatch when a task is assigned to an agent.

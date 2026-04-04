@@ -115,17 +115,10 @@ func main() {
 	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Subscribe to config updates.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("Failed to parse config:update detail: %v", err)
-			return
-		}
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		// Future: handle PLUGIN_DEBUG toggle here.
-		_ = detail
-	}))
+		_ = p
+	})
 
 	// Register webhook route with the webhooks plugin (handles webhook:ready subscription).
 	sdkClient.RegisterWebhook("/" + manifest.ID)

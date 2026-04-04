@@ -26,6 +26,7 @@ type Request struct {
 	ChannelID    string   `json:"channel_id"`
 	Message      string   `json:"message"`
 	ImageURLs    []string `json:"image_urls,omitempty"`
+	TaskGroupID  string   `json:"task_group_id,omitempty"`
 }
 
 // Usage holds token usage from the agent.
@@ -70,12 +71,14 @@ type AcceptedResponse struct {
 
 // Chat sends a message to the relay. Returns a task_group_id immediately.
 // The actual response is delivered via relay:progress events.
-func (c *Client) Chat(channelID, message string, imageURLs []string) (*AcceptedResponse, error) {
+// If taskGroupID is non-empty, the relay uses it instead of generating its own.
+func (c *Client) Chat(channelID, message string, imageURLs []string, taskGroupID string) (*AcceptedResponse, error) {
 	req := Request{
 		SourcePlugin: c.sourceID,
 		ChannelID:    channelID,
 		Message:      message,
 		ImageURLs:    imageURLs,
+		TaskGroupID:  taskGroupID,
 	}
 
 	body, err := json.Marshal(req)

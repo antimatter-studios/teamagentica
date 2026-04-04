@@ -26,6 +26,7 @@ type Request struct {
 	ChannelID    string   `json:"channel_id"`
 	Message      string   `json:"message"`
 	ImageURLs    []string `json:"image_urls,omitempty"`
+	TaskGroupID  string   `json:"task_group_id,omitempty"`
 }
 
 // UserError is returned when the relay rejects a message with a user-facing reason.

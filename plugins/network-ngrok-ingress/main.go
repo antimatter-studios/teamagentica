@@ -97,16 +97,9 @@ func main() {
 	}))
 
 	// Hot-reload: listen for config:update events from kernel.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("[config] failed to parse config:update detail: %v", err)
-			return
-		}
-		applyConfig(detail.Config)
-	}))
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		applyConfig(p.Config)
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

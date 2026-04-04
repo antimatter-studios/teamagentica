@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"os"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/handlers"
 )
 
@@ -84,16 +84,9 @@ func main() {
 	})
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("[config] failed to parse config:update detail: %v", err)
-			return
-		}
-		h.ApplyConfig(detail.Config)
-	}))
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		h.ApplyConfig(p.Config)
+	})
 
 	// Pricing endpoints — Seedance 2.0 credit-based pricing.
 	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)

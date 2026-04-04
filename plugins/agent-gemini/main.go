@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"log"
 	"os"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/handlers"
 )
 
@@ -87,16 +87,9 @@ func main() {
 	router.Any("/v1/*path", h.OpenAIProxy)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("[config] failed to parse config:update detail: %v", err)
-			return
-		}
-		h.ApplyConfig(detail.Config)
-	}))
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		h.ApplyConfig(p.Config)
+	})
 
 	sdkClient.ListenAndServe(defaultPort, router)
 }

@@ -351,18 +351,19 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		h.db.UpdateConversation(conv)
 	}
 
-	// Return immediately — the relay call happens in the background.
-	// The actual response arrives via relay:progress events.
+	// Generate task_group_id locally so we can return it instantly — no relay wait.
+	taskGroupID := "tg-" + uuid.New().String()[:8]
+
 	c.JSON(http.StatusAccepted, gin.H{
-		"user_message": userMsg,
+		"user_message":  userMsg,
+		"task_group_id": taskGroupID,
 	})
 
-	// Fire-and-forget: send to relay asynchronously.
+	// Fire-and-forget: send to relay asynchronously with our task_group_id.
 	go func() {
-		_, err := h.relay.Chat(channelID, messageText, imageURLs)
+		_, err := h.relay.Chat(channelID, messageText, imageURLs, taskGroupID)
 		if err != nil {
 			log.Printf("[chat] relay error: %v", err)
-			// Replace the progress message with the error so the user sees it.
 			var errMsg string
 			var ue *relay.UserError
 			if errors.As(err, &ue) {
