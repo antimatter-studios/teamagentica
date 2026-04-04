@@ -353,6 +353,92 @@ func (h *EventHandler) Stats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"streams": stats})
 }
 
+// Stream handles GET /events/stream — SSE endpoint that streams all events
+// from the events:_all Redis Stream in real time. The dashboard connects here
+// instead of the kernel's SSE hub, making infra-redis the single event source.
+func (h *EventHandler) Stream(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	ctx := c.Request.Context()
+
+	// Start reading from the latest entry ($ = only new messages).
+	lastID := "$"
+
+	// Send recent history first so the client has context.
+	recent, err := h.rdb.XRevRange(ctx, "events:_all", "+", "-").Result()
+	if err == nil && len(recent) > 0 {
+		// Send up to 200 recent events, oldest first.
+		limit := 200
+		if len(recent) < limit {
+			limit = len(recent)
+		}
+		for i := limit - 1; i >= 0; i-- {
+			msg := recent[i]
+			h.writeSSEMessage(c.Writer, msg.Values)
+		}
+		c.Writer.Flush()
+		// Start streaming from after the newest message we sent.
+		lastID = recent[0].ID
+	}
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Keepalive comment.
+			fmt.Fprintf(c.Writer, ": keepalive\n\n")
+			c.Writer.Flush()
+		default:
+			// Poll for new messages with a short block.
+			streams, err := h.rdb.XRead(ctx, &redis.XReadArgs{
+				Streams: []string{"events:_all", lastID},
+				Count:   100,
+				Block:   2 * time.Second,
+			}).Result()
+			if err != nil {
+				if err == redis.Nil {
+					continue // No new messages, loop back.
+				}
+				if ctx.Err() != nil {
+					return // Client disconnected.
+				}
+				continue
+			}
+
+			for _, stream := range streams {
+				for _, msg := range stream.Messages {
+					h.writeSSEMessage(c.Writer, msg.Values)
+					lastID = msg.ID
+				}
+			}
+			c.Writer.Flush()
+		}
+	}
+}
+
+// writeSSEMessage formats a Redis stream entry as an SSE event.
+func (h *EventHandler) writeSSEMessage(w gin.ResponseWriter, values map[string]interface{}) {
+	data, err := json.Marshal(EventMessage{
+		EventType: getString(values, "event_type"),
+		Source:    getString(values, "source"),
+		Target:    getString(values, "target"),
+		Detail:    getString(values, "detail"),
+		Timestamp: getString(values, "ts"),
+	})
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "event: event\ndata: %s\n\n", data)
+}
+
 // EnsureStream pre-creates a stream so consumer groups can be created on it.
 func (h *EventHandler) EnsureStream(ctx context.Context, eventType string) error {
 	key := streamKey(eventType)

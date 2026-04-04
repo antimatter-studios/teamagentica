@@ -61,10 +61,6 @@ func main() {
 
 	router := gin.Default()
 
-	// SDK helper handlers.
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	// Health check.
 	router.GET("/health", func(c *gin.Context) {
 		if err := rdb.Ping(c.Request.Context()).Err(); err != nil {
@@ -80,13 +76,10 @@ func main() {
 	router.DELETE("/events/subscribe/:plugin_id/:event_type", eventHandler.Unsubscribe)
 	router.GET("/events/consume/:plugin_id/:event_type", eventHandler.Consume)
 	router.GET("/events/history", eventHandler.History)
+	router.GET("/events/stream", eventHandler.Stream)
 	router.GET("/events/stats", eventHandler.Stats)
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", defaultPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(defaultPort, router)
 }
 
 // buildConnectionInfo returns Redis connection details for the readonly schema.
