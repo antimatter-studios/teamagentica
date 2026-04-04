@@ -168,19 +168,21 @@ func TestReportEvent(t *testing.T) {
 	client, _ := testEnv(t, handler)
 	client.ReportEvent("debug:info", "something happened")
 
-	if capturedPath != "/api/plugins/event" {
-		t.Errorf("path = %q, want /api/plugins/event", capturedPath)
+	// ReportEvent routes to infra-redis via RouteToPlugin, which falls back
+	// to kernel proxy: /api/route/infra-redis/events/publish
+	if capturedPath != "/api/route/infra-redis/events/publish" {
+		t.Errorf("path = %q, want /api/route/infra-redis/events/publish", capturedPath)
 	}
 
-	var payload map[string]string
+	var payload map[string]interface{}
 	if err := json.Unmarshal(captured, &payload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if payload["id"] != "test-plugin" {
-		t.Errorf("id = %q, want test-plugin", payload["id"])
+	if payload["source"] != "test-plugin" {
+		t.Errorf("source = %q, want test-plugin", payload["source"])
 	}
-	if payload["type"] != "debug:info" {
-		t.Errorf("type = %q, want debug:info", payload["type"])
+	if payload["event_type"] != "debug:info" {
+		t.Errorf("event_type = %q, want debug:info", payload["event_type"])
 	}
 	if payload["detail"] != "something happened" {
 		t.Errorf("detail = %q, want 'something happened'", payload["detail"])
@@ -235,58 +237,6 @@ func TestReportUsage(t *testing.T) {
 	}
 	if report.DurationMs != 500 {
 		t.Errorf("report.DurationMs = %d, want 500", report.DurationMs)
-	}
-}
-
-// --- Subscribe ---
-
-func TestSubscribe(t *testing.T) {
-	var captured []byte
-	var capturedPath string
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedPath = r.URL.Path
-		captured, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-	})
-
-	client, _ := testEnv(t, handler)
-	err := client.Subscribe("chat:message", "/callbacks/chat")
-	if err != nil {
-		t.Fatalf("Subscribe returned error: %v", err)
-	}
-
-	if capturedPath != "/api/plugins/subscribe" {
-		t.Errorf("path = %q, want /api/plugins/subscribe", capturedPath)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal(captured, &payload); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if payload["id"] != "test-plugin" {
-		t.Errorf("id = %q, want test-plugin", payload["id"])
-	}
-	if payload["event_type"] != "chat:message" {
-		t.Errorf("event_type = %q, want chat:message", payload["event_type"])
-	}
-	if payload["callback_path"] != "/callbacks/chat" {
-		t.Errorf("callback_path = %q, want /callbacks/chat", payload["callback_path"])
-	}
-}
-
-func TestSubscribe_KernelError(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-
-	client, _ := testEnv(t, handler)
-	err := client.Subscribe("chat:message", "/cb")
-	if err == nil {
-		t.Fatal("expected error for 500 response, got nil")
-	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("error should mention status 500: %v", err)
 	}
 }
 

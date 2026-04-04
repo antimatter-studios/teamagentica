@@ -11,13 +11,13 @@ import (
 
 // PricingEntry holds pricing data for a single model.
 type PricingEntry struct {
-	Provider    string  `json:"provider"`
-	Model       string  `json:"model"`
-	InputPer1M  float64 `json:"input_per_1m"`
-	OutputPer1M float64 `json:"output_per_1m"`
-	CachedPer1M float64 `json:"cached_per_1m"`
-	PerRequest  float64 `json:"per_request"`
-	Currency    string  `json:"currency"`
+	Provider    string  `json:"provider" yaml:"provider"`
+	Model       string  `json:"model" yaml:"model"`
+	InputPer1M  float64 `json:"input_per_1m" yaml:"input_per_1m"`
+	OutputPer1M float64 `json:"output_per_1m" yaml:"output_per_1m"`
+	CachedPer1M float64 `json:"cached_per_1m" yaml:"cached_per_1m"`
+	PerRequest  float64 `json:"per_request" yaml:"per_request"`
+	Currency    string  `json:"currency" yaml:"currency"`
 }
 
 // PricingHandler provides GET/PUT /pricing endpoints for plugins.
@@ -26,6 +26,13 @@ type PricingHandler struct {
 	defaults []PricingEntry
 	current  atomic.Pointer[[]PricingEntry]
 	client   *Client
+}
+
+// NewPricingHandlerFromManifest creates a pricing handler using the
+// default_pricing entries from plugin.yaml. This is the preferred constructor —
+// pricing data should live in the manifest, not hardcoded in Go source.
+func NewPricingHandlerFromManifest(manifest Manifest, client *Client) *PricingHandler {
+	return NewPricingHandler(manifest.DefaultPricing, client)
 }
 
 // NewPricingHandler creates a handler with the given default prices.

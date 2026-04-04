@@ -48,7 +48,7 @@ func (c *Client) CacheClient(onConnect func(*redis.Client)) *redis.Client {
 
 	// Listen for future (re)registrations.
 	if onConnect != nil {
-		c.WhenPluginAvailable("memory:cache", func(p PluginInfo) {
+		c.OnPluginAvailable("memory:cache", func(p PluginInfo) {
 			client, err := connectCache(p)
 			if err != nil {
 				log.Printf("pluginsdk: cache connect failed: %v", err)

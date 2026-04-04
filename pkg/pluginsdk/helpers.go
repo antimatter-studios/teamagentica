@@ -139,7 +139,7 @@ func (c *Client) handleLifecycleEvent(event EventCallback) bool {
 	switch payload.Type {
 	case "plugin:ready":
 		if payload.Plugin != "" && payload.Host != "" {
-			c.setPeer(payload.Plugin, payload.Host, payload.Port, 0)
+			c.SetPeer(payload.Plugin, payload.Host, payload.Port)
 		}
 	case "plugin:stopped":
 		if payload.Plugin != "" {

@@ -22,7 +22,7 @@ type PersonaUpdatePayload struct {
 // ConfigUpdatePayload is emitted when plugin config changes.
 type ConfigUpdatePayload struct {
 	PluginID string            `json:"plugin_id"`
-	Fields   map[string]string `json:"fields,omitempty"`
+	Config   map[string]string `json:"config"`
 }
 
 // MCPServerPayload is emitted when the MCP server starts or stops.
@@ -97,4 +97,34 @@ type TaskCommentPayload struct {
 // StatusPayload is a simple status message for events that carry just a string.
 type StatusPayload struct {
 	Message string `json:"message,omitempty"`
+}
+
+// WorkspaceManagerReadyPayload is emitted when the workspace manager is ready
+// to receive environment registrations.
+type WorkspaceManagerReadyPayload struct {
+	ManagerPluginID string `json:"manager_plugin_id"`
+}
+
+// WorkspaceEnvironmentRegisterPayload is emitted by workspace-env plugins to
+// register themselves with the workspace manager. Contains full inline schema
+// so no follow-up HTTP calls are needed.
+type WorkspaceEnvironmentRegisterPayload struct {
+	PluginID     string                 `json:"plugin_id"`
+	DisplayName  string                 `json:"display_name"`
+	Description  string                 `json:"description,omitempty"`
+	Image        string                 `json:"image"`
+	Port         int                    `json:"port"`
+	Icon         string                 `json:"icon,omitempty"`
+	DockerUser   string                 `json:"docker_user,omitempty"`
+	Cmd          []string               `json:"cmd,omitempty"`
+	ExtraCmdArgs []string               `json:"extra_cmd_args,omitempty"`
+	SharedMounts []WorkspaceExtraMount  `json:"shared_mounts,omitempty"`
+	EnvDefaults  map[string]string      `json:"env_defaults,omitempty"`
+}
+
+// WorkspaceExtraMount describes an additional volume mount for a workspace environment.
+type WorkspaceExtraMount struct {
+	VolumeName string `json:"volume_name"`
+	Target     string `json:"target"`
+	ReadOnly   bool   `json:"read_only,omitempty"`
 }
