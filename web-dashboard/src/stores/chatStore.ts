@@ -67,15 +67,44 @@ function deriveSending(inFlightTasks: Record<number, InFlightTask>, activeConver
   return { sending: true, activeTaskGroupId: task.taskGroupId, sendStartedAt: task.startedAt };
 }
 
+// Persist in-flight and shelved tasks across browser refreshes so SSE matching survives.
+const INFLIGHT_KEY = "teamagentica_inflight_tasks";
+const SHELVED_KEY = "teamagentica_shelved_tasks";
+
+function loadPersistedInFlight(): Record<number, InFlightTask> {
+  try {
+    const raw = localStorage.getItem(INFLIGHT_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function loadPersistedShelved(): ShelvedTask[] {
+  try {
+    const raw = localStorage.getItem(SHELVED_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function persistInFlight(tasks: Record<number, InFlightTask>) {
+  try { localStorage.setItem(INFLIGHT_KEY, JSON.stringify(tasks)); } catch {}
+}
+
+function persistShelved(tasks: ShelvedTask[]) {
+  try { localStorage.setItem(SHELVED_KEY, JSON.stringify(tasks)); } catch {}
+}
+
+const _restoredInFlight = loadPersistedInFlight();
+const _restoredShelved = loadPersistedShelved();
+
 export const useChatStore = create<ChatStore>((set, get) => ({
   conversations: [],
   activeConversationId: null,
   messages: [],
   loading: false,
   error: null,
-  shelvedTasks: [],
+  shelvedTasks: _restoredShelved,
   progressInfo: {},
-  inFlightTasks: {},
+  inFlightTasks: _restoredInFlight,
   // Derived — initial values, updated via deriveSending() on every relevant set().
   sending: false,
   activeTaskGroupId: null,
@@ -252,11 +281,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const taskGroupId = resp.task_group_id || null;
       const now = Date.now();
 
-      // Register the in-flight task for this conversation.
+      // Register the in-flight task and show instant progress bubble.
       set((state) => {
         const newInFlight = { ...state.inFlightTasks };
+        const newProgress = { ...state.progressInfo };
         if (taskGroupId) {
           newInFlight[convId!] = { taskGroupId, startedAt: now, conversationId: convId! };
+          // Synthetic progress — shown instantly before the first SSE event arrives.
+          newProgress[convId!] = {
+            status: "thinking",
+            message: "Sending to agent...",
+            taskGroupId,
+            updatedAt: now,
+          };
         }
         return {
           messages: [
@@ -264,6 +301,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             resp.user_message,
           ],
           inFlightTasks: newInFlight,
+          progressInfo: newProgress,
           activeTaskGroupId: taskGroupId,
           sendStartedAt: now,
         };
@@ -281,6 +319,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 }));
+
+// Persist in-flight and shelved tasks to localStorage whenever they change.
+useChatStore.subscribe((state, prev) => {
+  if (state.inFlightTasks !== prev.inFlightTasks) persistInFlight(state.inFlightTasks);
+  if (state.shelvedTasks !== prev.shelvedTasks) persistShelved(state.shelvedTasks);
+});
 
 // ---------- Periodic background refresh ----------
 // Safety net: poll active conversation + conversation list every 10s.

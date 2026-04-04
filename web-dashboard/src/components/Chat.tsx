@@ -368,19 +368,7 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
           {loading && (
             <div className="chat-loading">Loading messages...</div>
           )}
-          {messages.filter((m) => !(m.role === "progress" && activeProgress)).map((msg) => (
-            msg.role === "progress" ? (
-            <div key={msg.id} className="chat-msg chat-msg-progress">
-              <div className="chat-msg-progress-content">
-                {msg.content}
-                {activeTaskGroupId && <span className="chat-msg-task-group"> [task = {activeTaskGroupId}]</span>}
-                {sendStartedAt && <ElapsedTimer startedAt={sendStartedAt} />}
-                <button className="chat-shelf-btn" onClick={shelfTask} title="Move to shelf">
-                  {"\u{1F4E6}"}
-                </button>
-              </div>
-            </div>
-            ) : (
+          {messages.filter((m) => m.role !== "progress").map((msg) => (
             <div
               key={msg.id}
               className={`chat-msg ${
@@ -437,20 +425,24 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
                 </div>
               ) : null}
             </div>
-            )
           ))}
-          {activeProgress && (
-            <div className="chat-msg chat-msg-progress">
-              <div className="chat-msg-progress-content">
-                {activeProgress.message}
-                {activeProgress.taskGroupId && <span className="chat-msg-task-group"> [task = {activeProgress.taskGroupId}]</span>}
-                {sendStartedAt && <ElapsedTimer startedAt={sendStartedAt} />}
-                <button className="chat-shelf-btn" onClick={shelfTask} title="Move to shelf">
-                  {"\u{1F4E6}"}
-                </button>
+          {(() => {
+            const dbProgress = messages.filter((m) => m.role === "progress").at(-1);
+            const progressMsg = activeProgress?.message ?? dbProgress?.content;
+            if (!progressMsg) return null;
+            return (
+              <div className="chat-msg chat-msg-progress">
+                <div className="chat-msg-progress-content">
+                  {progressMsg}
+                  {activeProgress?.taskGroupId && <span className="chat-msg-task-group"> [task = {activeProgress.taskGroupId}]</span>}
+                  {sendStartedAt && <ElapsedTimer startedAt={sendStartedAt} />}
+                  <button className="chat-shelf-btn" onClick={shelfTask} title="Move to shelf">
+                    {"\u{1F4E6}"}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           <div ref={messagesEndRef} />
         </div>
 
