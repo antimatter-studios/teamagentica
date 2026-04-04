@@ -987,9 +987,7 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 
 	resp, err := r.sdk.RouteToPluginStream(ctx, pluginID, "POST", "/chat/stream", bytes.NewReader(body))
 	if err != nil {
-		// Fall back to non-streaming if /chat/stream not available.
-		log.Printf("[stream] streaming failed for %s, falling back to non-streaming: %v", pluginID, err)
-		return r.callAgent(ctx, pluginID, model, message, imageURLs, history, agentAlias, systemPrompt)
+		return nil, fmt.Errorf("stream to %s: %w", pluginID, err)
 	}
 	defer resp.Body.Close()
 
