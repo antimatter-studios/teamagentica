@@ -1,0 +1,10 @@
+id: workspace-env-codex-terminal
+name: "Codex Terminal"
+description: "Web terminal with OpenAI Codex CLI — AI-powered coding assistant in the browser"
+group: workspace
+version: "1.0.18"
+author: teamagentica
+image: teamagentica-workspace-env-codex-terminal:latest
+tags: [terminal, codex, ai, openai]
+capabilities: [workspace:environment]
+dependencies: ["workspace:manager"]

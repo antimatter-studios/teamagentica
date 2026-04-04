@@ -1,0 +1,10 @@
+id: workspace-env-vscode-server
+name: "VS Code Server"
+description: "VS Code in the browser — edit workspace files with a full IDE including terminal, extensions, and git"
+group: workspace
+version: "1.0.16"
+author: teamagentica
+image: teamagentica-workspace-env-vscode-server:latest
+tags: [editor, ide, vscode]
+capabilities: [workspace:environment]
+dependencies: ["workspace:manager"]

@@ -76,7 +76,7 @@ First visit: register at the web UI — first user becomes admin.
 ### Infrastructure
 | Plugin | Purpose | Capabilities |
 |--------|---------|-------------|
-| infra-workspace-manager | Cloud IDE management | workspace:manager |
+| workspace-manager | Cloud IDE management | workspace:manager |
 | infra-cost-explorer | Usage analytics | system:cost-explorer |
 | infra-task-scheduler | Scheduled tasks | infra:scheduler |
 | infra-mcp-server | MCP protocol | system:mcp |
@@ -88,7 +88,7 @@ First visit: register at the web UI — first user becomes admin.
 |--------|---------|-------------|
 | storage-sss3 | S3-compatible storage | storage:api, storage:object |
 | storage-disk | Disk storage | storage:disk |
-| user-vscode-server | VS Code environment | workspace:environment |
+| workspace-env-vscode-server | VS Code environment | workspace:environment |
 | system-teamagentica-plugin-provider | Plugin catalog | marketplace:provider |
 
 ## Documentation

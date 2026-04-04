@@ -67,12 +67,15 @@ includes:
   infra-redis:
     taskfile: ./plugins/infra-redis/Taskfile.yml
     dir: ./plugins/infra-redis
+  infra-chat-command-server:
+    taskfile: ./plugins/infra-chat-command-server/Taskfile.yml
+    dir: ./plugins/infra-chat-command-server
   infra-mcp-server:
     taskfile: ./plugins/infra-mcp-server/Taskfile.yml
     dir: ./plugins/infra-mcp-server
-  infra-workspace-manager:
-    taskfile: ./plugins/infra-workspace-manager/Taskfile.yml
-    dir: ./plugins/infra-workspace-manager
+  workspace-manager:
+    taskfile: ./plugins/workspace-manager/Taskfile.yml
+    dir: ./plugins/workspace-manager
   messaging-chat:
     taskfile: ./plugins/messaging-chat/Taskfile.yml
     dir: ./plugins/messaging-chat
@@ -115,18 +118,18 @@ includes:
   tool-veo:
     taskfile: ./plugins/tool-veo/Taskfile.yml
     dir: ./plugins/tool-veo
-  user-claude-terminal:
-    taskfile: ./plugins/user-claude-terminal/Taskfile.yml
-    dir: ./plugins/user-claude-terminal
-  user-codex-terminal:
-    taskfile: ./plugins/user-codex-terminal/Taskfile.yml
-    dir: ./plugins/user-codex-terminal
-  user-opencode-terminal:
-    taskfile: ./plugins/user-opencode-terminal/Taskfile.yml
-    dir: ./plugins/user-opencode-terminal
-  user-vscode-server:
-    taskfile: ./plugins/user-vscode-server/Taskfile.yml
-    dir: ./plugins/user-vscode-server
+  workspace-env-claude-terminal:
+    taskfile: ./plugins/workspace-env-claude-terminal/Taskfile.yml
+    dir: ./plugins/workspace-env-claude-terminal
+  workspace-env-codex-terminal:
+    taskfile: ./plugins/workspace-env-codex-terminal/Taskfile.yml
+    dir: ./plugins/workspace-env-codex-terminal
+  workspace-env-opencode-terminal:
+    taskfile: ./plugins/workspace-env-opencode-terminal/Taskfile.yml
+    dir: ./plugins/workspace-env-opencode-terminal
+  workspace-env-vscode-server:
+    taskfile: ./plugins/workspace-env-vscode-server/Taskfile.yml
+    dir: ./plugins/workspace-env-vscode-server
 
 tasks:
   default:
@@ -279,7 +282,7 @@ tasks:
       - task: infra-cost-tracking:build
       - task: infra-task-scheduler:build
       - task: infra-mcp-server:build
-      - task: infra-workspace-manager:build
+      - task: workspace-manager:build
       - task: messaging-chat:build
       - task: messaging-discord:build
       - task: messaging-telegram:build
@@ -293,10 +296,10 @@ tasks:
       - task: tool-task-tracker:build
       - task: tool-stability:build
       - task: tool-veo:build
-      - task: user-claude-terminal:build
-      - task: user-codex-terminal:build
-      - task: user-opencode-terminal:build
-      - task: user-vscode-server:build
+      - task: workspace-env-claude-terminal:build
+      - task: workspace-env-codex-terminal:build
+      - task: workspace-env-opencode-terminal:build
+      - task: workspace-env-vscode-server:build
       - echo "All plugin images built successfully"
       - task: restart:running
 
@@ -316,7 +319,7 @@ tasks:
       - task: infra-cost-tracking:build:dev
       - task: infra-task-scheduler:build:dev
       - task: infra-mcp-server:build:dev
-      - task: infra-workspace-manager:build:dev
+      - task: workspace-manager:build:dev
       - task: messaging-chat:build:dev
       - task: messaging-discord:build:dev
       - task: messaging-telegram:build:dev
@@ -330,10 +333,10 @@ tasks:
       - task: tool-task-tracker:build:dev
       - task: tool-stability:build:dev
       - task: tool-veo:build:dev
-      - task: user-claude-terminal:build:dev
-      - task: user-codex-terminal:build:dev
-      - task: user-opencode-terminal:build:dev
-      - task: user-vscode-server:build:dev
+      - task: workspace-env-claude-terminal:build:dev
+      - task: workspace-env-codex-terminal:build:dev
+      - task: workspace-env-opencode-terminal:build:dev
+      - task: workspace-env-vscode-server:build:dev
       - echo "All dev plugin images built successfully"
       - task: restart:running
 

@@ -22,8 +22,9 @@ use (
 	./plugins/infra-cost-tracking
 	./plugins/infra-task-scheduler
 	./plugins/infra-redis
+	./plugins/infra-chat-command-server
 	./plugins/infra-mcp-server
-	./plugins/infra-workspace-manager
+	./plugins/workspace-manager
 	./plugins/messaging-chat
 	./plugins/messaging-discord
 	./plugins/messaging-telegram
@@ -38,9 +39,9 @@ use (
 	./plugins/tool-stability
 	./plugins/tool-task-tracker
 	./plugins/tool-veo
-	./plugins/user-claude-terminal
-	./plugins/user-codex-terminal
-	./plugins/user-opencode-terminal
-	./plugins/user-vscode-server
+	./plugins/workspace-env-claude-terminal
+	./plugins/workspace-env-codex-terminal
+	./plugins/workspace-env-opencode-terminal
+	./plugins/workspace-env-vscode-server
 	./tacli
 )
