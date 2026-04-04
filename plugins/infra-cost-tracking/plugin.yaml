@@ -2,7 +2,7 @@ id: infra-cost-tracking
 name: "Cost Tracker"
 description: "Centralized usage tracking and cost analytics for all AI agent and tool plugins"
 group: infrastructure
-version: "1.0.16"
+version: "1.0.18"
 image: "teamagentica-infra-cost-tracking:latest"
 author: teamagentica
 tags: [costs, usage, analytics]
