@@ -97,9 +97,12 @@ func (s *appServer) start(binary string, env []string) error {
 
 	// Wait for the websocket to become available.
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d", port)
+	dialer := &websocket.Dialer{
+		EnableCompression: true,
+	}
 	var conn *websocket.Conn
 	for i := 0; i < 50; i++ { // up to 5 seconds
-		conn, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
+		conn, _, err = dialer.Dial(wsURL, nil)
 		if err == nil {
 			break
 		}
@@ -175,6 +178,7 @@ func (s *appServer) sendRequest(method string, params interface{}, notifyCb func
 
 		// Notification — no ID, has method.
 		if msg.ID == nil && msg.Method != "" {
+			log.Printf("[codex-cli] sendRequest got notification: %s", msg.Method)
 			if notifyCb != nil {
 				notifyCb(notification{Method: msg.Method, Params: msg.Params})
 			}
@@ -204,6 +208,8 @@ func (s *appServer) readNotifications(onNotify func(notification)) error {
 			return fmt.Errorf("read: %w", err)
 		}
 
+		log.Printf("[codex-cli] ws ← (%d bytes) %s", len(data), string(data)[:min(len(data), 200)])
+
 		var msg jsonRPCMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
@@ -216,7 +222,8 @@ func (s *appServer) readNotifications(onNotify func(notification)) error {
 		n := notification{Method: msg.Method, Params: msg.Params}
 		onNotify(n)
 
-		if msg.Method == "notifications/turnCompleted" || msg.Method == "notifications/error" {
+		if msg.Method == "turn/completed" || msg.Method == "notifications/turnCompleted" ||
+			msg.Method == "notifications/error" || msg.Method == "codex/event/task_complete" {
 			return nil
 		}
 	}
