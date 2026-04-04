@@ -5,13 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -484,10 +488,11 @@ func (r *relay) resolveDefault(aliases *alias.AliasMap) *resolvedTarget {
 
 // relayRequest is the envelope from messaging plugins.
 type relayRequest struct {
-	SourcePlugin string   `json:"source_plugin"`       // e.g. "messaging-discord"
-	ChannelID    string   `json:"channel_id"`           // channel/group/chat ID
-	Message      string   `json:"message"`              // user's message text
-	ImageURLs    []string `json:"image_urls,omitempty"` // attached media
+	SourcePlugin string   `json:"source_plugin"`        // e.g. "messaging-discord"
+	ChannelID    string   `json:"channel_id"`            // channel/group/chat ID
+	Message      string   `json:"message"`               // user's message text
+	ImageURLs    []string `json:"image_urls,omitempty"`  // attached media
+	TaskGroupID  string   `json:"task_group_id,omitempty"` // caller-provided; relay uses this if set
 }
 
 // relayResponse is returned to messaging plugins.
@@ -576,8 +581,11 @@ func (r *relay) handleChat(c *gin.Context) {
 		}
 	}
 
-	// Generate task group ID and return immediately.
-	taskGroupID := "tg-" + uuid.New().String()[:8]
+	// Use caller-provided task group ID if present, otherwise generate one.
+	taskGroupID := req.TaskGroupID
+	if taskGroupID == "" {
+		taskGroupID = "tg-" + uuid.New().String()[:8]
+	}
 
 	// Track session for progress forwarding from external plugins.
 	r.lastSessionMu.Lock()
@@ -657,7 +665,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			TaskGroupID:  taskGroupID,
 			Responder:    resolved.Alias,
 		}
-		agentResp, err := r.callAgentStream(ctx, resolved.PluginID, resolved.Model,
+		agentResp, err := r.callAgentWithRetry(ctx, resolved.PluginID, resolved.Model,
 			remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt, cb)
 		if err != nil {
 			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
@@ -725,7 +733,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		TaskGroupID:  taskGroupID,
 		Responder:    defaultAgent.Alias,
 	}
-	agentResp, err := r.callAgentStream(ctx, defaultAgent.PluginID, defaultAgent.Model,
+	agentResp, err := r.callAgentWithRetry(ctx, defaultAgent.PluginID, defaultAgent.Model,
 		req.Message, req.ImageURLs, history, defaultAgent.Alias, enrichedPrompt, cb)
 	if err != nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
@@ -887,6 +895,74 @@ type streamCallback struct {
 	ChannelID    string
 	TaskGroupID  string
 	Responder    string
+}
+
+// isTransientErr returns true for errors that indicate the agent is temporarily
+// unavailable (restarting, connection dropped mid-stream, etc.).
+func isTransientErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Unexpected EOF = stream broke mid-read (agent restarted/crashed).
+	if errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "unexpected EOF") {
+		return true
+	}
+	// Connection reset/refused = agent container not (yet) listening.
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	// Catch-all string checks for wrapped errors.
+	msg := err.Error()
+	for _, sig := range []string{"connection reset", "connection refused", "EOF", "broken pipe", "no such host"} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+const maxAgentRetries = 3
+
+// callAgentWithRetry calls the agent via streaming (with non-streaming fallback)
+// and retries on transient errors (e.g. agent restart mid-stream). Emits progress
+// events so the user knows a retry is happening.
+func (r *relay) callAgentWithRetry(
+	ctx context.Context,
+	pluginID, model, message string,
+	imageURLs []string,
+	history []conversationMsg,
+	agentAlias, systemPrompt string,
+	cb streamCallback,
+) (*agentChatResponse, error) {
+	delays := []time.Duration{3 * time.Second, 5 * time.Second, 8 * time.Second}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxAgentRetries; attempt++ {
+		if attempt > 0 {
+			delay := delays[attempt-1]
+			r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "running",
+				fmt.Sprintf("@%s disconnected, retrying in %ds (attempt %d/%d)...",
+					cb.Responder, int(delay.Seconds()), attempt, maxAgentRetries), nil)
+			log.Printf("[retry] %s attempt %d/%d after %v: %v", pluginID, attempt, maxAgentRetries, delay, lastErr)
+			time.Sleep(delay)
+		}
+
+		resp, err := r.callAgentStream(ctx, pluginID, model, message, imageURLs, history, agentAlias, systemPrompt, cb)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+		if !isTransientErr(err) {
+			return nil, err // non-transient (e.g. 400, bad model) — don't retry
+		}
+	}
+
+	return nil, fmt.Errorf("%w (after %d retries)", lastErr, maxAgentRetries)
 }
 
 // callAgentStream sends a chat request to an agent plugin's streaming endpoint
@@ -1476,16 +1552,8 @@ func main() {
 		log.Printf("Debug mode enabled")
 	}
 
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("config:update parse error: %v", err)
-			return
-		}
-
-		if v, ok := detail.Config["TASK_TIMEOUT_SECONDS"]; ok {
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		if v, ok := p.Config["TASK_TIMEOUT_SECONDS"]; ok {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
 				r.mu.Lock()
 				r.taskTimeoutSeconds = n
@@ -1494,7 +1562,7 @@ func main() {
 			}
 		}
 
-		if v, ok := detail.Config["PLUGIN_DEBUG"]; ok {
+		if v, ok := p.Config["PLUGIN_DEBUG"]; ok {
 			enabled := v == "true"
 			r.mu.Lock()
 			r.debug = enabled
@@ -1512,7 +1580,7 @@ func main() {
 			r.mu.Unlock()
 			log.Printf("PLUGIN_DEBUG updated: %v", enabled)
 		}
-	}))
+	})
 
 	// Handle progress updates from async plugins (e.g. seedance webhook callbacks).
 	// Forward to the source messaging plugin and resolve any waiting async tasks.
