@@ -237,6 +237,7 @@ func main() {
 		pluginRegGroup.PATCH("/containers/:cid", pluginHandler.UpdateManagedContainer)
 		pluginRegGroup.DELETE("/containers/:cid", pluginHandler.DeleteManagedContainer)
 		pluginRegGroup.POST("/containers/:cid/start", pluginHandler.StartManagedContainer)
+		pluginRegGroup.POST("/containers/:cid/stop", pluginHandler.StopManagedContainer)
 		pluginRegGroup.GET("/containers/:cid/logs", pluginHandler.GetManagedContainerLogs)
 
 		// Deploy/promote/rollback (plugin-callable for automation).
@@ -309,6 +310,9 @@ func main() {
 		// so all plugins can populate their peer caches for P2P communication.
 		time.Sleep(10 * time.Second)
 		pluginHandler.BroadcastRegistrySync()
+
+		// Wire up event publisher so kernel debug events flow to infra-redis SSE.
+		pluginHandler.EnableEventPublisher()
 
 		// Fetch JWT secret from the user-manager plugin.
 		// The plugin owns the secret; the kernel only needs it for middleware validation.

@@ -500,7 +500,7 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 		})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, `{"error":"Plugin is not reachable — it may have stopped or is still starting up"}`)
+		fmt.Fprintf(w, `{"error":"Plugin '%s' is not reachable — it may have stopped or is still starting up"}`, pluginID)
 	}
 
 	proxy.ServeHTTP(c.Writer, c.Request)

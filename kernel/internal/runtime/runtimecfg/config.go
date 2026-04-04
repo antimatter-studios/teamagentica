@@ -25,9 +25,8 @@ type Config struct {
 
 // DataMountConfig controls the /data mount for plugin containers.
 type DataMountConfig struct {
-	Type                   string `yaml:"type"` // "bind" or "volume"
-	Source                 string `yaml:"source"`
-	WorkspaceManagerSource string `yaml:"workspace_manager_source"`
+	Type   string `yaml:"type"` // "bind" or "volume"
+	Source string `yaml:"source"`
 }
 
 // MountSpec describes a single mount (bind or volume).

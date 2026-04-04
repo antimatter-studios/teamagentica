@@ -28,11 +28,16 @@ type SSEMessage struct {
 	Data    any    `json:"data"`
 }
 
+// EventPublisher is an optional callback that publishes events to an external
+// event bus (e.g. infra-redis) for unified SSE streaming.
+type EventPublisher func(eventType, source, detail string)
+
 // Hub is a fan-out event broadcaster with an in-memory event log.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[chan SSEMessage]struct{}
-	history []SSEMessage
+	mu        sync.RWMutex
+	clients   map[chan SSEMessage]struct{}
+	history   []SSEMessage
+	publisher EventPublisher // optional external publisher
 }
 
 // NewHub creates a new event Hub.
@@ -60,12 +65,29 @@ func (h *Hub) Unsubscribe(ch chan SSEMessage) {
 	close(ch)
 }
 
+// SetPublisher sets an optional external event publisher. When set, all emitted
+// events are also published externally (e.g. to infra-redis for unified SSE).
+func (h *Hub) SetPublisher(pub EventPublisher) {
+	h.mu.Lock()
+	h.publisher = pub
+	h.mu.Unlock()
+}
+
 // Emit sends an audit event to all connected clients and appends it to history.
 func (h *Hub) Emit(evt DebugEvent) {
 	if evt.Timestamp.IsZero() {
 		evt.Timestamp = time.Now()
 	}
 	h.send(SSEMessage{Channel: "audit", Data: evt})
+
+	// Publish to external event bus if configured.
+	h.mu.RLock()
+	pub := h.publisher
+	h.mu.RUnlock()
+	if pub != nil {
+		detail, _ := json.Marshal(evt)
+		go pub("kernel:"+evt.Type, evt.PluginID, string(detail))
+	}
 }
 
 // EmitEvent sends an inter-plugin event log entry to all connected clients.

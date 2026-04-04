@@ -292,14 +292,8 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	vars := d.templateVars(plugin.ID, pluginDir(plugin.Image))
 
 	// Data mount — strategy (bind vs volume) comes from runtime config.
-	isWorkspaceManager := hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:manager")
-	var dataSource string
-	if isWorkspaceManager {
-		dataSource = runtimecfg.Resolve(d.rtCfg.DataMount.WorkspaceManagerSource, vars)
-		log.Printf("workspace:manager plugin %s using storage-disk data at /data", plugin.ID)
-	} else {
-		dataSource = runtimecfg.Resolve(d.rtCfg.DataMount.Source, vars)
-	}
+	// Every plugin gets its own /data directory for private storage.
+	dataSource := runtimecfg.Resolve(d.rtCfg.DataMount.Source, vars)
 	ensureBindDir(d.rtCfg.DataMount.Type, dataSource, d.dataDir)
 	dataMount := resolveMount(
 		runtimecfg.MountSpec{Type: d.rtCfg.DataMount.Type},
@@ -311,15 +305,15 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		mounts = append(mounts, *certMount)
 	}
 
-	// Cross-mount the storage:disk plugin's data into workspace-aware plugins.
-	// workspace:manager is excluded — it already has storage-disk data at /data.
-	if !isWorkspaceManager && (hasCapabilityPrefix(plugin.GetCapabilities(), "agent:chat") ||
-		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:")) {
+	// Cross-mount the storage-disk shared filesystem into plugins that need it.
+	if hasCapabilityPrefix(plugin.GetCapabilities(), "agent:chat") ||
+		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:") ||
+		hasCapabilityPrefix(plugin.GetCapabilities(), "storage:") {
 		src := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Source, vars)
 		sub := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Subpath, vars)
 		ensureBindDir(d.rtCfg.StorageCrossMount.Type, src, d.dataDir)
-		mounts = append(mounts, resolveMount(d.rtCfg.StorageCrossMount, src, "/workspaces", sub))
-		log.Printf("cross-mounting workspace volume into plugin %s at /workspaces", plugin.ID)
+		mounts = append(mounts, resolveMount(d.rtCfg.StorageCrossMount, src, "/storage-root", sub))
+		log.Printf("cross-mounting storage-disk into plugin %s at /storage-root", plugin.ID)
 	}
 
 	// Extra mounts from runtime config (source code, SDK, Go caches in dev; empty in prod).

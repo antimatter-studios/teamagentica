@@ -166,6 +166,39 @@ func (h *PluginHandler) GetManagedContainer(c *gin.Context) {
 	c.JSON(http.StatusOK, mc)
 }
 
+// StopManagedContainer handles POST /api/plugins/containers/:id/stop.
+// Stops the Docker container but keeps the DB record so it can be re-started.
+func (h *PluginHandler) StopManagedContainer(c *gin.Context) {
+	pluginID, ok := extractPluginID(c)
+	if !ok {
+		return
+	}
+
+	var mc models.ManagedContainer
+	if err := h.db().First(&mc, "id = ? AND plugin_id = ?", c.Param("cid"), pluginID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("container %q not found", c.Param("cid"))})
+		return
+	}
+
+	if mc.Status == "stopped" {
+		c.JSON(http.StatusOK, mc)
+		return
+	}
+
+	if h.runtime != nil && mc.ContainerID != "" {
+		if err := h.runtime.StopPlugin(c.Request.Context(), mc.ContainerID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stop container: %v", err)})
+			return
+		}
+	}
+
+	mc.Status = "stopped"
+	mc.ContainerID = ""
+	h.db().Save(&mc)
+
+	c.JSON(http.StatusOK, mc)
+}
+
 // DeleteManagedContainer handles DELETE /api/plugins/containers/:id.
 func (h *PluginHandler) DeleteManagedContainer(c *gin.Context) {
 	pluginID, ok := extractPluginID(c)
@@ -435,7 +468,7 @@ func (h *PluginHandler) ProxyToManagedContainer(c *gin.Context) {
 		})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, `{"error":"Workspace container is not reachable — it may have stopped or is still starting up"}`)
+		fmt.Fprintf(w, `{"error":"Workspace container '%s' is not reachable — it may have stopped or is still starting up"}`, containerID)
 	}
 
 	proxy.ServeHTTP(c.Writer, c.Request)

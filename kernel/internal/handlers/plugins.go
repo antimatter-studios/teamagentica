@@ -79,6 +79,9 @@ func (h *PluginHandler) broadcastLifecycleEvent(eventType string, detail interfa
 
 	client := &http.Client{Timeout: 3 * time.Second, Transport: h.transport}
 
+	// Publish to infra-redis event stream for SSE observability.
+	go h.PublishEvent(eventType, string(detailJSON))
+
 	for _, p := range plugins {
 		port := p.HTTPPort
 		scheme := "http"
@@ -100,6 +103,58 @@ func (h *PluginHandler) broadcastLifecycleEvent(eventType string, detail interfa
 			resp.Body.Close()
 		}(url)
 	}
+}
+
+// PublishEvent publishes a broadcast event to infra-redis.
+func (h *PluginHandler) PublishEvent(eventType, detail string) {
+	h.publishToRedis(map[string]interface{}{
+		"event_type": eventType,
+		"source":     "kernel",
+		"detail":     detail,
+	})
+}
+
+// PublishEventTo publishes an addressed event to a specific plugin via infra-redis.
+func (h *PluginHandler) PublishEventTo(eventType, detail, target string) {
+	h.publishToRedis(map[string]interface{}{
+		"event_type": eventType,
+		"source":     "kernel",
+		"target":     target,
+		"detail":     detail,
+	})
+}
+
+// publishToRedis sends an event payload to infra-redis's /events/publish endpoint.
+func (h *PluginHandler) publishToRedis(payload map[string]interface{}) {
+	var redis models.Plugin
+	if err := h.db().Select("host", "http_port").
+		Where("id = ? AND status = ?", "infra-redis", "running").
+		First(&redis).Error; err != nil {
+		return
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	scheme := "http"
+	if h.clientTLS != nil {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s:%d/events/publish", scheme, redis.Host, redis.HTTPPort)
+
+	client := &http.Client{Timeout: 2 * time.Second, Transport: h.transport}
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 // broadcastRegistrySync sends the full plugin address registry to all running
@@ -124,6 +179,15 @@ func (h *PluginHandler) BroadcastRegistrySync() {
 		"registry": registry,
 	})
 	log.Printf("kernel: broadcast registry-sync to %d plugins", len(plugins))
+}
+
+// EnableEventPublisher wires the Hub to publish debug events to infra-redis
+// so they appear in the unified SSE stream. Call after plugins have started.
+func (h *PluginHandler) EnableEventPublisher() {
+	h.Events.SetPublisher(func(eventType, source, detail string) {
+		h.PublishEvent(eventType, detail)
+	})
+	log.Printf("kernel: event publisher enabled (events → infra-redis)")
 }
 
 // stripHTMLTags removes all HTML tags from a string to prevent XSS.
@@ -934,7 +998,7 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		}
 	}
 
-	// Emit config:update event to the running plugin.
+	// Emit config:update event to the running plugin via Redis event bus.
 	if plugin.Status == "running" && plugin.Host != "" {
 		var keys []string
 		for k := range req.Config {
@@ -942,20 +1006,25 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 		}
 		keysJSON, _ := json.Marshal(keys)
 
-		// Build the new config values for the event detail.
+		// Build the config values payload for the plugin.
 		configValues := make(map[string]string, len(req.Config))
 		for k, v := range req.Config {
 			configValues[k] = v.Value
 		}
+		detail, _ := json.Marshal(map[string]interface{}{
+			"plugin_id": id,
+			"config":    configValues,
+		})
 
+		// Publish data event to the plugin (full config values).
+		go h.PublishEventTo("config:update", string(detail), id)
+
+		// Publish observability event to the dashboard SSE (key names only, no values).
 		h.Events.Emit(events.DebugEvent{
 			Type:     "config:update",
 			PluginID: id,
 			Detail:   fmt.Sprintf("config update keys=%s", keysJSON),
 		})
-
-		// Config update events are now delivered via infra-redis event bus.
-		// The debug SSE emit above is sufficient for console observability.
 	}
 
 	if al := getAudit(c); al != nil {

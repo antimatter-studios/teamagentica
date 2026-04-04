@@ -169,10 +169,14 @@ func isAllowedOrigin(origin, baseDomain string) bool {
 }
 
 // SecurityHeaders adds standard security headers to every response.
+// Workspace proxy paths (/ws/) are excluded from X-Frame-Options
+// because the dashboard embeds them in iframes.
 func SecurityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
-		c.Writer.Header().Set("X-Frame-Options", "DENY")
+		if !strings.HasPrefix(c.Request.URL.Path, "/ws/") {
+			c.Writer.Header().Set("X-Frame-Options", "DENY")
+		}
 		c.Writer.Header().Set("X-XSS-Protection", "0")
 		c.Next()
 	}
