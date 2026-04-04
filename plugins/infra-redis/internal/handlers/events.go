@@ -425,18 +425,55 @@ func (h *EventHandler) Stream(c *gin.Context) {
 }
 
 // writeSSEMessage formats a Redis stream entry as an SSE event.
+// Sensitive data (e.g. config values in config:update) is stripped before
+// sending to the SSE stream — the dashboard should never receive secrets.
 func (h *EventHandler) writeSSEMessage(w gin.ResponseWriter, values map[string]interface{}) {
+	detail := getString(values, "detail")
+
+	// Sanitise config:update events — replace config values with redacted markers.
+	if getString(values, "event_type") == "config:update" {
+		detail = sanitiseConfigDetail(detail)
+	}
+
 	data, err := json.Marshal(EventMessage{
 		EventType: getString(values, "event_type"),
 		Source:    getString(values, "source"),
 		Target:    getString(values, "target"),
-		Detail:    getString(values, "detail"),
+		Detail:    detail,
 		Timestamp: getString(values, "ts"),
 	})
 	if err != nil {
 		return
 	}
 	fmt.Fprintf(w, "event: event\ndata: %s\n\n", data)
+}
+
+// sanitiseConfigDetail strips config values from a config:update detail payload,
+// replacing them with "***" so the SSE stream never exposes secrets.
+// The detail is JSON like: {"plugin_id":"...", "config":{"KEY":"value",...}}
+// After sanitisation: {"plugin_id":"...", "keys":["KEY",...]}
+func sanitiseConfigDetail(detail string) string {
+	var payload struct {
+		PluginID string            `json:"plugin_id"`
+		Config   map[string]string `json:"config"`
+	}
+	if json.Unmarshal([]byte(detail), &payload) != nil || payload.Config == nil {
+		return detail // unparseable — pass through unchanged
+	}
+
+	keys := make([]string, 0, len(payload.Config))
+	for k := range payload.Config {
+		keys = append(keys, k)
+	}
+
+	sanitised, err := json.Marshal(map[string]interface{}{
+		"plugin_id": payload.PluginID,
+		"keys":      keys,
+	})
+	if err != nil {
+		return detail
+	}
+	return string(sanitised)
 }
 
 // EnsureStream pre-creates a stream so consumer groups can be created on it.
