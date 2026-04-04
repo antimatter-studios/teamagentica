@@ -18,12 +18,16 @@ type Restarter interface {
 	RestartPlugin(ctx context.Context, pluginID string) error
 }
 
+// LifecycleBroadcaster broadcasts lifecycle events to all running plugins.
+type LifecycleBroadcaster func(eventType string, detail map[string]interface{})
+
 // Monitor periodically checks the health of running plugin containers.
 type Monitor struct {
-	runtime   runtime.ContainerRuntime
-	events    *events.Hub
-	interval  time.Duration
-	restarter Restarter
+	runtime     runtime.ContainerRuntime
+	events      *events.Hub
+	interval    time.Duration
+	restarter   Restarter
+	broadcaster LifecycleBroadcaster
 
 	// unhealthyCounts tracks consecutive unhealthy checks per plugin ID.
 	unhealthyCounts map[string]int
@@ -51,6 +55,21 @@ func NewMonitor(rt runtime.ContainerRuntime, evts *events.Hub, interval time.Dur
 // SetRestarter attaches a restarter (typically the orchestrator) for auto-recovery.
 func (m *Monitor) SetRestarter(r Restarter) {
 	m.restarter = r
+}
+
+// SetBroadcaster attaches a lifecycle event broadcaster for peer notification.
+func (m *Monitor) SetBroadcaster(b LifecycleBroadcaster) {
+	m.broadcaster = b
+}
+
+// broadcastLifecycle emits a lifecycle event to all peers if a broadcaster is set.
+func (m *Monitor) broadcastLifecycle(eventType string, pluginID string) {
+	if m.broadcaster != nil {
+		go m.broadcaster(eventType, map[string]interface{}{
+			"type":      eventType,
+			"plugin_id": pluginID,
+		})
+	}
 }
 
 // Start runs the health-check loop until the context is cancelled.
@@ -229,11 +248,21 @@ func (m *Monitor) emitEvent(pluginID, eventType, detail string) {
 }
 
 func (m *Monitor) setStatus(p *models.Plugin, status string) {
-	if p.Status == status {
+	prevStatus := p.Status
+	if prevStatus == status {
 		return
 	}
 	if err := m.db().Model(p).Update("status", status).Error; err != nil {
 		log.Printf("health monitor: update status for %s: %v", p.ID, err)
+		return
+	}
+
+	// Broadcast lifecycle transitions to peers.
+	switch {
+	case status == "unhealthy" && prevStatus != "unhealthy":
+		m.broadcastLifecycle("plugin:unhealthy", p.ID)
+	case status == "running" && prevStatus == "unhealthy":
+		m.broadcastLifecycle("plugin:healthy", p.ID)
 	}
 }
 

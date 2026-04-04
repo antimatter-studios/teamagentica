@@ -298,6 +298,9 @@ func main() {
 	// Boot orchestrator: start all enabled plugins in background.
 	orch := orchestrator.NewOrchestrator(dockerRT, cfg, pluginHandler.Events)
 	monitor.SetRestarter(orch)
+	monitor.SetBroadcaster(func(eventType string, detail map[string]interface{}) {
+		pluginHandler.BroadcastLifecycleEventPublic(eventType, detail)
+	})
 	go func() {
 		orchCtx, orchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer orchCancel()

@@ -105,6 +105,12 @@ func (h *PluginHandler) broadcastLifecycleEvent(eventType string, detail interfa
 	}
 }
 
+// BroadcastLifecycleEventPublic is an exported wrapper for broadcastLifecycleEvent,
+// used by the health monitor to broadcast unhealthy/healthy transitions.
+func (h *PluginHandler) BroadcastLifecycleEventPublic(eventType string, detail interface{}) {
+	h.broadcastLifecycleEvent(eventType, detail)
+}
+
 // PublishEvent publishes a broadcast event to infra-redis.
 func (h *PluginHandler) PublishEvent(eventType, detail string) {
 	h.publishToRedis(map[string]interface{}{
@@ -542,6 +548,12 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 		Detail:   "container=" + containerID,
 	})
 
+	// Broadcast plugin:started — plugin:ready follows when it self-registers.
+	go h.broadcastLifecycleEvent("plugin:started", map[string]interface{}{
+		"type":      "plugin:started",
+		"plugin_id": plugin.ID,
+	})
+
 	*allEnabled = append(*allEnabled, plugin.ID)
 	log.Printf("plugins: enabled %s (container=%s)", plugin.ID, containerID[:12])
 	return nil
@@ -563,6 +575,12 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 	}
 
 	if plugin.ContainerID != "" && h.runtime != nil {
+		// Broadcast plugin:stopped so peers invalidate their address caches.
+		go h.broadcastLifecycleEvent("plugin:stopped", map[string]interface{}{
+			"type":      "plugin:stopped",
+			"plugin_id": id,
+		})
+
 		if err := h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID); err != nil {
 			// StopPlugin already handles not-found (container vanished) gracefully.
 			// Any error reaching here is a real Docker problem.
@@ -583,6 +601,7 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 		"container_id": "",
 		"status":       "stopped",
 		"enabled":      false,
+		"host":         "",
 	})
 
 	h.Events.Emit(events.DebugEvent{
@@ -633,7 +652,19 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 			PluginID: id,
 			Detail:   "stopping container=" + plugin.ContainerID[:12],
 		})
+
+		// Broadcast plugin:stopped so peers invalidate their address caches.
+		go h.broadcastLifecycleEvent("plugin:stopped", map[string]interface{}{
+			"type":      "plugin:stopped",
+			"plugin_id": id,
+		})
+
 		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID)
+
+		// Clear host so peers know the plugin is unreachable.
+		h.db().Model(&plugin).Updates(map[string]interface{}{
+			"host": "",
+		})
 	}
 
 	env := map[string]string{
@@ -664,6 +695,13 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	h.db().Model(&plugin).Updates(map[string]interface{}{
 		"container_id": containerID,
 		"status":       "running",
+	})
+
+	// Broadcast plugin:started so peers know a new container is booting.
+	// The plugin:ready event will follow when the plugin self-registers.
+	go h.broadcastLifecycleEvent("plugin:started", map[string]interface{}{
+		"type":      "plugin:started",
+		"plugin_id": id,
 	})
 
 	h.Events.Emit(events.DebugEvent{
