@@ -4,9 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -90,8 +88,6 @@ func main() {
 
 	// Standard agent routes.
 	router.GET("/health", h.Health)
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
 	router.GET("/mcp", h.DiscoveredTools)
 	router.GET("/system-prompt", h.SystemPrompt)
@@ -99,7 +95,7 @@ func main() {
 	router.GET("/config/options/:field", h.ConfigOptions)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -120,19 +116,11 @@ func main() {
 	router.GET("/usage/records", h.UsageRecords)
 
 	// Pricing endpoints.
-	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "inception", Model: "mercury-2", InputPer1M: 0.25, OutputPer1M: 0.75, Currency: "USD"},
-		{Provider: "inception", Model: "mercury-coder-small", InputPer1M: 0.25, OutputPer1M: 0.75, Currency: "USD"},
-		{Provider: "inception", Model: "mercury-edit", InputPer1M: 0.25, OutputPer1M: 0.75, Currency: "USD"},
-	}, sdkClient)
+	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 func getHostname() string {

@@ -53,7 +53,7 @@ var Groups = []GroupMeta{
 	{ID: "storage", Name: "Storage", Description: "File and data storage backends", Order: 4},
 	{ID: "network", Name: "Network", Description: "Tunnels, webhooks, and external connectivity", Order: 5},
 	{ID: "infrastructure", Name: "Infrastructure", Description: "Platform internals and system services", Order: 6},
-	{ID: "user", Name: "User Tools", Description: "Workspace environments and developer tools", Order: 7},
+	{ID: "workspace", Name: "Workspaces", Description: "Development environments and workspace management", Order: 7},
 }
 
 // Store wraps the catalog database.

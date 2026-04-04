@@ -65,7 +65,7 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
-		h.sdk.ReportEvent(eventType, detail)
+		h.sdk.PublishEvent(eventType, detail)
 	}
 }
 
@@ -312,7 +312,7 @@ func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
 		{
 			"name":        "generate_image",
-			"description": "Generate an image from a text prompt using Stability AI (Stable Diffusion 3.5)",
+			"description": "Generate an image using Stable Diffusion 3.5. Fast and cheap but lower quality than Nano Banana. Best for quick drafts or when cost matters more than fidelity.",
 			"endpoint":    "/generate",
 			"parameters": gin.H{
 				"type": "object",

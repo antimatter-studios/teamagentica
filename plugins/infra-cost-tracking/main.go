@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
@@ -64,10 +62,6 @@ func main() {
 
 	h := handlers.NewHandler(db)
 
-	// SDK helper handlers.
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	router.GET("/health", h.Health)
 	router.POST("/usage", h.ReportUsage)
 	router.GET("/usage", h.Summary)
@@ -77,11 +71,7 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	// Subscribe to usage:report events via the standard event bus.
-	sdkClient.OnEvent("usage:report", pluginsdk.NewNullDebouncer(h.ProcessUsageEvent))
+	sdkClient.Events().On("usage:report", pluginsdk.NewNullDebouncer(h.ProcessUsageEvent))
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }

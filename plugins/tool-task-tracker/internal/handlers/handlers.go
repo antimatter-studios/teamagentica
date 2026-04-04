@@ -17,7 +17,7 @@ import (
 
 // EventEmitter is the subset of pluginsdk.Client needed by handlers.
 type EventEmitter interface {
-	ReportEvent(eventType, detail string)
+	PublishEvent(eventType, detail string)
 }
 
 // ensure pluginsdk.Client satisfies EventEmitter at compile time.
@@ -167,7 +167,7 @@ func (h *Handler) emitAssign(ctx context.Context, card *storage.Card) {
 		"assignee_agent": card.AssigneeAgent,
 		"assignee_name":  assigneeName,
 	})
-	h.events.ReportEvent("task-tracking:assign", string(detail))
+	h.events.PublishEvent("task-tracking:assign", string(detail))
 }
 
 // emitComment fires a task-tracking:comment event when a comment is added
@@ -183,7 +183,7 @@ func (h *Handler) emitComment(card *storage.Card, comment *storage.Comment) {
 		"body":           comment.Body,
 		"assignee_agent": card.AssigneeAgent,
 	})
-	h.events.ReportEvent("task-tracking:comment", string(detail))
+	h.events.PublishEvent("task-tracking:comment", string(detail))
 }
 
 func (h *Handler) Health(c *gin.Context) {

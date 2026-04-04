@@ -4,9 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -131,8 +129,6 @@ func main() {
 
 	// Register routes.
 	router.GET("/health", h.Health)
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
 	router.POST("/chat/stream", h.ChatStream)
 	router.GET("/mcp", h.DiscoveredTools)
@@ -153,7 +149,7 @@ func main() {
 	router.DELETE("/auth", h.AuthLogout)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -200,11 +196,11 @@ func main() {
 		}()
 
 		// Hot-reload when MCP server restarts.
-		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		sdkClient.Events().On("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			configureMCP("infra-mcp-server")
 		}))
 
-		sdkClient.OnEvent("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		sdkClient.Events().On("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			if err := codexcli.RemoveMCPConfig(codexHome); err != nil {
 				log.Printf("[mcp] failed to remove MCP config: %v", err)
 			}
@@ -215,20 +211,11 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	// Pricing endpoints.
-	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "openai", Model: "gpt-4o", InputPer1M: 2.50, OutputPer1M: 10.00, CachedPer1M: 1.25, Currency: "USD"},
-		{Provider: "openai", Model: "gpt-4o-mini", InputPer1M: 0.15, OutputPer1M: 0.60, CachedPer1M: 0.075, Currency: "USD"},
-		{Provider: "openai", Model: "o4-mini", InputPer1M: 1.10, OutputPer1M: 4.40, CachedPer1M: 0.275, Currency: "USD"},
-		{Provider: "openai", Model: "gpt-5.1-codex", InputPer1M: 1.25, OutputPer1M: 10.00, CachedPer1M: 0.625, Currency: "USD"},
-	}, sdkClient)
+	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", defaultPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(defaultPort, router)
 }
 
 func configOrDefault(m map[string]string, key, fallback string) string {

@@ -65,7 +65,7 @@ func main() {
 	// --- Event handlers (registered before Start so SDK subscribes automatically) ---
 
 	// Handle ingress:ready broadcasts from the ngrok ingress plugin.
-	sdkClient.OnEvent("ingress:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("ingress:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var data struct {
 			URL   string `json:"url"`
 			Proto string `json:"proto"`
@@ -89,7 +89,7 @@ func main() {
 	}))
 
 	// Handle route updates from gateway plugins (addressed delivery).
-	sdkClient.OnEvent("webhook:api:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("webhook:api:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var data struct {
 			PluginID   string `json:"plugin_id"`
 			Prefix     string `json:"prefix"`
@@ -120,7 +120,7 @@ func main() {
 	}))
 
 	// Re-broadcast webhook:ready when any plugin registers (so late joiners hear it).
-	sdkClient.OnEvent("plugin:registered", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("plugin:registered", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			PluginID string `json:"plugin_id"`
 		}

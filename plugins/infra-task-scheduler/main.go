@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -98,10 +96,6 @@ func main() {
 
 	router := gin.Default()
 
-	// SDK helper handlers.
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	router.GET("/health", h.Health)
 	router.POST("/events", h.CreateJob)
 	router.GET("/events", h.ListJobs)
@@ -127,15 +121,11 @@ func main() {
 	router.POST("/mcp/retry_dispatch", h.MCPRetryDispatch)
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }

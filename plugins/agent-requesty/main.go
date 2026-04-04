@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -72,8 +70,6 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
@@ -81,7 +77,7 @@ func main() {
 	router.GET("/usage/records", h.UsageRecords)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -93,21 +89,11 @@ func main() {
 	}))
 
 	// Pricing endpoints.
-	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "requesty", Model: "google/gemini-2.5-flash", InputPer1M: 0.15, OutputPer1M: 0.60, CachedPer1M: 0.0375, Currency: "USD"},
-		{Provider: "requesty", Model: "openai/gpt-4o", InputPer1M: 2.50, OutputPer1M: 10.00, CachedPer1M: 1.25, Currency: "USD"},
-		{Provider: "requesty", Model: "anthropic/claude-sonnet-4-20250514", InputPer1M: 3.00, OutputPer1M: 15.00, CachedPer1M: 0.30, Currency: "USD"},
-		{Provider: "requesty", Model: "google/gemini-2.5-pro", InputPer1M: 1.25, OutputPer1M: 10.00, CachedPer1M: 0.3125, Currency: "USD"},
-		{Provider: "requesty", Model: "openai/gpt-4o-mini", InputPer1M: 0.15, OutputPer1M: 0.60, CachedPer1M: 0.075, Currency: "USD"},
-	}, sdkClient)
+	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 func getHostname() string {

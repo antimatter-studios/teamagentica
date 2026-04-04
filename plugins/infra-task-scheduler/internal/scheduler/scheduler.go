@@ -19,8 +19,8 @@ import (
 
 // SDKClient is the interface the scheduler needs from pluginsdk.Client.
 type SDKClient interface {
-	ReportEvent(eventType, detail string)
-	OnEvent(eventType string, debouncer pluginsdk.Debouncer) error
+	PublishEvent(eventType, detail string)
+	OnEvent(eventType string, debouncer pluginsdk.Debouncer)
 	RouteToPlugin(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error)
 }
 
@@ -203,10 +203,7 @@ func (s *Scheduler) registerEventJobs() {
 
 		log.Printf("[scheduler] subscribing to event: %s", pattern)
 		handler := s.makeEventHandler(pattern)
-		if err := s.sdk.OnEvent(pattern, pluginsdk.NewNullDebouncer(handler)); err != nil {
-			log.Printf("[scheduler] failed to subscribe to %s: %v", pattern, err)
-			continue
-		}
+		s.sdk.OnEvent(pattern, pluginsdk.NewNullDebouncer(handler))
 		s.registeredEvents[pattern] = true
 	}
 }
@@ -255,7 +252,7 @@ func (s *Scheduler) fireAndLog(job *storage.Job, trigger string, now time.Time) 
 	})
 
 	if s.sdk != nil {
-		s.sdk.ReportEvent(events.SchedulerFired, job.Name+": "+job.Text)
+		s.sdk.PublishEvent(events.SchedulerFired, job.Name+": "+job.Text)
 	}
 }
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,9 +40,6 @@ func main() {
 	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
 
 	r := gin.Default()
-	r.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	r.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -117,12 +113,5 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"message": "plugin removed from catalog", "plugin_id": id, "versions_removed": affected})
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf("0.0.0.0:%d", defaultPort),
-		Handler: r,
-	}
-
-	log.Printf("system-teamagentica-plugin-provider starting on %s", server.Addr)
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
-	log.Println("system-teamagentica-plugin-provider shut down")
+	sdkClient.ListenAndServe(defaultPort, r)
 }

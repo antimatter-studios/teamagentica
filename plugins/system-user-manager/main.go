@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -90,8 +89,6 @@ func main() {
 
 	// --- Create router ---
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	h := handlers.New(db, sdkClient, auditLogger)
 
 	// Health
@@ -132,10 +129,5 @@ func main() {
 	// Audit logs
 	router.GET("/audit", h.ListAuditLogs)
 
-	// --- Start server ---
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }

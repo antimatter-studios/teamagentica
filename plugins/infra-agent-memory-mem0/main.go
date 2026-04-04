@@ -182,10 +182,10 @@ func main() {
 
 	// Invalidate LLM cache when personas or aliases change so we pick up
 	// backend_alias or system prompt changes without restart.
-	sdkClient.OnEvent("persona:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("persona:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		proxy.invalidateLLMCache()
 	}))
-	sdkClient.OnEvent("alias:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("alias:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		proxy.invalidateLLMCache()
 	}))
 
@@ -195,10 +195,6 @@ func main() {
 	router := gin.Default()
 	h := handlers.New(provider)
 	handlerRef = h
-
-	// SDK helper handlers.
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 
 	// Health
 	router.GET("/health", h.Health)
@@ -235,7 +231,7 @@ func main() {
 
 	// Hot-reload config: resolve aliases again and tell Mem0 to reinitialize.
 	mem0URL := fmt.Sprintf("http://localhost:%d", mem0Port)
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -258,17 +254,13 @@ func main() {
 	}))
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, handlerRef.ToolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 // resolveAlias fetches an alias from the alias-registry and returns plugin+model.

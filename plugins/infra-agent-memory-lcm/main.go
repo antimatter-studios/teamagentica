@@ -85,7 +85,7 @@ func main() {
 	}
 
 	// Hot-reload config.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -97,10 +97,6 @@ func main() {
 	}))
 
 	router := gin.Default()
-
-	// SDK helper handlers.
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 
 	// Health — also pings LCM Node.js server.
 	router.GET("/health", func(c *gin.Context) {
@@ -145,17 +141,13 @@ func main() {
 	router.POST("/internal/llm/complete", llmCompleteHandler(sdkClient, proxy))
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, toolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", defaultPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(defaultPort, router)
 }
 
 // proxyToLCM forwards a request to the LCM Node.js server.

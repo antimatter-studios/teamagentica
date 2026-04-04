@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"github.com/gin-gonic/gin"
 
@@ -62,10 +60,6 @@ func main() {
 
 	h = handlers.NewHandler(sdkClient, debug)
 
-	// SDK helper handlers.
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	router.GET("/health", h.Health)
 	router.GET("/mcp", h.Tools)
 	router.POST("/mcp/build", h.ToolBuild)
@@ -73,9 +67,5 @@ func main() {
 	router.GET("/builds", h.ListBuilds)
 	router.GET("/builds/:id/logs", h.GetBuildLogs)
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }

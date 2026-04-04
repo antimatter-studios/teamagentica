@@ -2,7 +2,7 @@ id: agent-requesty
 name: "Requesty Router"
 description: "AI router providing unified access to OpenAI, Anthropic, Google and more via Requesty"
 group: agents
-version: "1.0.11"
+version: "1.0.13"
 image: "teamagentica-agent-requesty:latest"
 author: teamagentica
 tags: [chat, ai, agent, requesty, router]

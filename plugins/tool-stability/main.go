@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -68,9 +66,6 @@ func main() {
 	}
 
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-
 	h = handlers.NewHandler(apiKey, model, dataPath, debug)
 	h.SetSDK(sdkClient)
 
@@ -84,7 +79,7 @@ func main() {
 	router.GET("/usage/records", h.UsageRecords)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -96,27 +91,18 @@ func main() {
 	}))
 
 	// Pricing endpoints.
-	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "stability", Model: "sd3.5-large", PerRequest: 0.065, Currency: "USD"},
-		{Provider: "stability", Model: "sd3.5-large-turbo", PerRequest: 0.04, Currency: "USD"},
-		{Provider: "stability", Model: "sd3.5-medium", PerRequest: 0.035, Currency: "USD"},
-		{Provider: "stability", Model: "sd3.5-flash", PerRequest: 0.025, Currency: "USD"},
-	}, sdkClient)
+	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 func getHostname() string {

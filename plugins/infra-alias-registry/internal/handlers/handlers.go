@@ -36,7 +36,7 @@ func (h *Handler) broadcastAliasChange(action string, a *storage.Alias) {
 		"action": action,
 		"alias":  a,
 	})
-	h.sdk.ReportEvent(events.AliasRegistryUpdate, string(detail))
+	h.sdk.PublishEvent(events.AliasRegistryUpdate, string(detail))
 }
 
 // ── Alias REST API ───────────────────────────────────────────────────────────

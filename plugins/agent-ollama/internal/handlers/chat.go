@@ -63,7 +63,7 @@ func (h *Handler) SetModelList(models []string) {
 
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
-		h.sdk.ReportEvent(eventType, detail)
+		h.sdk.PublishEvent(eventType, detail)
 	}
 }
 

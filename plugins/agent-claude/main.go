@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -124,8 +123,6 @@ func main() {
 
 	// Register routes.
 	router.GET("/health", h.Health)
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
 	router.POST("/chat/stream", h.ChatStream)
 	router.GET("/mcp", h.DiscoveredTools)
@@ -145,7 +142,7 @@ func main() {
 	router.DELETE("/auth", h.AuthLogout)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -190,7 +187,7 @@ func main() {
 		}()
 
 		// Also subscribe to events for hot-reload when MCP server restarts.
-		sdkClient.OnEvent("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		sdkClient.Events().On("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			var detail struct {
 				Endpoint string `json:"endpoint"`
 			}
@@ -202,7 +199,7 @@ func main() {
 			configureMCP("infra-mcp-server")
 		}))
 
-		sdkClient.OnEvent("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+		sdkClient.Events().On("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			if err := claudecli.RemoveMCPConfig(claudeDir); err != nil {
 				log.Printf("[mcp] failed to remove MCP config: %v", err)
 			}
@@ -215,20 +212,11 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	// Pricing endpoints.
-	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "anthropic", Model: "claude-opus-4-6", InputPer1M: 15.00, OutputPer1M: 75.00, CachedPer1M: 1.875, Currency: "USD"},
-		{Provider: "anthropic", Model: "claude-sonnet-4-6", InputPer1M: 3.00, OutputPer1M: 15.00, CachedPer1M: 0.375, Currency: "USD"},
-		{Provider: "anthropic", Model: "claude-haiku-4-5-20251001", InputPer1M: 0.80, OutputPer1M: 4.00, CachedPer1M: 0.08, Currency: "USD"},
-	}, sdkClient)
+	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	// Run server with graceful shutdown.
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", defaultPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(defaultPort, router)
 }
 
 func configOrDefault(m map[string]string, key, fallback string) string {

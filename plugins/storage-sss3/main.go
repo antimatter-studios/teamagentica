@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -56,7 +55,7 @@ func main() {
 	sdkClient.Start(ctx)
 
 	// Subscribe to config updates.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Received config:update (seq=%d)", event.Seq)
 	}))
 
@@ -67,7 +66,7 @@ func main() {
 	}
 
 	// Extract config values with defaults.
-	s3Bucket := configOrDefault(pluginConfig, "S3_BUCKET", "teamagentica")
+	s3Bucket := configOrDefault(pluginConfig, "S3_BUCKET", "storage")
 	s3AccessKey := configOrDefault(pluginConfig, "S3_ACCESS_KEY", "minioadmin")
 	s3SecretKey := configOrDefault(pluginConfig, "S3_SECRET_KEY", "minioadmin")
 	s3Region := configOrDefault(pluginConfig, "S3_REGION", "us-east-1")
@@ -112,8 +111,6 @@ func main() {
 
 	// Set up routes.
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	h = handlers.NewHandler(client, idx)
 
 	router.GET("/health", h.Health)
@@ -152,17 +149,13 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 func configOrDefault(m map[string]string, key, fallback string) string {

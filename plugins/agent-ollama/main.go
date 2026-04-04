@@ -4,9 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -83,8 +81,6 @@ func main() {
 
 	// Routes.
 	router.GET("/health", h.Health)
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 	router.POST("/chat", h.Chat)
 	router.POST("/chat/stream", h.ChatStream)
 	router.GET("/mcp", h.DiscoveredTools)
@@ -97,7 +93,7 @@ func main() {
 	router.GET("/usage/records", h.UsageRecords)
 
 	// Config updates in-place.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -109,9 +105,7 @@ func main() {
 	}))
 
 	// Pricing (Ollama is free, but track for consistency).
-	pricing := pluginsdk.NewPricingHandler([]pluginsdk.PricingEntry{
-		{Provider: "ollama", Model: "llama3.2:3b", InputPer1M: 0, OutputPer1M: 0, Currency: "USD"},
-	}, sdkClient)
+	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
@@ -121,11 +115,7 @@ func main() {
 
 	h.SetSDK(sdkClient)
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", defaultPort),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(defaultPort, router)
 }
 
 // parseModelList parses a JSON array of model names, falling back to defaults.

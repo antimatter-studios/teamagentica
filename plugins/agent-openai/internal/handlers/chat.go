@@ -67,7 +67,7 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 // emitEvent sends a debug event to the kernel console.
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
-		h.sdk.ReportEvent(eventType, detail)
+		h.sdk.PublishEvent(eventType, detail)
 	}
 }
 

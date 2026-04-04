@@ -34,3 +34,9 @@ config_schema:
     default: "false"
     help_text: "Log detailed request/response traffic to the debug console"
     order: 99
+default_pricing:
+  - provider: ollama
+    model: "llama3.2:3b"
+    input_per_1m: 0
+    output_per_1m: 0
+    currency: USD

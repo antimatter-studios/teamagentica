@@ -95,8 +95,8 @@ func main() {
 	}
 
 	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	endpoint := fmt.Sprintf("http://%s:%d/mcp", hostname, port)
 

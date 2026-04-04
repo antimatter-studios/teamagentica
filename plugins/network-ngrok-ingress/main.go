@@ -56,7 +56,7 @@ func main() {
 	// Auto-discover the webhook plugin via webhook:ready events.
 	// The webhook plugin broadcasts this with {host, port} on startup and
 	// whenever a new plugin registers.
-	sdkClient.OnEvent("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("webhook:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var data struct {
 			Host string `json:"host"`
 			Port int    `json:"port"`
@@ -91,13 +91,13 @@ func main() {
 
 	// Respond to ingress:request with ingress:ready so other plugins can
 	// discover the public URL on demand.
-	sdkClient.OnEvent("ingress:request", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("ingress:request", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("[ingress] received ingress:request — broadcasting ingress:ready")
 		broadcastIngressReady(sdkClient)
 	}))
 
 	// Hot-reload: listen for config:update events from kernel.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -138,8 +138,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /schema", sdkClient.SchemaHandler())
-	mux.HandleFunc("POST /events", sdkClient.EventHandler())
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		tunnelURLMu.RLock()
@@ -149,13 +147,7 @@ func main() {
 		fmt.Fprintf(w, `{"status":"ok","tunnel_url":%q}`, u)
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", httpPort),
-		Handler: mux,
-	}
-
-	log.Printf("ngrok ingress starting on :%d", httpPort)
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(httpPort, mux)
 
 	cfgMu.RLock()
 	mgr := activeMgr

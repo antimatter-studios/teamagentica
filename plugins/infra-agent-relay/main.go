@@ -534,7 +534,7 @@ func (r *relay) emitProgress(sourcePlugin, channelID, taskGroupID, status, messa
 	payload["message"] = message
 
 	data, _ := json.Marshal(payload)
-	r.sdk.ReportAddressedEvent(events.RelayProgress, string(data), sourcePlugin)
+	r.sdk.PublishEventTo(events.RelayProgress, string(data), sourcePlugin)
 }
 
 // handleChat is the single entry point for all messages from messaging plugins.
@@ -1368,7 +1368,7 @@ func main() {
 	}
 
 	// Patch a single alias on create/update/delete events.
-	sdkClient.OnEvent("alias-registry:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("alias-registry:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Action string `json:"action"`
 			Alias  struct {
@@ -1414,12 +1414,12 @@ func main() {
 	}))
 
 	// Refresh persona cache when the persona plugin signals a change.
-	sdkClient.OnEvent("persona:update", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("persona:update", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
 		r.refreshPersonas()
 	}))
 
 	// Re-fetch aliases when the registry signals it's ready (handles startup ordering).
-	sdkClient.OnEvent("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
 		refreshAliases()
 	}))
 
@@ -1476,7 +1476,7 @@ func main() {
 		log.Printf("Debug mode enabled")
 	}
 
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Config map[string]string `json:"config"`
 		}
@@ -1516,7 +1516,7 @@ func main() {
 
 	// Handle progress updates from async plugins (e.g. seedance webhook callbacks).
 	// Forward to the source messaging plugin and resolve any waiting async tasks.
-	sdkClient.OnEvent("relay:task:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("relay:task:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var update struct {
 			TaskID      string `json:"task_id"`
 			Status      string `json:"status"`
@@ -1591,15 +1591,11 @@ func main() {
 			"status":        forwardStatus,
 			"message":       forwardMessage,
 		})
-		sdkClient.ReportAddressedEvent(events.RelayProgress, string(payload), sourcePlugin)
+		sdkClient.Events().PublishTo(events.RelayProgress, string(payload), sourcePlugin)
 		log.Printf("relay: forwarded progress to %s channel=%s group=%s", sourcePlugin, channelID, taskGroupID)
 	}))
 
 	ginRouter := gin.Default()
-
-	// SDK helper handlers.
-	ginRouter.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	ginRouter.POST("/events", gin.WrapF(sdkClient.EventHandler()))
 
 	ginRouter.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -1647,23 +1643,18 @@ func main() {
 	})
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, r.toolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
-
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", defaultPort),
-		Handler: ginRouter,
-	}
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		events.PublishRelayReady(sdkClient)
 	}()
 
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(defaultPort, ginRouter)
 }
 
 func getHostname() string {

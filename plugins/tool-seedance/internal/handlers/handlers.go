@@ -324,7 +324,7 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
-		h.sdk.ReportEvent(eventType, detail)
+		h.sdk.PublishEvent(eventType, detail)
 	}
 }
 
@@ -790,7 +790,7 @@ func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
 		{
 			"name":        "generate_video",
-			"description": "Generate a video from a text prompt using Seedance API",
+			"description": "Generate a video from a text prompt using Seedance. Async — returns a task_id; you must call check_video_status to poll for the result.",
 			"endpoint":    "/generate",
 			"parameters": gin.H{
 				"type": "object",
@@ -807,7 +807,7 @@ func (h *Handler) ToolDefs() interface{} {
 		},
 		{
 			"name":        "check_video_status",
-			"description": "Check the status of a video generation task and get the video URL when complete",
+			"description": "Poll a Seedance video generation task. Returns status and video URL when complete. Must be called after generate_video — Seedance is async.",
 			"endpoint":    "/status/:taskId",
 			"parameters": gin.H{
 				"type": "object",

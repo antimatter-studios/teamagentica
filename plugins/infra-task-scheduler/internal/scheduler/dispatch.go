@@ -99,19 +99,9 @@ func (s *Scheduler) initDispatch() {
 		log.Printf("[dispatch] recovered %d stale dispatched entries back to pending", n)
 	}
 
-	// Subscribe to task-tracking:assign
-	if err := s.sdk.OnEvent("task-tracking:assign", pluginsdk.NewNullDebouncer(s.handleAssignEvent)); err != nil {
-		log.Printf("[dispatch] failed to subscribe to task-tracking:assign: %v", err)
-	} else {
-		log.Println("[dispatch] subscribed to task-tracking:assign")
-	}
-
-	// Subscribe to task-tracking:comment
-	if err := s.sdk.OnEvent("task-tracking:comment", pluginsdk.NewNullDebouncer(s.handleCommentEvent)); err != nil {
-		log.Printf("[dispatch] failed to subscribe to task-tracking:comment: %v", err)
-	} else {
-		log.Println("[dispatch] subscribed to task-tracking:comment")
-	}
+	// Register event handlers for task tracking events.
+	s.sdk.OnEvent("task-tracking:assign", pluginsdk.NewNullDebouncer(s.handleAssignEvent))
+	s.sdk.OnEvent("task-tracking:comment", pluginsdk.NewNullDebouncer(s.handleCommentEvent))
 }
 
 // handleAssignEvent creates a triage dispatch when a task is assigned to an agent.
@@ -430,7 +420,7 @@ func (s *Scheduler) runExecutionLoop(ctx context.Context, entry *storage.Dispatc
 
 		if testAction.Action == "done" {
 			s.moveCard(ctx, entry.CardID, card.BoardID, "Done")
-			s.sdk.ReportEvent(events.DispatchCompleted, card.Title)
+			s.sdk.PublishEvent(events.DispatchCompleted, card.Title)
 			return
 		}
 

@@ -82,7 +82,7 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
-		h.sdk.ReportEvent(eventType, detail)
+		h.sdk.PublishEvent(eventType, detail)
 	}
 }
 
@@ -365,7 +365,7 @@ func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
 		{
 			"name":        "generate_video",
-			"description": "Generate a video from a text prompt using Google Gemini Veo",
+			"description": "Generate a video from a text prompt using Google Veo. Returns the video synchronously. Use for short, prompt-based video generation.",
 			"endpoint":    "/generate",
 			"parameters": gin.H{
 				"type": "object",
