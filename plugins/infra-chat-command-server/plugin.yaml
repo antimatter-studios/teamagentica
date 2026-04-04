@@ -1,0 +1,16 @@
+id: infra-chat-command-server
+name: "Chat Command Server"
+description: "Aggregates chat commands from all plugins and routes invocations to the owning plugin"
+group: infrastructure
+version: "1.0.1"
+image: "teamagentica-infra-chat-command-server:latest"
+author: teamagentica
+tags: [infrastructure, chat-commands, routing]
+capabilities: ["chat:commands"]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic"
+    order: 99
