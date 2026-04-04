@@ -17,35 +17,35 @@ type ManagedContainerInfo struct {
 	Status        string `json:"status"`
 	Port          int    `json:"port"`
 	Subdomain     string `json:"subdomain"`
-	VolumeName    string `json:"volume_name"`
+	DiskName    string `json:"disk_name"`
 }
 
 // ExtraMount describes an additional bind mount for a managed container.
 type ExtraMount struct {
-	VolumeName string `json:"volume_name"`        // volume dir name (same convention as primary VolumeName)
-	Target     string `json:"target"`              // mount path inside the container
-	ReadOnly   bool   `json:"read_only,omitempty"` // mount as read-only
+	DiskName string `json:"disk_name"`           // disk dir name (same convention as primary DiskName)
+	Target   string `json:"target"`              // mount path inside the container
+	ReadOnly bool   `json:"read_only,omitempty"` // mount as read-only
 }
 
 // CreateManagedContainerRequest is the body for creating a managed container.
 type CreateManagedContainerRequest struct {
-	Name          string            `json:"name"`
-	Image         string            `json:"image"`
-	Port          int               `json:"port"`
-	Subdomain     string            `json:"subdomain"`
-	VolumeName  string       `json:"volume_name,omitempty"`
-	ExtraMounts []ExtraMount `json:"extra_mounts,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	Cmd           []string          `json:"cmd,omitempty"`
-	DockerUser    string            `json:"docker_user,omitempty"`
-	PluginSource  string            `json:"plugin_source,omitempty"` // plugin name whose source to bind-mount for dev editing
+	Name        string            `json:"name"`
+	Image       string            `json:"image"`
+	Port        int               `json:"port"`
+	Subdomain   string            `json:"subdomain"`
+	DiskName    string            `json:"disk_name,omitempty"`
+	ExtraMounts []ExtraMount      `json:"extra_mounts,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Cmd         []string          `json:"cmd,omitempty"`
+	DockerUser  string            `json:"docker_user,omitempty"`
+	PluginSource string           `json:"plugin_source,omitempty"` // plugin name whose source to bind-mount for dev editing
 }
 
 // UpdateManagedContainerRequest is the body for patching a managed container.
 type UpdateManagedContainerRequest struct {
-	Name       *string `json:"name,omitempty"`
-	Subdomain  *string `json:"subdomain,omitempty"`
-	VolumeName *string `json:"volume_name,omitempty"`
+	Name     *string `json:"name,omitempty"`
+	Subdomain *string `json:"subdomain,omitempty"`
+	DiskName *string `json:"disk_name,omitempty"`
 }
 
 // CreateManagedContainer asks the kernel to launch a managed container.

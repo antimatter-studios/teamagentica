@@ -33,7 +33,7 @@ func (h *Handler) ToolDefs() interface{} {
 					"environment_id": gin.H{"type": "string", "description": "Environment plugin ID (get from list_environments)"},
 					"git_repo":       gin.H{"type": "string", "description": "Git repository URL to clone into the workspace"},
 					"git_ref":        gin.H{"type": "string", "description": "Git branch or tag to checkout after cloning"},
-					"volume_name":    gin.H{"type": "string", "description": "Reuse an existing volume instead of creating a new one"},
+					"disk_name":      gin.H{"type": "string", "description": "Reuse an existing disk instead of creating a new one"},
 					"plugin_source":  gin.H{"type": "string", "description": "Plugin name whose source to bind-mount into the workspace for dev editing (e.g. 'messaging-discord')"},
 				},
 				"required": []string{"name", "environment_id"},
@@ -59,7 +59,7 @@ func (h *Handler) ToolDefs() interface{} {
 		},
 		{
 			"name":        "rename_workspace",
-			"description": "Rename an existing workspace. Updates the display name and volume directory slug. Use list_workspaces first to find the workspace ID.",
+			"description": "Rename an existing workspace. Updates the display name and disk directory slug. Use list_workspaces first to find the workspace ID.",
 			"endpoint":    "/mcp/rename_workspace",
 			"parameters": gin.H{
 				"type": "object",
@@ -72,7 +72,7 @@ func (h *Handler) ToolDefs() interface{} {
 		},
 		{
 			"name":        "stop_workspace",
-			"description": "Stop a running workspace container. The workspace record and volume are preserved — use start_workspace to re-launch it later.",
+			"description": "Stop a running workspace container. The workspace record and disk are preserved — use start_workspace to re-launch it later.",
 			"endpoint":    "/mcp/stop_workspace",
 			"parameters": gin.H{
 				"type": "object",
@@ -84,7 +84,7 @@ func (h *Handler) ToolDefs() interface{} {
 		},
 		{
 			"name":        "delete_workspace",
-			"description": "Permanently delete a workspace record. Stops the container if running. The volume (disk data) is NOT deleted — use volume management to remove it separately.",
+			"description": "Permanently delete a workspace record. Stops the container if running. The disk data is NOT deleted — use storage-disk to remove it separately.",
 			"endpoint":    "/mcp/delete_workspace",
 			"parameters": gin.H{
 				"type": "object",
@@ -96,17 +96,17 @@ func (h *Handler) ToolDefs() interface{} {
 		},
 		{
 			"name":        "build_plugin",
-			"description": "Build a Docker image for a plugin from source in a storage volume. Requires the infra-builder plugin to be installed. Returns build status and image tag.",
+			"description": "Build a Docker image for a plugin from source in a storage disk. Requires the infra-builder plugin to be installed. Returns build status and image tag.",
 			"endpoint":    "/mcp/build_plugin",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"volume":     gin.H{"type": "string", "description": "Storage volume name containing the plugin source code"},
-					"dockerfile": gin.H{"type": "string", "description": "Path to Dockerfile relative to volume root (default: 'Dockerfile')"},
+					"disk":       gin.H{"type": "string", "description": "Storage disk name containing the plugin source code"},
+					"dockerfile": gin.H{"type": "string", "description": "Path to Dockerfile relative to disk root (default: 'Dockerfile')"},
 					"image":      gin.H{"type": "string", "description": "Image name (e.g. 'teamagentica-messaging-discord')"},
 					"tag":        gin.H{"type": "string", "description": "Image tag (default: timestamp-based)"},
 				},
-				"required": []string{"volume", "image"},
+				"required": []string{"disk", "image"},
 			},
 		},
 		{
@@ -210,7 +210,7 @@ func (h *Handler) ToolStartWorkspace(c *gin.Context) {
 		Name:       mc.Name,
 		Status:     mc.Status,
 		Subdomain:  mc.Subdomain,
-		VolumeName: mc.VolumeName,
+		DiskName: mc.DiskName,
 	}
 	if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
 		result.Environment = rec.EnvironmentID
@@ -317,33 +317,33 @@ func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 		return
 	}
 
-	wsPrefix := extractVolumePrefix(found.VolumeName)
-	newVolumeName := wsPrefix + newSlug
+	wsPrefix := extractDiskPrefix(found.DiskName)
+	newDiskName := wsPrefix + newSlug
 
-	if newVolumeName != found.VolumeName {
-		oldPath := h.diskPath(found.VolumeName)
-		newPath := h.diskPath(newVolumeName)
+	if newDiskName != found.DiskName {
+		oldPath := h.diskPath(found.DiskName)
+		newPath := h.diskPath(newDiskName)
 
 		if _, err := os.Stat(newPath); err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "a volume with that name already exists"})
+			c.JSON(http.StatusConflict, gin.H{"error": "a disk with that name already exists"})
 			return
 		}
 
 		if _, err := os.Stat(oldPath); err == nil {
 			if err := os.Rename(oldPath, newPath); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename volume: " + err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename disk: " + err.Error()})
 				return
 			}
 		}
 
 		_, err = h.sdk.UpdateManagedContainer(req.WorkspaceID, pluginsdk.UpdateManagedContainerRequest{
 			Name:       &newDisplayName,
-			VolumeName: &newVolumeName,
+			DiskName: &newDiskName,
 		})
 		if err != nil {
 			os.Rename(
-				h.diskPath(newVolumeName),
-				h.diskPath(found.VolumeName),
+				h.diskPath(newDiskName),
+				h.diskPath(found.DiskName),
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace: " + err.Error()})
 			return
@@ -371,7 +371,7 @@ func (h *Handler) ToolBuildPlugin(c *gin.Context) {
 	}
 
 	var req struct {
-		Volume     string `json:"volume" binding:"required"`
+		Disk       string `json:"disk" binding:"required"`
 		Dockerfile string `json:"dockerfile"`
 		Image      string `json:"image" binding:"required"`
 		Tag        string `json:"tag"`
@@ -389,8 +389,8 @@ func (h *Handler) ToolBuildPlugin(c *gin.Context) {
 	}
 
 	// Forward build request to infra-builder.
-	payload := fmt.Sprintf(`{"volume":%q,"dockerfile":%q,"image":%q,"tag":%q}`,
-		req.Volume, req.Dockerfile, req.Image, req.Tag)
+	payload := fmt.Sprintf(`{"disk":%q,"dockerfile":%q,"image":%q,"tag":%q}`,
+		req.Disk, req.Dockerfile, req.Image, req.Tag)
 
 	resp, err := h.sdk.RouteToPlugin(context.Background(), builders[0].ID, http.MethodPost, "/build", bytes.NewReader([]byte(payload)))
 	if err != nil {

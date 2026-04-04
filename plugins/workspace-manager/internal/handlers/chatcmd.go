@@ -132,9 +132,9 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 		return
 	}
 
-	volumeName := fmt.Sprintf("ws-%s-%s", wsID, wsKey)
-	if err := os.MkdirAll(h.diskPath(volumeName), 0755); err != nil {
-		chatError(c, "Failed to create workspace volume.")
+	diskName := fmt.Sprintf("ws-%s-%s", wsID, wsKey)
+	if err := os.MkdirAll(h.diskPath(diskName), 0755); err != nil {
+		chatError(c, "Failed to create workspace disk.")
 		return
 	}
 
@@ -152,7 +152,7 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 		Image:       ws.Image,
 		Port:        ws.Port,
 		Subdomain:   "ws-" + wsID,
-		VolumeName:  volumeName,
+		DiskName:  diskName,
 		ExtraMounts: ws.SharedMounts,
 		Env:         env,
 		Cmd:         cmd,
@@ -240,32 +240,32 @@ func (h *Handler) ChatCommandWorkspaceRename(c *gin.Context) {
 		return
 	}
 
-	wsPrefix := extractVolumePrefix(matched.VolumeName)
-	newVolumeName := wsPrefix + newSlug
+	wsPrefix := extractDiskPrefix(matched.DiskName)
+	newDiskName := wsPrefix + newSlug
 
-	if newVolumeName != matched.VolumeName {
-		oldPath := h.diskPath(matched.VolumeName)
-		newPath := h.diskPath(newVolumeName)
+	if newDiskName != matched.DiskName {
+		oldPath := h.diskPath(matched.DiskName)
+		newPath := h.diskPath(newDiskName)
 		if _, err := os.Stat(newPath); err == nil {
-			chatError(c, "A volume with that name already exists.")
+			chatError(c, "A disk with that name already exists.")
 			return
 		}
 		if _, err := os.Stat(oldPath); err == nil {
 			if err := os.Rename(oldPath, newPath); err != nil {
-				chatError(c, "Failed to rename volume: "+err.Error())
+				chatError(c, "Failed to rename disk: "+err.Error())
 				return
 			}
 		}
 	}
 
-	if newVolumeName != matched.VolumeName {
+	if newDiskName != matched.DiskName {
 		if _, err := h.sdk.UpdateManagedContainer(matched.ID, pluginsdk.UpdateManagedContainerRequest{
 			Name:       &newName,
-			VolumeName: &newVolumeName,
+			DiskName: &newDiskName,
 		}); err != nil {
 			os.Rename(
-				h.diskPath(newVolumeName),
-				h.diskPath(matched.VolumeName),
+				h.diskPath(newDiskName),
+				h.diskPath(matched.DiskName),
 			)
 			chatError(c, "Failed to update workspace: "+err.Error())
 			return

@@ -37,7 +37,7 @@ func slugify(name string) string {
 	return s
 }
 
-// isValidWorkspaceID is an alias kept for volume name validation.
+// isValidWorkspaceID is an alias kept for disk name validation.
 func isValidWorkspaceID(id string) bool {
 	return isValidWorkspaceKey(id)
 }

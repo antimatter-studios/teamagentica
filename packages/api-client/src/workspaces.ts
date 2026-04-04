@@ -18,7 +18,22 @@ export interface Workspace {
   status: string;
   subdomain: string;
   url: string;
-  volume_name: string;
+  disk_name: string;
+}
+
+export interface Disk {
+  id: string;
+  name: string;
+  type: string;
+  labels: Record<string, string>;
+  created_at: string;
+  size_bytes: number;
+  path: string;
+  has_workspace?: boolean;
+  is_empty?: boolean;
+  git_remote?: string;
+  tags?: string[];
+  extensions?: string[];
 }
 
 export class WorkspacesAPI {
@@ -43,7 +58,7 @@ export class WorkspacesAPI {
     name: string;
     environment_id: string;
     git_repo?: string;
-    volume_name?: string;
+    disk_name?: string;
   }): Promise<void> {
     return this.http.post(`${ROUTE}/workspaces`, data);
   }
@@ -62,6 +77,20 @@ export class WorkspacesAPI {
 
   async stopWorkspace(id: string): Promise<void> {
     return this.http.post(`${ROUTE}/workspaces/${id}/stop`, {});
+  }
+
+  async listDisks(type?: string): Promise<Disk[]> {
+    const q = type ? `?type=${encodeURIComponent(type)}` : "";
+    const res = await this.http.get<{ disks: Disk[] }>(
+      `/api/route/storage-disk/disks${q}`
+    );
+    return res.disks || [];
+  }
+
+  async deleteDisk(type: string, name: string): Promise<void> {
+    return this.http.delete(
+      `/api/route/storage-disk/disks/${encodeURIComponent(type)}/${encodeURIComponent(name)}`
+    );
   }
 
   iframeSrc(workspaceId: string): string {

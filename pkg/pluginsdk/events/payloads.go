@@ -122,9 +122,9 @@ type WorkspaceEnvironmentRegisterPayload struct {
 	EnvDefaults  map[string]string      `json:"env_defaults,omitempty"`
 }
 
-// WorkspaceExtraMount describes an additional volume mount for a workspace environment.
+// WorkspaceExtraMount describes an additional disk mount for a workspace environment.
 type WorkspaceExtraMount struct {
-	VolumeName string `json:"volume_name"`
-	Target     string `json:"target"`
-	ReadOnly   bool   `json:"read_only,omitempty"`
+	DiskName string `json:"disk_name"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only,omitempty"`
 }

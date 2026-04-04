@@ -113,7 +113,7 @@ type workspaceInfo struct {
 	Status          string `json:"status"`
 	Subdomain       string `json:"subdomain"`
 	URL             string `json:"url,omitempty"`
-	VolumeName      string `json:"volume_name"`
+	DiskName      string `json:"disk_name"`
 }
 
 // ListWorkspaces returns all managed containers owned by this plugin.
@@ -140,7 +140,7 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 			Name:       mc.Name,
 			Status:     mc.Status,
 			Subdomain:  mc.Subdomain,
-			VolumeName: mc.VolumeName,
+			DiskName: mc.DiskName,
 		}
 		// Enrich with workspace-manager-level data from local DB.
 		if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
@@ -174,7 +174,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	var req struct {
 		Name          string `json:"name" binding:"required"`
 		EnvironmentID string `json:"environment_id" binding:"required"`
-		VolumeName    string `json:"volume_name,omitempty"`    // reuse existing volume
+		DiskName    string `json:"disk_name,omitempty"`      // reuse existing disk
 		GitRepo       string `json:"git_repo,omitempty"`
 		GitRef        string `json:"git_ref,omitempty"`
 		PluginSource  string `json:"plugin_source,omitempty"` // plugin name whose source to bind-mount for dev editing
@@ -202,7 +202,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Generate an 8-char random ID for subdomain (permanent) and volume prefix.
+	// Generate an 8-char random ID for subdomain (permanent) and disk prefix.
 	// Check for collisions against existing workspaces.
 	var wsID string
 	existingContainers, _ := h.sdk.ListManagedContainers()
@@ -226,50 +226,50 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Reuse existing volume or create a new one.
-	var volumeName string
-	var volumeExisted bool
-	if req.VolumeName != "" {
-		volumeName = req.VolumeName
-		volumePath := h.diskPath(volumeName)
-		if info, err := os.Stat(volumePath); err == nil && info.IsDir() {
-			volumeExisted = true
+	// Reuse existing disk dir or create a new one.
+	var diskName string
+	var diskExisted bool
+	if req.DiskName != "" {
+		diskName = req.DiskName
+		dskPath := h.diskPath(diskName)
+		if info, err := os.Stat(dskPath); err == nil && info.IsDir() {
+			diskExisted = true
 		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "volume not found: " + req.VolumeName})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "disk not found: " + req.DiskName})
 			return
 		}
 	} else {
-		volumeName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
-		volumeExisted = false
+		diskName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
+		diskExisted = false
 	}
-	volumePath := h.diskPath(volumeName)
-	if !volumeExisted {
-		if err := os.MkdirAll(volumePath, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create volume: " + err.Error()})
+	dskPath := h.diskPath(diskName)
+	if !diskExisted {
+		if err := os.MkdirAll(dskPath, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create disk: " + err.Error()})
 			return
 		}
 	}
 
-	// Git clone into volume if requested (skip if reusing existing volume).
-	if req.GitRepo != "" && !volumeExisted {
+	// Git clone into disk if requested (skip if reusing existing disk).
+	if req.GitRepo != "" && !diskExisted {
 		cmd := exec.CommandContext(c.Request.Context(), "git", "clone", req.GitRepo, ".")
-		cmd.Dir = volumePath
+		cmd.Dir = dskPath
 		if out, err := cmd.CombinedOutput(); err != nil {
-			os.RemoveAll(volumePath)
+			os.RemoveAll(dskPath)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "git clone failed: " + string(out)})
 			return
 		}
 		if req.GitRef != "" {
 			checkout := exec.CommandContext(c.Request.Context(), "git", "checkout", req.GitRef)
-			checkout.Dir = volumePath
+			checkout.Dir = dskPath
 			checkout.CombinedOutput()
 		}
 	}
 
-	// Ensure shared mount directories exist on the host volume.
+	// Ensure shared mount directories exist on the host disk.
 	for _, sm := range ws.SharedMounts {
-		if sm.VolumeName != "" {
-			os.MkdirAll(h.diskPath(sm.VolumeName), 0755)
+		if sm.DiskName != "" {
+			os.MkdirAll(h.diskPath(sm.DiskName), 0755)
 		}
 	}
 
@@ -278,7 +278,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		switch script {
 		case "code-server-navigator":
 			// Provision Machine settings per-workspace for navigator support.
-			csSettingsDir := filepath.Join(volumePath, ".code-server", "code-server", "Machine")
+			csSettingsDir := filepath.Join(dskPath, ".code-server", "code-server", "Machine")
 			if err := os.MkdirAll(csSettingsDir, 0755); err == nil {
 				_ = os.WriteFile(filepath.Join(csSettingsDir, "settings.json"),
 					[]byte(`{"extensions.supportNodeGlobalNavigator":true}`+"\n"), 0644)
@@ -306,7 +306,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		Image:        ws.Image,
 		Port:         ws.Port,
 		Subdomain:    subdomain,
-		VolumeName:   volumeName,
+		DiskName:   diskName,
 		ExtraMounts:  ws.SharedMounts,
 		Env:          env,
 		Cmd:          cmd,
@@ -331,7 +331,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		Name:       mc.Name,
 		Status:     mc.Status,
 		Subdomain:  mc.Subdomain,
-		VolumeName: mc.VolumeName,
+		DiskName: mc.DiskName,
 	}
 	if mc.Subdomain != "" && h.baseDomain != "" {
 		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -361,7 +361,7 @@ func (h *Handler) GetWorkspace(c *gin.Context) {
 				Name:       mc.Name,
 				Status:     mc.Status,
 				Subdomain:  mc.Subdomain,
-				VolumeName: mc.VolumeName,
+				DiskName: mc.DiskName,
 			}
 			if mc.Subdomain != "" && h.baseDomain != "" {
 				ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -374,7 +374,7 @@ func (h *Handler) GetWorkspace(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
 }
 
-// RenameWorkspace updates display name and volume directory slug.
+// RenameWorkspace updates display name and disk directory slug.
 // Subdomain is permanent (based on random ID) — never changes.
 func (h *Handler) RenameWorkspace(c *gin.Context) {
 	if h.sdk == nil {
@@ -403,7 +403,7 @@ func (h *Handler) RenameWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Find the workspace to get current volume name.
+	// Find the workspace to get current disk name.
 	containers, err := h.sdk.ListManagedContainers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
@@ -422,38 +422,38 @@ func (h *Handler) RenameWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Extract the random ID prefix from the current volume name (ws-{id}-{slug}).
-	// Volume format: "ws-{6hex}-{slug}"
-	wsPrefix := extractVolumePrefix(found.VolumeName)
-	newVolumeName := wsPrefix + newSlug
+	// Extract the random ID prefix from the current disk name (ws-{id}-{slug}).
+	// Disk name format: "ws-{6hex}-{slug}"
+	wsPrefix := extractDiskPrefix(found.DiskName)
+	newDiskName := wsPrefix + newSlug
 
-	// Only rename volume dir if the slug actually changed.
-	if newVolumeName != found.VolumeName {
-		oldPath := h.diskPath(found.VolumeName)
-		newPath := h.diskPath(newVolumeName)
+	// Only rename disk dir if the slug actually changed.
+	if newDiskName != found.DiskName {
+		oldPath := h.diskPath(found.DiskName)
+		newPath := h.diskPath(newDiskName)
 
-		// Check no volume with new name exists.
+		// Check no disk with new name exists.
 		if _, err := os.Stat(newPath); err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "a volume with that name already exists"})
+			c.JSON(http.StatusConflict, gin.H{"error": "a disk with that name already exists"})
 			return
 		}
 
 		if _, err := os.Stat(oldPath); err == nil {
 			if err := os.Rename(oldPath, newPath); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename volume: " + err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename disk: " + err.Error()})
 				return
 			}
 		}
 
 		_, err = h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
 			Name:       &newDisplayName,
-			VolumeName: &newVolumeName,
+			DiskName: &newDiskName,
 		})
 		if err != nil {
-			// Rollback volume rename.
+			// Rollback disk rename.
 			os.Rename(
-				h.diskPath(newVolumeName),
-				h.diskPath(found.VolumeName),
+				h.diskPath(newDiskName),
+				h.diskPath(found.DiskName),
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace: " + err.Error()})
 			return
@@ -473,18 +473,18 @@ func (h *Handler) RenameWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "renamed"})
 }
 
-// extractVolumePrefix returns the "ws-{id}-" prefix from a volume name like "ws-a1b2c3d4-my-project".
+// extractDiskPrefix returns the "ws-{id}-" prefix from a disk name like "ws-a1b2c3d4-my-project".
 // Falls back to returning the full name + "-" if format doesn't match.
-func extractVolumePrefix(volumeName string) string {
+func extractDiskPrefix(diskName string) string {
 	// Expected format: ws-{8hex}-{slug}
-	if strings.HasPrefix(volumeName, "ws-") && len(volumeName) > 12 {
+	if strings.HasPrefix(diskName, "ws-") && len(diskName) > 12 {
 		// "ws-" (3) + 8 hex chars + "-" = index 12
-		if volumeName[11] == '-' {
-			return volumeName[:12] // "ws-a1b2c3d4-"
+		if diskName[11] == '-' {
+			return diskName[:12] // "ws-a1b2c3d4-"
 		}
 	}
 	// Legacy format without random ID — use whole name as prefix.
-	return volumeName + "-"
+	return diskName + "-"
 }
 
 // StartWorkspace re-launches a stopped workspace container.
@@ -509,7 +509,7 @@ func (h *Handler) StartWorkspace(c *gin.Context) {
 		Name:       mc.Name,
 		Status:     mc.Status,
 		Subdomain:  mc.Subdomain,
-		VolumeName: mc.VolumeName,
+		DiskName: mc.DiskName,
 	}
 	if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
 		result.Environment = rec.EnvironmentID
@@ -522,7 +522,7 @@ func (h *Handler) StartWorkspace(c *gin.Context) {
 }
 
 // DeleteWorkspace stops the container and removes the workspace record.
-// The volume (disk data) is never deleted — use storage-disk for disk management.
+// The disk data is never deleted — use storage-disk for disk management.
 func (h *Handler) DeleteWorkspace(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -541,31 +541,31 @@ func (h *Handler) DeleteWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
 }
 
-// --- Git persistence (operates on the volume directly) ---
+// --- Git persistence (operates on the disk directly) ---
 
 func (h *Handler) PersistWorkspace(c *gin.Context) {
 	id := c.Param("id")
 
-	// Find the workspace to get volume name.
+	// Find the workspace to get disk name.
 	containers, err := h.sdk.ListManagedContainers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
 		return
 	}
 
-	var volumeName string
+	var diskName string
 	for _, mc := range containers {
 		if mc.ID == id {
-			volumeName = mc.VolumeName
+			diskName = mc.DiskName
 			break
 		}
 	}
-	if volumeName == "" {
+	if diskName == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
 		return
 	}
 
-	wsPath := h.diskPath(volumeName)
+	wsPath := h.diskPath(diskName)
 	if _, err := os.Stat(filepath.Join(wsPath, ".git")); os.IsNotExist(err) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace is not a git repository"})
 		return

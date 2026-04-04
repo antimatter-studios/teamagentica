@@ -18,7 +18,7 @@ type Config struct {
 	DataMount           DataMountConfig     `yaml:"data_mount"`
 	StorageCrossMount   MountSpec           `yaml:"storage_cross_mount"`
 	PluginMounts        []MountSpec         `yaml:"plugin_mounts"`
-	ManagedVolumeMount  MountSpec           `yaml:"managed_volume_mount"`
+	ManagedDiskMount    MountSpec           `yaml:"managed_disk_mount"`
 	ManagedExtraMount   MountSpec           `yaml:"managed_extra_mount"`
 	ManagedPluginSource ManagedSourceConfig `yaml:"managed_plugin_source"`
 }

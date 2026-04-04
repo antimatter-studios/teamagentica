@@ -6,7 +6,7 @@ A modular automation control platform with plugin-based AI agents, messaging int
 
 - **Multi-Agent AI** — Connect Claude, GPT, Gemini, Kimi, and custom models as chat agents with configurable routing via @aliases
 - **Messaging Integrations** — Telegram, Discord, WhatsApp bots with message buffering and coordinator delegation
-- **Cloud Workspaces** — Browser-based VS Code environments with persistent volumes, project detection, and multi-tab management
+- **Cloud Workspaces** — Browser-based VS Code environments with persistent disks, project detection, and multi-tab management
 - **Plugin Marketplace** — Browse, install, and configure plugins from a catalog
 - **Tool Plugins** — Image generation (Stability AI, Seedance, NanoBanana), video generation (Veo)
 - **Cost Tracking** — Per-model usage analytics with time-windowed pricing

@@ -28,7 +28,7 @@ type createManagedContainerRequest struct {
 	Image         string              `json:"image" binding:"required"`
 	Port          int                 `json:"port" binding:"required"`
 	Subdomain     string              `json:"subdomain" binding:"required"`
-	VolumeName  string              `json:"volume_name"`
+	DiskName    string              `json:"disk_name"`
 	ExtraMounts []models.ExtraMount `json:"extra_mounts"`
 	Env           map[string]string   `json:"env"`
 	Cmd           []string            `json:"cmd"`
@@ -106,7 +106,7 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 		Image:         req.Image,
 		Port:          req.Port,
 		Subdomain:     req.Subdomain,
-		VolumeName:    req.VolumeName,
+		DiskName:      req.DiskName,
 		DockerUser:    req.DockerUser,
 		PluginSource:  req.PluginSource,
 	}
@@ -225,7 +225,7 @@ func (h *PluginHandler) DeleteManagedContainer(c *gin.Context) {
 }
 
 // UpdateManagedContainer handles PATCH /api/plugins/containers/:id.
-// Allows renaming (name, subdomain, volume_name) without stopping the container.
+// Allows renaming (name, subdomain, disk_name) without stopping the container.
 func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	pluginID, ok := extractPluginID(c)
 	if !ok {
@@ -241,7 +241,7 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	var req struct {
 		Name       *string `json:"name"`
 		Subdomain  *string `json:"subdomain"`
-		VolumeName *string `json:"volume_name"`
+		DiskName *string `json:"disk_name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -264,8 +264,8 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 		updates["subdomain"] = *req.Subdomain
 	}
 
-	if req.VolumeName != nil {
-		updates["volume_name"] = *req.VolumeName
+	if req.DiskName != nil {
+		updates["disk_name"] = *req.DiskName
 	}
 
 	if len(updates) == 0 {

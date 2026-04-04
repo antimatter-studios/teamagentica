@@ -94,7 +94,7 @@ export { AliasesAPI } from "./aliases.js";
 
 export { EventsAPI } from "./events.js";
 
-export type { Environment, Workspace } from "./workspaces.js";
+export type { Environment, Workspace, Disk } from "./workspaces.js";
 export { WorkspacesAPI } from "./workspaces.js";
 
 export type {

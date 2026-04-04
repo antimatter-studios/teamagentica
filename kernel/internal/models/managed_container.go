@@ -7,12 +7,12 @@ import (
 
 // ExtraMount describes an additional bind mount for a managed container.
 type ExtraMount struct {
-	// VolumeName is a path relative to the storage-disk volumes dir (same
-	// convention as the primary VolumeName). In dev mode it resolves to a host
+	// DiskName is a path relative to the storage-disk disks dir (same
+	// convention as the primary DiskName). In dev mode it resolves to a host
 	// bind mount; in prod it maps to a named-volume subpath.
-	VolumeName string `json:"volume_name"`
-	Target     string `json:"target"` // mount path inside the container
-	ReadOnly   bool   `json:"read_only,omitempty"`
+	DiskName string `json:"disk_name"`
+	Target   string `json:"target"` // mount path inside the container
+	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
 // ManagedContainer represents a container launched by a plugin and tracked
@@ -27,7 +27,7 @@ type ManagedContainer struct {
 	Status        string    `json:"status" gorm:"not null;default:'stopped'"`
 	Port          int       `json:"port" gorm:"not null"`
 	Subdomain     string    `json:"subdomain" gorm:"uniqueIndex"`
-	VolumeName    string    `json:"volume_name"`
+	DiskName      string    `json:"disk_name"`
 	ExtraMounts   string    `json:"-" gorm:"type:text"` // JSON array of ExtraMount
 	Env           string    `json:"-" gorm:"type:text"`
 	Cmd           string    `json:"-" gorm:"type:text"` // JSON array of command args

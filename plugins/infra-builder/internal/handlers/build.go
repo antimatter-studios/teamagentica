@@ -19,13 +19,13 @@ import (
 )
 
 type buildRequest struct {
-	Volume     string `json:"volume" binding:"required"`
+	Disk       string `json:"disk" binding:"required"`
 	Dockerfile string `json:"dockerfile"`
 	Image      string `json:"image" binding:"required"`
 	Tag        string `json:"tag"`
 }
 
-// Build handles POST /build — builds a Docker image from a volume's source.
+// Build handles POST /build — builds a Docker image from a disk's source.
 // Streams NDJSON: {"stream":"..."} lines + final {"result":{...}} or {"error":"..."}.
 func (h *Handler) Build(c *gin.Context) {
 	var req buildRequest
@@ -57,14 +57,14 @@ func (h *Handler) Build(c *gin.Context) {
 
 	imageTag := req.Image + ":" + req.Tag
 
-	// Resolve volume path — volumes are at /workspaces/volumes/{name}.
-	volumePath := filepath.Join("/workspaces", "volumes", req.Volume)
-	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "volume not found: " + req.Volume})
+	// Resolve disk path — disks are at /workspaces/disks/{name}.
+	diskPath := filepath.Join("/workspaces", "disks", req.Disk)
+	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "disk not found: " + req.Disk})
 		return
 	}
 
-	dockerfilePath := filepath.Join(volumePath, req.Dockerfile)
+	dockerfilePath := filepath.Join(diskPath, req.Dockerfile)
 	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Dockerfile not found: " + req.Dockerfile})
 		return
@@ -75,7 +75,7 @@ func (h *Handler) Build(c *gin.Context) {
 		ID:         buildID,
 		Image:      req.Image,
 		Tag:        req.Tag,
-		Volume:     req.Volume,
+		Disk:       req.Disk,
 		Dockerfile: req.Dockerfile,
 		Status:     "building",
 		StartedAt:  time.Now().Format(time.RFC3339),
@@ -94,7 +94,7 @@ func (h *Handler) Build(c *gin.Context) {
 	defer cli.Close()
 
 	// Create tar archive of the build context.
-	contextReader, err := createTarContext(volumePath)
+	contextReader, err := createTarContext(diskPath)
 	if err != nil {
 		h.updateBuild(buildID, func(b *BuildRecord) {
 			b.Status = "failed"

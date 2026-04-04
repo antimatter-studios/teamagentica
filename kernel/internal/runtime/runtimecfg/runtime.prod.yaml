@@ -10,13 +10,13 @@ storage_cross_mount:
 
 plugin_mounts: []
 
-managed_volume_mount:
+managed_disk_mount:
   type: bind
-  source: "${DATA_DIR}/storage-disk/disks/${VOLUME_NAME}"
+  source: "${DATA_DIR}/storage-disk/disks/${DISK_NAME}"
 
 managed_extra_mount:
   type: bind
-  source: "${DATA_DIR}/storage-disk/disks/${VOLUME_NAME}"
+  source: "${DATA_DIR}/storage-disk/disks/${DISK_NAME}"
 
 managed_plugin_source:
   enabled: false

@@ -446,22 +446,22 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 	// Template vars for managed container config resolution.
 	vars := d.templateVars("", "")
 
-	// Primary volume mount: storage-disk's volumes/{name} → /workspace.
+	// Primary disk mount: storage-disk's disks/{name} → /workspace.
 	var mounts []mount.Mount
-	if mc.VolumeName != "" {
-		vars["VOLUME_NAME"] = mc.VolumeName
-		src := runtimecfg.Resolve(d.rtCfg.ManagedVolumeMount.Source, vars)
-		sub := runtimecfg.Resolve(d.rtCfg.ManagedVolumeMount.Subpath, vars)
-		ensureBindDir(d.rtCfg.ManagedVolumeMount.Type, src, d.dataDir)
-		mounts = append(mounts, resolveMount(d.rtCfg.ManagedVolumeMount, src, "/workspace", sub))
+	if mc.DiskName != "" {
+		vars["DISK_NAME"] = mc.DiskName
+		src := runtimecfg.Resolve(d.rtCfg.ManagedDiskMount.Source, vars)
+		sub := runtimecfg.Resolve(d.rtCfg.ManagedDiskMount.Subpath, vars)
+		ensureBindDir(d.rtCfg.ManagedDiskMount.Type, src, d.dataDir)
+		mounts = append(mounts, resolveMount(d.rtCfg.ManagedDiskMount, src, "/workspace", sub))
 	}
 
-	// Extra mounts: additional volumes requested by the plugin.
+	// Extra mounts: additional disks requested by the plugin.
 	for _, em := range mc.GetExtraMounts() {
-		if em.VolumeName == "" || em.Target == "" {
+		if em.DiskName == "" || em.Target == "" {
 			continue
 		}
-		vars["VOLUME_NAME"] = em.VolumeName
+		vars["DISK_NAME"] = em.DiskName
 		src := runtimecfg.Resolve(d.rtCfg.ManagedExtraMount.Source, vars)
 		sub := runtimecfg.Resolve(d.rtCfg.ManagedExtraMount.Subpath, vars)
 		ensureBindDir(d.rtCfg.ManagedExtraMount.Type, src, d.dataDir)
@@ -507,7 +507,7 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		return "", fmt.Errorf("start managed container %s: %w", containerName, err)
 	}
 
-	log.Printf("started managed container %s (image=%s, volume=%s, subdomain=%s, plugin_source=%s)", mc.ID, mc.Image, mc.VolumeName, mc.Subdomain, mc.PluginSource)
+	log.Printf("started managed container %s (image=%s, disk=%s, subdomain=%s, plugin_source=%s)", mc.ID, mc.Image, mc.DiskName, mc.Subdomain, mc.PluginSource)
 	return resp.ID, nil
 }
 

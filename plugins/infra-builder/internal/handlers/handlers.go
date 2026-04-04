@@ -17,7 +17,7 @@ type BuildRecord struct {
 	ID         string `json:"id"`
 	Image      string `json:"image"`
 	Tag        string `json:"tag"`
-	Volume     string `json:"volume"`
+	Disk       string `json:"disk"`
 	Dockerfile string `json:"dockerfile"`
 	Status     string `json:"status"` // "building", "success", "failed"
 	StartedAt  string `json:"started_at"`
@@ -54,17 +54,17 @@ func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
 		{
 			"name":        "build",
-			"description": "Build a Docker image from source in a storage volume. Streams build output as NDJSON. Returns the built image name and tag.",
+			"description": "Build a Docker image from source in a storage disk. Streams build output as NDJSON. Returns the built image name and tag.",
 			"endpoint":    "/mcp/build",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"volume":     gin.H{"type": "string", "description": "Storage volume name containing the source code"},
-					"dockerfile": gin.H{"type": "string", "description": "Path to Dockerfile relative to volume root (default: 'Dockerfile')"},
+					"disk":       gin.H{"type": "string", "description": "Storage disk name containing the source code"},
+					"dockerfile": gin.H{"type": "string", "description": "Path to Dockerfile relative to disk root (default: 'Dockerfile')"},
 					"image":      gin.H{"type": "string", "description": "Image name (e.g. 'teamagentica-messaging-discord')"},
 					"tag":        gin.H{"type": "string", "description": "Image tag (default: timestamp-based)"},
 				},
-				"required": []string{"volume", "image"},
+				"required": []string{"disk", "image"},
 			},
 		},
 	}

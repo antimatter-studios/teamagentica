@@ -1,6 +1,6 @@
 # workspace-manager
 
-Orchestrates workspace environments -- discovers workspace plugins, manages container lifecycle, and creates isolated volumes. Central hub for developer workspaces, build/deploy/promote/rollback flows, and volume management.
+Orchestrates workspace environments -- discovers workspace plugins, manages container lifecycle, and creates isolated disks. Central hub for developer workspaces, build/deploy/promote/rollback flows, and disk management.
 
 ## Capabilities
 
@@ -29,16 +29,16 @@ Orchestrates workspace environments -- discovers workspace plugins, manages cont
 | POST | `/workspaces` | Create a workspace (name, environment_id, optional git_repo) |
 | GET | `/workspaces/:id` | Get workspace details |
 | PATCH | `/workspaces/:id` | Rename a workspace |
-| DELETE | `/workspaces/:id` | Delete workspace (optional `?remove_volume=true`) |
+| DELETE | `/workspaces/:id` | Delete workspace (optional `?remove_disk=true`) |
 | POST | `/workspaces/:id/start` | Start a stopped workspace |
 | POST | `/workspaces/:id/persist` | Git add+commit+push workspace changes |
 
-### Volumes
+### Disks
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/volumes` | List volumes with size, tags, git info, active workspace flag |
-| DELETE | `/volumes/:name` | Delete a volume (only if no active workspace) |
+| GET | `/disks` | List disks with size, tags, git info, active workspace flag |
+| DELETE | `/disks/:name` | Delete a disk (only if no active workspace) |
 
 ### Discord Commands
 
@@ -66,14 +66,14 @@ Orchestrates workspace environments -- discovers workspace plugins, manages cont
 ## How It Works
 
 1. **Environment discovery:** Calls `sdk.SearchPlugins("workspace:environment")` to find installed workspace plugins, then fetches each plugin's `/schema` to get the `workspace` section (image, port, env, mounts).
-2. **Workspace creation:** Generates an 8-char hex ID for permanent subdomain (`ws-{id}`), creates a volume at `/data/volumes/ws-{id}-{slug}`, optionally git clones, creates shared mounts, runs setup scripts, calls `sdk.CreateManagedContainer()`.
-3. **Rename:** Updates display name and renames the volume directory slug. Subdomain is permanent.
-4. **Delete:** Stops/removes the container via kernel API. Volume removed only with `?remove_volume=true`.
+2. **Workspace creation:** Generates an 8-char hex ID for permanent subdomain (`ws-{id}`), creates a disk at `/data/disks/ws-{id}-{slug}`, optionally git clones, creates shared mounts, runs setup scripts, calls `sdk.CreateManagedContainer()`.
+3. **Rename:** Updates display name and renames the disk directory slug. Subdomain is permanent.
+4. **Delete:** Stops/removes the container via kernel API. Disk removed only with `?remove_disk=true`.
 5. **Build/Deploy:** Routes build to the `build:docker` capability plugin; deploy/promote/rollback use SDK managed container APIs.
 
 ## Notes
 
-- Volumes live at `/data/volumes/` -- cross-mounted from storage-disk's data.
+- Disks live at `/data/disks/` -- cross-mounted from storage-disk's data.
 - Subdomain format is `ws-{8hex}` and never changes, even on rename.
 - Local SQLite DB only tracks `container_id -> environment_id` mapping.
 - Workspace creation supports `plugin_source` for dev mode bind-mounts.

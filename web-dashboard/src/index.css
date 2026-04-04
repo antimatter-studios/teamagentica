@@ -3986,6 +3986,18 @@ body::after {
   letter-spacing: 0.05em;
 }
 
+.ws-card-env-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ws-card-env-icon svg {
+  width: 64px;
+  height: 64px;
+  opacity: 0.7;
+}
+
 /* Card body */
 
 .ws-card-body {
@@ -4317,9 +4329,9 @@ body::after {
   background: var(--bg-secondary);
 }
 
-/* --- Volumes section --- */
+/* --- Disks section --- */
 
-.ws-volumes-section {
+.ws-disks-section {
   padding: 16px 20px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-secondary);
@@ -4327,7 +4339,7 @@ body::after {
   overflow-y: auto;
 }
 
-.ws-volumes-title {
+.ws-disks-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-tertiary);
@@ -4338,13 +4350,13 @@ body::after {
 
 /* Volume card grid */
 
-.ws-vol-grid {
+.ws-disk-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
 }
 
-.ws-vol-card {
+.ws-disk-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -4355,18 +4367,18 @@ body::after {
   transition: border-color 0.1s;
 }
 
-.ws-vol-card:hover {
+.ws-disk-card:hover {
   border-color: var(--text-tertiary);
 }
 
-.ws-vol-card-header {
+.ws-disk-card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
 
-.ws-vol-card-name {
+.ws-disk-card-name {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
@@ -4374,7 +4386,7 @@ body::after {
   line-height: 1.3;
 }
 
-.ws-vol-delete {
+.ws-disk-delete {
   background: none;
   border: none;
   color: var(--text-tertiary);
@@ -4385,25 +4397,25 @@ body::after {
   flex-shrink: 0;
 }
 
-.ws-vol-delete:hover {
+.ws-disk-delete:hover {
   color: #ef4444;
 }
 
-.ws-vol-card-confirm {
+.ws-disk-card-confirm {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
 
-.ws-vol-card-meta {
+.ws-disk-card-meta {
   display: flex;
   gap: 8px;
   font-size: 11px;
   color: var(--text-tertiary);
 }
 
-.ws-vol-card-repo {
+.ws-disk-card-repo {
   font-size: 11px;
   color: var(--text-secondary);
   overflow: hidden;
@@ -4413,13 +4425,13 @@ body::after {
 
 /* Volume project tags */
 
-.ws-vol-tags {
+.ws-disk-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.ws-vol-tag {
+.ws-disk-tag {
   display: inline-block;
   padding: 1px 7px;
   background: var(--bg-tertiary);
@@ -4434,13 +4446,13 @@ body::after {
 
 /* Volume extensions */
 
-.ws-vol-extensions {
+.ws-disk-extensions {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.ws-vol-ext-label {
+.ws-disk-ext-label {
   font-size: 10px;
   font-weight: 600;
   color: var(--text-tertiary);
@@ -4448,13 +4460,13 @@ body::after {
   letter-spacing: 0.03em;
 }
 
-.ws-vol-ext-list {
+.ws-disk-ext-list {
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
 }
 
-.ws-vol-ext {
+.ws-disk-ext {
   font-size: 10px;
   color: var(--text-tertiary);
   padding: 1px 6px;
@@ -4468,18 +4480,18 @@ body::after {
 
 /* Volume launch dropdown */
 
-.ws-vol-launch {
+.ws-disk-launch {
   margin-top: auto;
   padding-top: 4px;
 }
 
-.ws-vol-env-list {
+.ws-disk-env-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.ws-vol-env-option {
+.ws-disk-env-option {
   display: block;
   width: 100%;
   padding: 6px 10px;
@@ -4493,24 +4505,24 @@ body::after {
   transition: background 0.1s;
 }
 
-.ws-vol-env-option:hover {
+.ws-disk-env-option:hover {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
 }
 
-.ws-vol-env-option:disabled {
+.ws-disk-env-option:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.ws-vol-env-cancel {
+.ws-disk-env-cancel {
   color: var(--text-tertiary);
   border-color: transparent;
   background: transparent;
 }
 
-.ws-vol-env-cancel:hover {
+.ws-disk-env-cancel:hover {
   color: var(--text-primary);
   background: var(--bg-tertiary);
   border-color: transparent;

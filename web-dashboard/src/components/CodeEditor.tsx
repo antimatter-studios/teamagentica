@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../api/client";
 import { apiClient } from "../api/client";
-import type { Environment, Workspace, Volume } from "@teamagentica/api-client";
+import type { Environment, Workspace, Disk } from "@teamagentica/api-client";
 
 const workspaceIframeSrc = (id: string) => `${API_BASE}/ws/${id}/`;
 const workspacePortProxyUrl = (id: string, port: number) => `${API_BASE}/ws/${id}/proxy/${port}/`;
@@ -27,7 +27,7 @@ interface CodeEditorProps {
 export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: CodeEditorProps) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [volumes, setVolumes] = useState<Volume[]>([]);
+  const [disks, setDisks] = useState<Disk[]>([]);
   const [openTabs, setOpenTabs] = useState<string[]>([LIST_TAB]);
   const [activeTab, setActiveTab] = useState<string>(LIST_TAB);
   const [showCreate, setShowCreate] = useState(false);
@@ -37,7 +37,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [launchVolume, setLaunchVolume] = useState<string | null>(null);
+  const [launchDisk, setLaunchDisk] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
 
   const [newName, setNewName] = useState("");
@@ -54,11 +54,11 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
       const [envs, wss, vols] = await Promise.all([
         apiClient.workspaces.listEnvironments(),
         apiClient.workspaces.listWorkspaces(),
-        apiClient.workspaces.listVolumes(),
+        apiClient.workspaces.listDisks(),
       ]);
       setEnvironments(envs);
       setWorkspaces(wss);
-      setVolumes(vols);
+      setDisks(vols);
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load workspaces");
@@ -187,18 +187,18 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
     return workspaceIframeSrc(ws.id);
   };
 
-  const handleLaunchVolume = async (volumeName: string, envId: string) => {
+  const handleLaunchDisk = async (diskName: string, envId: string) => {
     setLaunching(true);
     setError(null);
-    const slug = volumeName.replace(/^ws-[a-f0-9]{8}-/, "") || volumeName.replace(/^ws-/, "");
+    const slug = diskName.replace(/^ws-[a-f0-9]{8}-/, "") || diskName.replace(/^ws-/, "");
     const displayName = slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     try {
       await apiClient.workspaces.createWorkspace({
         name: displayName,
         environment_id: envId,
-        volume_name: volumeName,
+        disk_name: diskName,
       });
-      setLaunchVolume(null);
+      setLaunchDisk(null);
       await fetchAll();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to launch workspace");
@@ -218,9 +218,9 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
     return url.replace(/\.git$/, "").replace(/^.*[:/]([^/]+\/[^/]+)$/, "$1");
   };
 
-  // Build volume lookup by name for workspace enrichment.
-  const volMap = new Map(volumes.map((v) => [v.name, v]));
-  const orphanVolumes = volumes.filter((v) => !v.has_workspace && !v.is_empty);
+  // Build disk lookup by name for workspace enrichment.
+  const diskMap = new Map(disks.map((v: Disk) => [v.name, v]));
+  const orphanDisks = disks.filter((v: Disk) => !v.has_workspace && !v.is_empty);
   const wsMap = new Map(workspaces.map((ws) => [ws.id, ws]));
 
   // Find environment name from workspace.
@@ -383,7 +383,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
               </div>
             ) : (
               workspaces.map((ws) => {
-                const vol = volMap.get(ws.volume_name);
+                const vol = diskMap.get(ws.disk_name);
                 const tags = vol?.tags?.filter((t) => t !== "git") || [];
                 const gitRemote = vol?.git_remote;
                 const envName = envNameMap.get(ws.environment);
@@ -528,28 +528,28 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
             )}
           </div>
 
-          {/* Saved volumes */}
-          {orphanVolumes.length > 0 && (
-            <div className="ws-volumes-section">
-              <h3 className="ws-volumes-title">Saved Volumes</h3>
-              <div className="ws-vol-grid">
-                {orphanVolumes.map((v) => (
-                  <div key={v.name} className="ws-vol-card">
-                    <div className="ws-vol-card-header">
-                      <span className="ws-vol-card-name">{v.name}</span>
+          {/* Saved disks */}
+          {orphanDisks.length > 0 && (
+            <div className="ws-disks-section">
+              <h3 className="ws-disks-title">Saved Disks</h3>
+              <div className="ws-disk-grid">
+                {orphanDisks.map((v) => (
+                  <div key={v.name} className="ws-disk-card">
+                    <div className="ws-disk-card-header">
+                      <span className="ws-disk-card-name">{v.name}</span>
                       {confirmDelete === `vol:${v.name}` ? (
-                        <div className="ws-vol-card-confirm">
+                        <div className="ws-disk-card-confirm">
                           <span className="ws-confirm-text">Delete?</span>
                           <button
                             className="ws-btn ws-btn-danger ws-btn-sm"
                             onClick={async () => {
                               try {
-                                await apiClient.workspaces.deleteVolume(v.name);
+                                await apiClient.workspaces.deleteDisk(v.type, v.name);
                                 setConfirmDelete(null);
                                 await fetchAll();
                               } catch (e: unknown) {
                                 setError(
-                                  e instanceof Error ? e.message : "Failed to delete volume"
+                                  e instanceof Error ? e.message : "Failed to delete disk"
                                 );
                               }
                             }}
@@ -565,16 +565,16 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                         </div>
                       ) : (
                         <button
-                          className="ws-vol-delete"
+                          className="ws-disk-delete"
                           onClick={() => setConfirmDelete(`vol:${v.name}`)}
-                          title="Delete volume"
+                          title="Delete disk"
                         >
                           x
                         </button>
                       )}
                     </div>
 
-                    <div className="ws-vol-card-meta">
+                    <div className="ws-disk-card-meta">
                       <span>{formatSize(v.size_bytes)}</span>
                       {v.created_at && (
                         <span>{new Date(v.created_at).toLocaleDateString()}</span>
@@ -582,47 +582,47 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                     </div>
 
                     {v.git_remote && (
-                      <div className="ws-vol-card-repo">{shortRepoName(v.git_remote)}</div>
+                      <div className="ws-disk-card-repo">{shortRepoName(v.git_remote)}</div>
                     )}
 
-                    {v.tags.length > 0 && (
-                      <div className="ws-vol-tags">
-                        {v.tags.filter((t) => t !== "git").map((tag) => (
-                          <span key={tag} className="ws-vol-tag">{tag}</span>
+                    {(v.tags?.length ?? 0) > 0 && (
+                      <div className="ws-disk-tags">
+                        {v.tags!.filter((t) => t !== "git").map((tag) => (
+                          <span key={tag} className="ws-disk-tag">{tag}</span>
                         ))}
                       </div>
                     )}
 
-                    {v.extensions.length > 0 && (
-                      <div className="ws-vol-extensions">
-                        <span className="ws-vol-ext-label">
-                          {v.extensions.length} extension{v.extensions.length !== 1 ? "s" : ""}
+                    {(v.extensions?.length ?? 0) > 0 && (
+                      <div className="ws-disk-extensions">
+                        <span className="ws-disk-ext-label">
+                          {v.extensions!.length} extension{v.extensions!.length !== 1 ? "s" : ""}
                         </span>
-                        <div className="ws-vol-ext-list">
-                          {v.extensions.map((ext) => (
-                            <span key={ext} className="ws-vol-ext">{ext}</span>
+                        <div className="ws-disk-ext-list">
+                          {v.extensions!.map((ext) => (
+                            <span key={ext} className="ws-disk-ext">{ext}</span>
                           ))}
                         </div>
                       </div>
                     )}
 
                     {environments.length > 0 && (
-                      <div className="ws-vol-launch">
-                        {launchVolume === v.name ? (
-                          <div className="ws-vol-env-list">
+                      <div className="ws-disk-launch">
+                        {launchDisk === v.name ? (
+                          <div className="ws-disk-env-list">
                             {environments.map((env) => (
                               <button
                                 key={env.plugin_id}
-                                className="ws-vol-env-option"
+                                className="ws-disk-env-option"
                                 disabled={launching}
-                                onClick={() => handleLaunchVolume(v.name, env.plugin_id)}
+                                onClick={() => handleLaunchDisk(v.name, env.plugin_id)}
                               >
                                 {env.name}
                               </button>
                             ))}
                             <button
-                              className="ws-vol-env-option ws-vol-env-cancel"
-                              onClick={() => setLaunchVolume(null)}
+                              className="ws-disk-env-option ws-disk-env-cancel"
+                              onClick={() => setLaunchDisk(null)}
                             >
                               Cancel
                             </button>
@@ -630,7 +630,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                         ) : (
                           <button
                             className="ws-btn ws-btn-open ws-btn-sm"
-                            onClick={() => setLaunchVolume(v.name)}
+                            onClick={() => setLaunchDisk(v.name)}
                           >
                             Launch
                           </button>

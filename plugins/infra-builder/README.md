@@ -1,6 +1,6 @@
 # infra-builder
 
-Builds Docker images from source code stored in storage-disk volumes. Provides a single `build` tool for agents and a REST API for direct use.
+Builds Docker images from source code stored in storage-disk disks. Provides a single `build` tool for agents and a REST API for direct use.
 
 ## Capabilities
 
@@ -8,7 +8,7 @@ Builds Docker images from source code stored in storage-disk volumes. Provides a
 
 ## Dependencies
 
-- `storage:disk` -- volumes containing source code to build
+- `storage:disk` -- disks containing source code to build
 
 ## Configuration
 
@@ -29,9 +29,9 @@ Builds Docker images from source code stored in storage-disk volumes. Provides a
 
 ## How It Works
 
-1. Receives `{volume, image, dockerfile, tag}` -- volume and image required, dockerfile defaults to `Dockerfile`, tag defaults to timestamp.
-2. Resolves the volume path at `/workspaces/volumes/{name}`.
-3. Creates a tar archive of the entire volume directory (excluding `.git/`) as the Docker build context.
+1. Receives `{disk, image, dockerfile, tag}` -- disk and image required, dockerfile defaults to `Dockerfile`, tag defaults to timestamp.
+2. Resolves the disk path at `/workspaces/disks/{name}`.
+3. Creates a tar archive of the entire disk directory (excluding `.git/`) as the Docker build context.
 4. Calls Docker Engine API `ImageBuild` with target stage `prod`, tagging as `image:tag`.
 5. Streams Docker build output as NDJSON lines with a final result or error object.
 6. Stores the build record (ID, status, duration, logs) in memory.

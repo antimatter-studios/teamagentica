@@ -89,8 +89,8 @@ func main() {
 		if mounts, ok := ws["shared_mounts"].([]map[string]interface{}); ok {
 			for _, m := range mounts {
 				payload.SharedMounts = append(payload.SharedMounts, events.WorkspaceExtraMount{
-					VolumeName: m["volume_name"].(string),
-					Target:     m["target"].(string),
+					DiskName: m["disk_name"].(string),
+					Target:   m["target"].(string),
 				})
 			}
 		}
@@ -135,7 +135,7 @@ func getWorkspaceSchema(approvalMode string) map[string]interface{} {
 		"port":         7681,
 		"docker_user":  "",
 		"shared_mounts": []map[string]interface{}{
-			{"volume_name": "codex-shared", "target": "/home/coder/.codex"},
+			{"disk_name": "codex-shared", "target": "/home/coder/.codex"},
 		},
 		"env_defaults": map[string]string{
 			"DEVBOX_APP":          "codex",
