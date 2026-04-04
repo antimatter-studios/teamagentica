@@ -168,32 +168,14 @@ func (c *Client) routeToPluginInternal(ctx context.Context, pluginID, method, pa
 
 // RouteToPluginStream opens a streaming connection to a plugin endpoint and returns
 // the raw HTTP response. The caller owns the response body and must close it.
-// Unlike RouteToPlugin, this uses no timeout — the caller controls lifetime via ctx.
+// P2P only — uses routeClient with mTLS.
 func (c *Client) RouteToPluginStream(ctx context.Context, pluginID, method, path string, body io.Reader) (*http.Response, error) {
-	// Try direct P2P for streaming too.
-	if entry, ok := c.resolvePeer(pluginID); ok {
-		url := c.peerURL(entry, path)
-		req, err := http.NewRequestWithContext(ctx, method, url, body)
-		if err == nil {
-			if body != nil {
-				req.Header.Set("Content-Type", "application/json")
-			}
-			streamClient := &http.Client{Transport: c.routeClient.Transport}
-			resp, err := streamClient.Do(req)
-			if err == nil && resp.StatusCode < 400 {
-				return resp, nil
-			}
-			if err == nil {
-				resp.Body.Close()
-			}
-			// Direct failed — fall through to kernel proxy.
-			c.invalidatePeer(pluginID)
-		}
+	entry, ok := c.resolvePeer(pluginID)
+	if !ok {
+		return nil, fmt.Errorf("plugin %s not found in peer registry", pluginID)
 	}
 
-	// Fallback: stream via kernel proxy.
-	url := fmt.Sprintf("%s/api/route/%s%s", c.kernelURL(), pluginID, path)
-
+	url := c.peerURL(entry, path)
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -201,18 +183,18 @@ func (c *Client) RouteToPluginStream(ctx context.Context, pluginID, method, path
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Accept", "text/event-stream")
 
-	// Use a client without timeout for streaming — context cancellation handles cleanup.
 	streamClient := &http.Client{Transport: c.routeClient.Transport}
 	resp, err := streamClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		c.invalidatePeer(pluginID)
+		return nil, fmt.Errorf("stream to %s: %w", pluginID, err)
 	}
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		c.invalidatePeer(pluginID)
 		return nil, fmt.Errorf("plugin %s returned status %d: %s", pluginID, resp.StatusCode, string(respBody))
 	}
 
