@@ -41,6 +41,9 @@ type Client struct {
 	loginMu   sync.Mutex
 	loginProc *exec.Cmd
 	loginDone chan error
+
+	// Persistent app-server (not yet used for chat — testing lifecycle only).
+	server *appServer
 }
 
 // NewClient creates a new Codex CLI client. codexHome is the path for
@@ -58,6 +61,32 @@ func NewClient(binary, workdir, codexHome string, timeoutSec int, debug bool) *C
 // SetTLS configures the CA certificate for Codex CLI MCP server connections.
 func (c *Client) SetTLS(ca string) {
 	c.tlsCA = ca
+}
+
+// StartAppServer starts the persistent app-server subprocess.
+// Call once at plugin startup. The server is not yet used for chat — this
+// only tests that the process starts and stays alive.
+func (c *Client) StartAppServer() error {
+	s := &appServer{debug: c.debug}
+	if err := s.start(c.binary, c.env()); err != nil {
+		return err
+	}
+	log.Printf("[codex-cli] app-server process started, sending initialize...")
+	if err := s.initialize(); err != nil {
+		s.stop()
+		return fmt.Errorf("initialize: %w", err)
+	}
+	c.server = s
+	log.Printf("[codex-cli] app-server initialized OK")
+	return nil
+}
+
+// StopAppServer stops the persistent app-server subprocess.
+func (c *Client) StopAppServer() {
+	if c.server != nil {
+		c.server.stop()
+		c.server = nil
+	}
 }
 
 func (c *Client) env() []string {

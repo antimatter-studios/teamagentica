@@ -124,6 +124,14 @@ func main() {
 			} else {
 				log.Println("[subscription] WARNING: Codex CLI is NOT authenticated — run 'codex login --device-auth' in the container")
 			}
+
+			// Test: start app-server at boot to see if it blocks.
+			log.Println("[app-server] starting test...")
+			if err := cliClient.StartAppServer(); err != nil {
+				log.Printf("[app-server] start failed: %v", err)
+			} else {
+				log.Println("[app-server] started OK")
+			}
 		}
 	}
 
