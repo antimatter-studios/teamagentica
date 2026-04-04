@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.1.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/google/uuid v1.6.0
 )
 
 require (

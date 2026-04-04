@@ -2,7 +2,7 @@ id: agent-claude
 name: "Claude Agent"
 description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
 group: agents
-version: "1.0.65"
+version: "1.0.67"
 image: "teamagentica-agent-claude:latest"
 author: teamagentica
 tags: [chat, ai, agent, claude, anthropic]
@@ -49,6 +49,24 @@ config_schema:
       field: CLAUDE_BACKEND
       value: cli
     order: 10
+  CLAUDE_POOL_MAX:
+    type: string
+    label: "CLI Pool Max Size"
+    default: "10"
+    help_text: "Maximum number of CLI processes allowed in the hot pool. The pool always starts with 2 and grows on demand up to this limit. Each process uses ~70MB of memory."
+    visible_when:
+      field: CLAUDE_BACKEND
+      value: cli
+    order: 11
+  CLAUDE_POOL_TTL:
+    type: string
+    label: "CLI Pool Idle TTL (seconds)"
+    default: "120"
+    help_text: "Seconds an idle CLI process stays alive before being recycled. Lower values free memory faster, higher values avoid cold starts for bursty conversations."
+    visible_when:
+      field: CLAUDE_BACKEND
+      value: cli
+    order: 12
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

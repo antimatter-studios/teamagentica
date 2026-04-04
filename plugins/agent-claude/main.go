@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/claudecli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/handlers"
 )
@@ -69,6 +70,23 @@ func main() {
 		}
 	}
 
+	poolMax := 10
+	if v := pluginConfig["CLAUDE_POOL_MAX"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			poolMax = n
+		}
+	}
+	if poolMax < 2 {
+		poolMax = 2
+	}
+
+	poolTTL := 120
+	if v := pluginConfig["CLAUDE_POOL_TTL"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 10 {
+			poolTTL = n
+		}
+	}
+
 	router := gin.Default()
 
 	h := handlers.NewHandler(handlers.HandlerConfig{
@@ -98,6 +116,8 @@ func main() {
 			log.Printf("WARNING: skipping CLI backend init due to directory creation failure")
 		} else {
 			cliClient := claudecli.NewClient(cliBinary, workdir, claudeDir, cliTimeout, debug)
+			cliClient.SetPoolMax(poolMax)
+			cliClient.SetPoolTTL(poolTTL)
 			if sdkCfg.TLSCert != "" {
 				cliClient.SetTLS(sdkCfg.TLSCert, sdkCfg.TLSKey, sdkCfg.TLSCA)
 				log.Printf("[cli] mTLS configured for Claude CLI subprocess")
@@ -142,16 +162,9 @@ func main() {
 	router.DELETE("/auth", h.AuthLogout)
 
 	// Apply config updates in-place without restarting the container.
-	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-		var detail struct {
-			Config map[string]string `json:"config"`
-		}
-		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("[config] failed to parse config:update detail: %v", err)
-			return
-		}
-		h.ApplyConfig(detail.Config)
-	}))
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		h.ApplyConfig(p.Config)
+	})
 
 	// MCP server integration: CLI subprocess connects to the plugin's own
 	// /mcp-proxy route on localhost, which forwards to infra-mcp-server via SDK mTLS.
