@@ -113,7 +113,7 @@ func (c *Client) EventHandler() http.HandlerFunc {
 // event (handled internally), false otherwise.
 func (c *Client) handleLifecycleEvent(event EventCallback) bool {
 	switch event.EventType {
-	case "plugin:ready", "plugin:stopped", "plugin:registry-sync":
+	case "plugin:ready", "plugin:stopped", "plugin:started", "plugin:unhealthy", "plugin:healthy", "plugin:registry-sync":
 		// Detail contains the original lifecycle payload as JSON.
 	default:
 		return false
@@ -137,11 +137,16 @@ func (c *Client) handleLifecycleEvent(event EventCallback) bool {
 	}
 
 	switch payload.Type {
-	case "plugin:ready":
+	case "plugin:ready", "plugin:healthy":
 		if payload.Plugin != "" && payload.Host != "" {
 			c.SetPeer(payload.Plugin, payload.Host, payload.Port)
 		}
-	case "plugin:stopped":
+	case "plugin:stopped", "plugin:unhealthy":
+		if payload.Plugin != "" {
+			c.invalidatePeer(payload.Plugin)
+		}
+	case "plugin:started":
+		// Container booting — invalidate stale address, plugin:ready will set the new one.
 		if payload.Plugin != "" {
 			c.invalidatePeer(payload.Plugin)
 		}

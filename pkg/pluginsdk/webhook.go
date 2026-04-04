@@ -30,7 +30,7 @@ func (c *Client) RegisterWebhook(prefix string) {
 	}
 
 	// Subscribe to webhook:ready so we re-register when the ingress (re)starts.
-	c.OnEvent("webhook:ready", NewNullDebouncer(func(event EventCallback) {
+	c.Events().On("webhook:ready", NewNullDebouncer(func(event EventCallback) {
 		log.Printf("pluginsdk: webhook:ready received — registering route")
 		send()
 	}))
@@ -40,7 +40,7 @@ func (c *Client) RegisterWebhook(prefix string) {
 // this plugin its public webhook URL. The callback receives the full URL
 // (e.g. "https://abc.ngrok.io/tool-seedance").
 func (c *Client) OnWebhookURL(fn func(webhookURL string)) {
-	c.OnEvent("webhook:plugin:url", NewNullDebouncer(func(event EventCallback) {
+	c.Events().On("webhook:plugin:url", NewNullDebouncer(func(event EventCallback) {
 		var data struct {
 			WebhookURL string `json:"webhook_url"`
 		}

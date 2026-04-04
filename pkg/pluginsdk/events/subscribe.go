@@ -9,7 +9,7 @@ import (
 
 // OnAliasRegistryUpdate subscribes to alias registry changes with a typed payload.
 func OnAliasRegistryUpdate(client *pluginsdk.Client, handler func(AliasRegistryUpdatePayload)) {
-	client.OnEvent(AliasRegistryUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(AliasRegistryUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p AliasRegistryUpdatePayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", AliasRegistryUpdate, err)
@@ -21,7 +21,7 @@ func OnAliasRegistryUpdate(client *pluginsdk.Client, handler func(AliasRegistryU
 
 // OnAliasUpdate subscribes to individual alias changes with a typed payload.
 func OnAliasUpdate(client *pluginsdk.Client, handler func(AliasEntry)) {
-	client.OnEvent(AliasUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(AliasUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p AliasEntry
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", AliasUpdate, err)
@@ -33,7 +33,7 @@ func OnAliasUpdate(client *pluginsdk.Client, handler func(AliasEntry)) {
 
 // OnPersonaUpdate subscribes to persona changes with a typed payload.
 func OnPersonaUpdate(client *pluginsdk.Client, handler func(PersonaUpdatePayload)) {
-	client.OnEvent(PersonaUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(PersonaUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p PersonaUpdatePayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", PersonaUpdate, err)
@@ -44,8 +44,9 @@ func OnPersonaUpdate(client *pluginsdk.Client, handler func(PersonaUpdatePayload
 }
 
 // OnConfigUpdate subscribes to config changes with a typed payload.
+// Registers the handler and subscribes via the EventClient.
 func OnConfigUpdate(client *pluginsdk.Client, handler func(ConfigUpdatePayload)) {
-	client.OnEvent(ConfigUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(ConfigUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p ConfigUpdatePayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", ConfigUpdate, err)
@@ -57,7 +58,7 @@ func OnConfigUpdate(client *pluginsdk.Client, handler func(ConfigUpdatePayload))
 
 // OnMCPEnabled subscribes to MCP server availability with a typed payload.
 func OnMCPEnabled(client *pluginsdk.Client, handler func(MCPServerPayload)) {
-	client.OnEvent(MCPServerEnabled, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(MCPServerEnabled, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p MCPServerPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", MCPServerEnabled, err)
@@ -69,14 +70,14 @@ func OnMCPEnabled(client *pluginsdk.Client, handler func(MCPServerPayload)) {
 
 // OnMCPDisabled subscribes to MCP server shutdown.
 func OnMCPDisabled(client *pluginsdk.Client, handler func()) {
-	client.OnEvent(MCPServerDisabled, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(MCPServerDisabled, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		handler()
 	}))
 }
 
 // OnRelayProgress subscribes to relay progress events with a typed payload.
 func OnRelayProgress(client *pluginsdk.Client, handler func(RelayProgressPayload)) {
-	client.OnEvent(RelayProgress, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(RelayProgress, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p RelayProgressPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", RelayProgress, err)
@@ -88,7 +89,7 @@ func OnRelayProgress(client *pluginsdk.Client, handler func(RelayProgressPayload
 
 // OnIngressReady subscribes to ingress tunnel readiness with a typed payload.
 func OnIngressReady(client *pluginsdk.Client, handler func(IngressReadyPayload)) {
-	client.OnEvent(IngressReady, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(IngressReady, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p IngressReadyPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", IngressReady, err)
@@ -100,7 +101,7 @@ func OnIngressReady(client *pluginsdk.Client, handler func(IngressReadyPayload))
 
 // OnWebhookReady subscribes to webhook readiness with a typed payload.
 func OnWebhookReady(client *pluginsdk.Client, handler func(WebhookReadyPayload)) {
-	client.OnEvent(WebhookReady, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(WebhookReady, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p WebhookReadyPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", WebhookReady, err)
@@ -112,7 +113,7 @@ func OnWebhookReady(client *pluginsdk.Client, handler func(WebhookReadyPayload))
 
 // OnWebhookPluginURL subscribes to webhook URL assignment with a typed payload.
 func OnWebhookPluginURL(client *pluginsdk.Client, handler func(WebhookPluginURLPayload)) {
-	client.OnEvent(WebhookPluginURL, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(WebhookPluginURL, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p WebhookPluginURLPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", WebhookPluginURL, err)
@@ -124,7 +125,7 @@ func OnWebhookPluginURL(client *pluginsdk.Client, handler func(WebhookPluginURLP
 
 // OnUserRegistered subscribes to new user registration with a typed payload.
 func OnUserRegistered(client *pluginsdk.Client, handler func(UserPayload)) {
-	client.OnEvent(UserRegistered, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(UserRegistered, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p UserPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", UserRegistered, err)
@@ -136,7 +137,7 @@ func OnUserRegistered(client *pluginsdk.Client, handler func(UserPayload)) {
 
 // OnSchedulerFired subscribes to scheduled job execution with a typed payload.
 func OnSchedulerFired(client *pluginsdk.Client, handler func(SchedulerFiredPayload)) {
-	client.OnEvent(SchedulerFired, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(SchedulerFired, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p SchedulerFiredPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", SchedulerFired, err)
@@ -148,7 +149,7 @@ func OnSchedulerFired(client *pluginsdk.Client, handler func(SchedulerFiredPaylo
 
 // OnTaskAssign subscribes to task assignment with a typed payload.
 func OnTaskAssign(client *pluginsdk.Client, handler func(TaskAssignPayload)) {
-	client.OnEvent(TaskTrackingAssign, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+	client.Events().On(TaskTrackingAssign, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
 		var p TaskAssignPayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
 			log.Printf("events: failed to decode %s: %v", TaskTrackingAssign, err)
@@ -160,10 +161,10 @@ func OnTaskAssign(client *pluginsdk.Client, handler func(TaskAssignPayload)) {
 
 // DebouncedOnAliasRegistryUpdate subscribes with a timed debouncer for coalescing rapid events.
 func DebouncedOnAliasRegistryUpdate(client *pluginsdk.Client, debouncer pluginsdk.Debouncer) {
-	client.OnEvent(AliasRegistryUpdate, debouncer)
+	client.Events().On(AliasRegistryUpdate, debouncer)
 }
 
 // DebouncedOnPersonaUpdate subscribes with a timed debouncer for coalescing rapid events.
 func DebouncedOnPersonaUpdate(client *pluginsdk.Client, debouncer pluginsdk.Debouncer) {
-	client.OnEvent(PersonaUpdate, debouncer)
+	client.Events().On(PersonaUpdate, debouncer)
 }

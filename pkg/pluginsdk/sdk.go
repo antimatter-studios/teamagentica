@@ -114,6 +114,7 @@ func NewClient(cfg Config, reg Registration) *Client {
 		MaxIdleConns:        20,
 		MaxIdleConnsPerHost: 5,
 		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
 	}
 
 	if cfg.TLSCert != "" && cfg.TLSKey != "" && cfg.TLSCA != "" {

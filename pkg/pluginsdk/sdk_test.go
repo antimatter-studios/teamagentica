@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"strings"
+	"strconv"
 	"testing"
 )
 
@@ -153,9 +153,9 @@ func TestUsageReport_OmitEmpty(t *testing.T) {
 	}
 }
 
-// --- ReportEvent ---
+// --- PublishEvent ---
 
-func TestReportEvent(t *testing.T) {
+func TestPublishEvent(t *testing.T) {
 	var captured []byte
 	var capturedPath string
 
@@ -165,13 +165,17 @@ func TestReportEvent(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	client, _ := testEnv(t, handler)
-	client.ReportEvent("debug:info", "something happened")
+	client, srv := testEnv(t, handler)
 
-	// ReportEvent routes to infra-redis via RouteToPlugin, which falls back
-	// to kernel proxy: /api/route/infra-redis/events/publish
-	if capturedPath != "/api/route/infra-redis/events/publish" {
-		t.Errorf("path = %q, want /api/route/infra-redis/events/publish", capturedPath)
+	// Inject infra-redis peer so PublishEvent can route to it.
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	client.SetPeer("infra-redis", u.Hostname(), port)
+
+	client.PublishEvent("debug:info", "something happened")
+
+	if capturedPath != "/events/publish" {
+		t.Errorf("path = %q, want /events/publish", capturedPath)
 	}
 
 	var payload map[string]interface{}
@@ -198,7 +202,13 @@ func TestReportUsage(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	client, _ := testEnv(t, handler)
+	client, srv := testEnv(t, handler)
+
+	// Inject infra-redis peer so PublishEventTo can route to it.
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	client.SetPeer("infra-redis", u.Hostname(), port)
+
 	client.ReportUsage(UsageReport{
 		Provider:     "anthropic",
 		Model:        "claude-4",
@@ -208,25 +218,26 @@ func TestReportUsage(t *testing.T) {
 		DurationMs:   500,
 	})
 
-	var payload map[string]string
+	var payload map[string]interface{}
 	if err := json.Unmarshal(captured, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
 	// Must have addressed delivery to infra-cost-tracking.
-	if payload["destination"] != "infra-cost-tracking" {
-		t.Errorf("destination = %q, want infra-cost-tracking", payload["destination"])
+	if payload["target"] != "infra-cost-tracking" {
+		t.Errorf("target = %q, want infra-cost-tracking", payload["target"])
 	}
-	if payload["type"] != "usage:report" {
-		t.Errorf("type = %q, want usage:report", payload["type"])
+	if payload["event_type"] != "usage:report" {
+		t.Errorf("event_type = %q, want usage:report", payload["event_type"])
 	}
-	if payload["id"] != "test-plugin" {
-		t.Errorf("id = %q, want test-plugin", payload["id"])
+	if payload["source"] != "test-plugin" {
+		t.Errorf("source = %q, want test-plugin", payload["source"])
 	}
 
 	// detail should be a marshaled UsageReport.
+	detail, _ := payload["detail"].(string)
 	var report UsageReport
-	if err := json.Unmarshal([]byte(payload["detail"]), &report); err != nil {
+	if err := json.Unmarshal([]byte(detail), &report); err != nil {
 		t.Fatalf("unmarshal detail into UsageReport: %v", err)
 	}
 	if report.Provider != "anthropic" {
@@ -237,55 +248,6 @@ func TestReportUsage(t *testing.T) {
 	}
 	if report.DurationMs != 500 {
 		t.Errorf("report.DurationMs = %d, want 500", report.DurationMs)
-	}
-}
-
-// --- Unsubscribe ---
-
-func TestUnsubscribe(t *testing.T) {
-	var captured []byte
-	var capturedPath string
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedPath = r.URL.Path
-		captured, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-	})
-
-	client, _ := testEnv(t, handler)
-	err := client.Unsubscribe("chat:message")
-	if err != nil {
-		t.Fatalf("Unsubscribe returned error: %v", err)
-	}
-
-	if capturedPath != "/api/plugins/unsubscribe" {
-		t.Errorf("path = %q, want /api/plugins/unsubscribe", capturedPath)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal(captured, &payload); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if payload["id"] != "test-plugin" {
-		t.Errorf("id = %q, want test-plugin", payload["id"])
-	}
-	if payload["event_type"] != "chat:message" {
-		t.Errorf("event_type = %q, want chat:message", payload["event_type"])
-	}
-}
-
-func TestUnsubscribe_KernelError(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-	})
-
-	client, _ := testEnv(t, handler)
-	err := client.Unsubscribe("bogus")
-	if err == nil {
-		t.Fatal("expected error for 400 response, got nil")
-	}
-	if !strings.Contains(err.Error(), "400") {
-		t.Errorf("error should mention status 400: %v", err)
 	}
 }
 
