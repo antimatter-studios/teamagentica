@@ -25,6 +25,7 @@ function buildPath(page: Page, subpath: string): string {
 export function useRouter() {
   const [page, setPageState] = useState<Page>(() => parsePath(window.location.pathname).page);
   const [subpath, setSubpathState] = useState<string>(() => parsePath(window.location.pathname).subpath);
+  const [titleSegment, setTitleSegment] = useState<string>("");
 
   const navigate = useCallback((newPage: Page) => {
     // Navigating to a new page clears the subpath.
@@ -34,6 +35,7 @@ export function useRouter() {
     }
     setPageState(newPage);
     setSubpathState("");
+    setTitleSegment("");
   }, []);
 
   const setSubpath = useCallback((newSubpath: string) => {
@@ -68,8 +70,10 @@ export function useRouter() {
   useEffect(() => {
     const appName = import.meta.env.VITE_APP_NAME || "TeamAgentica";
     const label = page.charAt(0).toUpperCase() + page.slice(1);
-    document.title = `${appName} | ${label}`;
-  }, [page]);
+    document.title = titleSegment
+      ? `${titleSegment} — ${appName} | ${label}`
+      : `${appName} | ${label}`;
+  }, [page, titleSegment]);
 
   // Handle browser back/forward buttons.
   useEffect(() => {
@@ -82,5 +86,5 @@ export function useRouter() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  return { page, subpath, navigate, setSubpath, pushSubpath } as const;
+  return { page, subpath, navigate, setSubpath, pushSubpath, setTitleSegment } as const;
 }

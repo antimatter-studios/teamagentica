@@ -213,9 +213,4 @@ export class PluginsAPI {
     return this.http.get(`/api/route/${pluginId}/system-prompt`);
   }
 
-  async getDiscordCommands(
-    pluginId: string
-  ): Promise<{ commands: unknown[] }> {
-    return this.http.get(`/api/route/${pluginId}/discord-commands`);
-  }
 }

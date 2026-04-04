@@ -10,9 +10,8 @@ import PluginLogsInline from "./PluginLogsInline";
 import PluginPricing from "./PluginPricing";
 import PluginTools from "./PluginTools";
 import PluginSystemPrompt from "./PluginSystemPrompt";
-import PluginDiscordCommands from "./PluginDiscordCommands";
 
-type DetailTab = "config" | "aliases" | "logs" | "pricing" | "tools" | "system-prompt" | "commands";
+type DetailTab = "config" | "aliases" | "logs" | "pricing" | "tools" | "system-prompt";
 
 // Plugin group metadata — matches the catalog group ordering.
 const GROUP_META: { id: string; name: string; order: number }[] = [
@@ -23,7 +22,7 @@ const GROUP_META: { id: string; name: string; order: number }[] = [
   { id: "network", name: "Network", order: 5 },
   { id: "infrastructure", name: "Infrastructure", order: 6 },
   { id: "system", name: "System", order: 7 },
-  { id: "user", name: "User", order: 8 },
+  { id: "workspace", name: "Workspaces", order: 8 },
 ];
 
 // Map plugin ID prefix → group ID.
@@ -34,7 +33,7 @@ const PREFIX_TO_GROUP: Record<string, string> = {
   "storage-": "storage",
   "network-": "network",
   "infra-": "infrastructure",
-  "user-": "user",
+  "workspace-": "workspace",
   "system-": "system",
 };
 
@@ -91,7 +90,6 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
   const [hasPricing, setHasPricing] = useState(false);
   const [hasTools, setHasTools] = useState(false);
   const [hasSystemPrompt, setHasSystemPrompt] = useState(false);
-  const [hasCommands, setHasCommands] = useState(false);
 
   useEffect(() => {
     fetch();
@@ -154,19 +152,6 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
     }
   }, []);
 
-  // Probe discord-commands endpoint when selected plugin changes.
-  const probeCommands = useCallback(async (pluginId: string, status: string) => {
-    if (status !== "running") {
-      setHasCommands(false);
-      return;
-    }
-    try {
-      await apiClient.plugins.getDiscordCommands(pluginId);
-      setHasCommands(true);
-    } catch {
-      setHasCommands(false);
-    }
-  }, []);
 
   // Probe system-prompt endpoint when selected plugin changes.
   const probeSystemPrompt = useCallback(async (pluginId: string, status: string) => {
@@ -186,7 +171,6 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
     if (selected) {
       const caps = parseCapabilities(selected);
       const isAgent = caps.some((c) => c.startsWith("agent:"));
-      const isDiscord = caps.includes("messaging:discord");
       // Any running plugin can expose tools via /mcp.
       probeTools(selected.id, selected.status);
       if (isAgent) {
@@ -196,13 +180,8 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
         setHasPricing(false);
         setHasSystemPrompt(false);
       }
-      if (isDiscord) {
-        probeCommands(selected.id, selected.status);
-      } else {
-        setHasCommands(false);
-      }
       // Reset to config tab if current tab won't be available.
-      if ((detailTab === "pricing" || detailTab === "tools" || detailTab === "system-prompt" || detailTab === "commands") && selected.status !== "running") {
+      if ((detailTab === "pricing" || detailTab === "tools" || detailTab === "system-prompt") && selected.status !== "running") {
         setDetailTab("config");
       }
       if (detailTab === "aliases" && !hasAliases) {
@@ -212,9 +191,8 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
       setHasPricing(false);
       setHasTools(false);
       setHasSystemPrompt(false);
-      setHasCommands(false);
     }
-  }, [selected?.id, selected?.status, probePricing, probeTools, probeSystemPrompt, probeCommands]);
+  }, [selected?.id, selected?.status, probePricing, probeTools, probeSystemPrompt]);
 
   async function handleAction(action: () => Promise<void>) {
     setActionError("");
@@ -376,7 +354,7 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
                   UNINSTALL
                 </button>
 
-                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), ...(hasSystemPrompt ? ["system-prompt"] : []), ...(hasCommands ? ["commands"] : []), ...(!selected.image ? [] : ["logs"])] as DetailTab[]).map((tab) => (
+                {(["config", ...(hasAliases ? ["aliases"] : [] as DetailTab[]), ...(hasPricing ? ["pricing"] : []), ...(hasTools ? ["tools"] : []), ...(hasSystemPrompt ? ["system-prompt"] : []), ...(!selected.image ? [] : ["logs"])] as DetailTab[]).map((tab) => (
                   <button
                     key={tab}
                     className={`plugin-action-btn${detailTab === tab ? " btn-active" : ""}`}
@@ -440,12 +418,6 @@ export default function PluginSettings({ initialPluginId, onPluginChange }: Prop
               )}
               {detailTab === "system-prompt" && (
                 <PluginSystemPrompt
-                  key={selected.id}
-                  pluginId={selected.id}
-                />
-              )}
-              {detailTab === "commands" && (
-                <PluginDiscordCommands
                   key={selected.id}
                   pluginId={selected.id}
                 />

@@ -34,7 +34,7 @@ export default function App() {
   const logout = useAuthStore((s) => s.logout);
   const dismissSessionExpired = useAuthStore((s) => s.dismissSessionExpired);
   const fetchUser = useAuthStore((s) => s.fetchUser);
-  const { page, subpath, navigate: setPage, setSubpath, pushSubpath } = useRouter();
+  const { page, subpath, navigate: setPage, setSubpath, pushSubpath, setTitleSegment } = useRouter();
   const [hasChat, setHasChat] = useState(false);
   const [hasEditor, setHasEditor] = useState(false);
   const [hasTasks, setHasTasks] = useState(false);
@@ -157,16 +157,18 @@ export default function App() {
         </div>
 
         <nav className="nav-tabs">
-          <button
+          <a
+            href="/"
             className={`nav-tab ${page === "dashboard" ? "active" : ""}`}
-            onClick={() => setPage("dashboard")}
+            onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("dashboard"); } }}
           >
             DASHBOARD
-          </button>
+          </a>
           {hasChat && (
-            <button
+            <a
+              href="/chat"
               className={`nav-tab ${page === "chat" ? "active" : ""}`}
-              onClick={() => setPage("chat")}
+              onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("chat"); } }}
             >
               CHAT
               {inFlightCount > 0 && page !== "chat" && (
@@ -175,45 +177,50 @@ export default function App() {
               {totalUnread > 0 && inFlightCount === 0 && page !== "chat" && (
                 <span className="nav-badge nav-badge-resolved">{totalUnread}</span>
               )}
-            </button>
+            </a>
           )}
           {hasEditor && (
-            <button
+            <a
+              href="/code"
               className={`nav-tab ${page === "code" ? "active" : ""}`}
-              onClick={() => setPage("code")}
+              onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("code"); } }}
             >
               CODE
-            </button>
+            </a>
           )}
-          <button
+          <a
+            href="/files"
             className={`nav-tab ${page === "files" ? "active" : ""}`}
-            onClick={() => setPage("files")}
+            onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("files"); } }}
           >
             FILES
-          </button>
+          </a>
           {hasTasks && (
-            <button
+            <a
+              href="/tasks"
               className={`nav-tab ${page === "tasks" ? "active" : ""}`}
-              onClick={() => setPage("tasks")}
+              onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("tasks"); } }}
             >
               TASKS
-            </button>
+            </a>
           )}
           {hasScheduler && (
-            <button
+            <a
+              href="/scheduler"
               className={`nav-tab ${page === "scheduler" ? "active" : ""}`}
-              onClick={() => setPage("scheduler")}
+              onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("scheduler"); } }}
             >
               SCHEDULER
-            </button>
+            </a>
           )}
           {hasAgents && canAccessPlugins && (
-            <button
+            <a
+              href="/agents"
               className={`nav-tab ${page === "agents" ? "active" : ""}`}
-              onClick={() => setPage("agents")}
+              onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage("agents"); } }}
             >
               AGENTS
-            </button>
+            </a>
           )}
         </nav>
 
@@ -241,13 +248,14 @@ export default function App() {
             {userMenuOpen && (
               <div className="user-menu-dropdown">
                 {canAccessPlugins && adminPages.map((p) => (
-                  <button
+                  <a
                     key={p.id}
+                    href={`/${p.id}`}
                     className={`user-menu-item ${page === p.id ? "active" : ""}`}
-                    onClick={() => { setPage(p.id); setUserMenuOpen(false); }}
+                    onClick={(e) => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); setPage(p.id); setUserMenuOpen(false); } }}
                   >
                     {p.label}
-                  </button>
+                  </a>
                 ))}
                 {canAccessPlugins && <div className="user-menu-divider" />}
                 <button
@@ -263,7 +271,7 @@ export default function App() {
       </header>
 
       {page === "dashboard" && <Dashboard />}
-      {page === "files" && <FileBrowser initialPath={subpath} onPathChange={setSubpath} />}
+      {page === "files" && <FileBrowser initialPath={subpath} onPathChange={pushSubpath} onTitleChange={setTitleSegment} />}
       {page === "tasks" && <KanbanBoard initialSlug={subpath} onBoardChange={setSubpath} />}
       {page === "agents" && <Agents subpath={subpath} onNavigate={pushSubpath} />}
       {page === "marketplace" && <Marketplace />}
@@ -282,7 +290,7 @@ export default function App() {
       )}
       {hasEditor && (
         <div style={{ display: page === "code" ? "contents" : "none" }}>
-          <CodeEditor />
+          <CodeEditor initialWorkspace={subpath} onWorkspaceChange={setSubpath} />
         </div>
       )}
     </div>

@@ -496,6 +496,7 @@ body::after {
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--text-secondary);
+  text-decoration: none;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
@@ -731,6 +732,7 @@ body::after {
   background: transparent;
   border: none;
   color: var(--text-secondary);
+  text-decoration: none;
   font-family: var(--font-mono);
   font-size: 12px;
   text-align: left;
@@ -5406,6 +5408,7 @@ body::after {
   background: transparent;
   border: none;
   color: var(--text-secondary);
+  text-decoration: none;
   font-family: var(--font-mono);
   font-size: 12px;
   cursor: pointer;
@@ -5510,7 +5513,8 @@ body::after {
 /* Inline rename input */
 .file-rename-input {
   width: 100%;
-  padding: 2px 4px;
+  min-height: 24px;
+  padding: 2px 6px;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-primary);
@@ -5519,6 +5523,7 @@ body::after {
   border-radius: 3px;
   outline: none;
   box-sizing: border-box;
+  caret-color: var(--text-primary);
 }
 
 /* File Operations Panel */
@@ -5648,6 +5653,12 @@ body::after {
   border-left: 2px solid var(--accent);
 }
 
+.file-create-row .file-col-name {
+  display: flex;
+  align-items: center;
+  overflow: visible;
+}
+
 .file-upload-btn {
   background: var(--accent);
   border: none;
@@ -5710,9 +5721,11 @@ body::after {
   padding-bottom: 10px;
 }
 
-.file-row.file-folder {
+a.file-row.file-folder {
   cursor: pointer;
   transition: background 0.15s ease;
+  text-decoration: none;
+  color: var(--text-secondary);
 }
 
 .file-row.file-folder:hover {

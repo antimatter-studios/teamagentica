@@ -20,6 +20,13 @@ function fileIcon(contentType: string, filename: string): string {
   return "📄";
 }
 
+/** Human-friendly file type from filename extension. */
+function friendlyType(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase() || "";
+  if (!ext || ext === filename.toLowerCase()) return "file";
+  return ext.toUpperCase();
+}
+
 async function downloadFile(pluginId: string, key: string) {
   const isFolder = key.endsWith("/");
   const blob = isFolder
@@ -46,9 +53,11 @@ interface FileBrowserProps {
   initialPath?: string;
   /** Callback to notify parent of navigation — parent owns the URL. */
   onPathChange?: (subpath: string) => void;
+  /** Callback to set a prefix segment in the browser tab title. */
+  onTitleChange?: (segment: string) => void;
 }
 
-export default function FileBrowser({ initialPath, onPathChange }: FileBrowserProps) {
+export default function FileBrowser({ initialPath, onPathChange, onTitleChange }: FileBrowserProps) {
   const {
     providers,
     selectedProvider,
@@ -123,12 +132,23 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
   const createInputRef = useRef<HTMLInputElement>(null);
   const restoredFromUrl = useRef(false);
 
-  // Notify parent of navigation so it can update the URL.
-  const notifyPath = useCallback((providerId: string, pfx: string, trash?: boolean, fileKey?: string) => {
+  // Build a subpath string for a given provider/prefix/trash combination.
+  const buildSubpath = useCallback((providerId: string, pfx: string, trash?: boolean, fileKey?: string) => {
     const trashSegment = trash ? ".trash/" : "";
     const base = pfx ? `${providerId}/${trashSegment}${pfx}` : `${providerId}/${trashSegment}`;
-    onPathChange?.(fileKey ? `${base}${filenameFromKey(fileKey)}` : base);
-  }, [onPathChange]);
+    return fileKey ? `${base}${filenameFromKey(fileKey)}` : base;
+  }, []);
+
+  // Build a full href for a folder (for use in <a> tags).
+  const folderHref = useCallback((pfx: string, providerId?: string, trash?: boolean) => {
+    const pid = providerId || selectedProvider?.id || "";
+    return `/files/${buildSubpath(pid, pfx, trash)}`;
+  }, [buildSubpath, selectedProvider]);
+
+  // Notify parent of navigation so it can update the URL.
+  const notifyPath = useCallback((providerId: string, pfx: string, trash?: boolean, fileKey?: string) => {
+    onPathChange?.(buildSubpath(providerId, pfx, trash, fileKey));
+  }, [onPathChange, buildSubpath]);
 
   // Wrap browse to also notify parent.
   const handleBrowse = useCallback((pfx: string) => {
@@ -194,6 +214,23 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     }
   }, [providers, initialPath, selectProvider, browse, browseTrash, setTrashMode, viewFile]);
 
+  // Update browser tab title with current file/folder context.
+  useEffect(() => {
+    if (!onTitleChange) return;
+    if (viewingFile) {
+      onTitleChange(filenameFromKey(viewingFile.key));
+    } else if (selectedFile) {
+      onTitleChange(filenameFromKey(selectedFile.key));
+    } else if (prefix) {
+      const parts = prefix.replace(/\/+$/, "").split("/");
+      onTitleChange(parts[parts.length - 1]);
+    } else if (selectedProvider) {
+      onTitleChange(selectedProvider.name || selectedProvider.id);
+    } else {
+      onTitleChange("");
+    }
+  }, [viewingFile, selectedFile, prefix, selectedProvider, onTitleChange]);
+
   const handleUpload = () => fileInputRef.current?.click();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -232,7 +269,10 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     setRenamingKey(null);
   }, [renameFile]);
 
+  const createSubmittedRef = useRef(false);
   const handleCreateSubmit = useCallback((name: string) => {
+    if (createSubmittedRef.current) return;
+    createSubmittedRef.current = true;
     const trimmed = name.trim();
     if (trimmed && creating) {
       if (creating === "folder") createFolder(trimmed);
@@ -250,8 +290,9 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
     input.setSelectionRange(0, dotIdx > 0 ? dotIdx : input.value.length);
   }, [renamingKey]);
 
-  // Auto-focus create input.
+  // Auto-focus create input and reset submit guard.
   useEffect(() => {
+    createSubmittedRef.current = false;
     if (!creating || !createInputRef.current) return;
     createInputRef.current.focus();
     if (creating === "file") {
@@ -319,9 +360,11 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
             {/* Toolbar */}
             <div className="file-toolbar">
               <div className="file-breadcrumbs">
-                <button
+                <a
+                  href={folderHref("")}
                   className="file-breadcrumb-btn"
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.preventDefault();
                     if (trashMode) {
                       setTrashMode(false);
                       if (selectedProvider) notifyPath(selectedProvider.id, "");
@@ -331,16 +374,17 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                   }}
                 >
                   {selectedProvider?.name || selectedProvider?.id || "Disk"}
-                </button>
+                </a>
                 {trashMode && (
                   <>
                     <span className="file-breadcrumb-sep">/</span>
-                    <button
+                    <a
+                      href={folderHref("", undefined, true)}
                       className="file-breadcrumb-btn file-trash-crumb"
-                      onClick={() => handleBrowse("")}
+                      onClick={(e) => { e.preventDefault(); handleBrowse(""); }}
                     >
                       Trash
-                    </button>
+                    </a>
                   </>
                 )}
                 {breadcrumbs.map((part, i) => {
@@ -348,12 +392,13 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                   return (
                     <span key={crumbPath}>
                       <span className="file-breadcrumb-sep">/</span>
-                      <button
+                      <a
+                        href={folderHref(crumbPath, undefined, trashMode)}
                         className="file-breadcrumb-btn"
-                        onClick={() => handleBrowse(crumbPath)}
+                        onClick={(e) => { e.preventDefault(); handleBrowse(crumbPath); }}
                       >
                         {part}
-                      </button>
+                      </a>
                     </span>
                   );
                 })}
@@ -436,7 +481,6 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                               if (e.key === "Enter") handleCreateSubmit(e.currentTarget.value);
                               if (e.key === "Escape") setCreating(null);
                             }}
-                            onBlur={(e) => handleCreateSubmit(e.currentTarget.value)}
                           />
                         </span>
                         <span className="file-col-size">-</span>
@@ -452,10 +496,11 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
 
                     {/* Folders */}
                     {folders.map((f) => (
-                      <div
+                      <a
                         key={f}
+                        href={folderHref(f, undefined, trashMode)}
                         className="file-row file-folder"
-                        onClick={() => { if (renamingKey !== f) handleBrowse(f); }}
+                        onClick={(e) => { e.preventDefault(); if (renamingKey !== f) handleBrowse(f); }}
                         onContextMenu={(e) => handleContextMenu(e, f)}
                       >
                         <span className="file-col-name">
@@ -479,7 +524,7 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                         <span className="file-col-type">folder</span>
                         <span className="file-col-modified">-</span>
                         <span className="file-col-actions"></span>
-                      </div>
+                      </a>
                     ))}
 
                     {/* Files */}
@@ -508,7 +553,7 @@ export default function FileBrowser({ initialPath, onPathChange }: FileBrowserPr
                           )}
                         </span>
                         <span className="file-col-size">{formatBytes(f.size)}</span>
-                        <span className="file-col-type">{f.content_type || "-"}</span>
+                        <span className="file-col-type">{friendlyType(filenameFromKey(f.key))}</span>
                         <span className="file-col-modified">
                           {f.last_modified
                             ? new Date(f.last_modified).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })

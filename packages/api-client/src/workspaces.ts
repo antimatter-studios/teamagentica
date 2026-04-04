@@ -1,6 +1,6 @@
 import type { HttpTransport } from "./client.js";
 
-const ROUTE = "/api/route/infra-workspace-manager";
+const ROUTE = "/api/route/workspace-manager";
 
 export interface Environment {
   plugin_id: string;
@@ -21,17 +21,6 @@ export interface Workspace {
   volume_name: string;
 }
 
-export interface Volume {
-  name: string;
-  size_bytes: number;
-  created_at: string;
-  is_empty: boolean;
-  has_workspace: boolean;
-  tags: string[];
-  git_remote: string;
-  extensions: string[];
-}
-
 export class WorkspacesAPI {
   private http: HttpTransport;
   constructor(http: HttpTransport) { this.http = http; }
@@ -48,13 +37,6 @@ export class WorkspacesAPI {
       `${ROUTE}/workspaces`
     );
     return res.workspaces || [];
-  }
-
-  async listVolumes(): Promise<Volume[]> {
-    const res = await this.http.get<{ volumes: Volume[] }>(
-      `${ROUTE}/volumes`
-    );
-    return res.volumes || [];
   }
 
   async createWorkspace(data: {
@@ -78,8 +60,8 @@ export class WorkspacesAPI {
     return this.http.post(`${ROUTE}/workspaces/${id}/start`, {});
   }
 
-  async deleteVolume(name: string): Promise<void> {
-    return this.http.delete(`${ROUTE}/volumes/${name}`);
+  async stopWorkspace(id: string): Promise<void> {
+    return this.http.post(`${ROUTE}/workspaces/${id}/stop`, {});
   }
 
   iframeSrc(workspaceId: string): string {

@@ -151,10 +151,7 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
 
     // New messages appended — only scroll if user was near bottom
     if (el) {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      // After render, new messages add to scrollHeight. The user's scrollTop hasn't
-      // changed, so we subtract the approximate new content height. But a simpler
-      // heuristic: trust the onScroll handler's isNearBottomRef since it reflects
+      // Trust the onScroll handler's isNearBottomRef since it reflects
       // the position *before* the new messages were rendered.
       if (!isNearBottomRef.current) return;
     }

@@ -3,10 +3,15 @@ export class EventsAPI {
   constructor(baseUrl: string) { this.baseUrl = baseUrl; }
 
   streamUrl(): string {
-    return `${this.baseUrl}/api/debug/events`;
+    return `${this.baseUrl}/api/route/infra-redis/events/stream`;
   }
 
   historyUrl(): string {
-    return `${this.baseUrl}/api/debug/history`;
+    return `${this.baseUrl}/api/route/infra-redis/events/history`;
+  }
+
+  /** @deprecated Use streamUrl() — kept for backward compat */
+  legacyStreamUrl(): string {
+    return `${this.baseUrl}/api/debug/events`;
   }
 }

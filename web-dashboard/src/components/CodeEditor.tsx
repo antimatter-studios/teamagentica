@@ -15,7 +15,16 @@ async function fetchWorkspacePorts(workspaceId: string): Promise<number[]> {
 
 const LIST_TAB = "__list__";
 
-export default function CodeEditor() {
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+interface CodeEditorProps {
+  initialWorkspace?: string;
+  onWorkspaceChange?: (name: string) => void;
+}
+
+export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: CodeEditorProps) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -58,11 +67,24 @@ export default function CodeEditor() {
     }
   }, []);
 
+  const initialOpenDone = useRef(false);
+
   useEffect(() => {
     fetchAll();
     pollRef.current = setInterval(fetchAll, 10000);
     return () => clearInterval(pollRef.current);
   }, [fetchAll]);
+
+  // Auto-open workspace from URL on first load.
+  useEffect(() => {
+    if (initialOpenDone.current || !initialWorkspace || workspaces.length === 0) return;
+    initialOpenDone.current = true;
+    const slug = initialWorkspace.toLowerCase();
+    const match = workspaces.find((ws) => slugify(ws.name) === slug);
+    if (match) {
+      openWorkspace(match);
+    }
+  }, [initialWorkspace, workspaces]);
 
   // Poll portpilot for detected ports on open workspace tabs.
   useEffect(() => {
@@ -142,6 +164,7 @@ export default function CodeEditor() {
       setOpenTabs((tabs) => [...tabs, ws.id]);
     }
     setActiveTab(ws.id);
+    onWorkspaceChange?.(slugify(ws.name));
   };
 
   const closeTab = (tabId: string) => {
@@ -152,6 +175,9 @@ export default function CodeEditor() {
         const closedIdx = tabs.indexOf(tabId);
         const newActive = next[Math.min(closedIdx, next.length - 1)];
         setActiveTab(newActive);
+        // Update URL: show workspace name or clear if back to list.
+        const ws = wsMap.get(newActive);
+        onWorkspaceChange?.(ws ? slugify(ws.name) : "");
       }
       return next;
     });
@@ -221,7 +247,7 @@ export default function CodeEditor() {
                 <div
                   key={LIST_TAB}
                   className={`ws-tab${isActive ? " ws-tab-active" : ""}`}
-                  onClick={() => setActiveTab(LIST_TAB)}
+                  onClick={() => { setActiveTab(LIST_TAB); onWorkspaceChange?.(""); }}
                 >
                   <span className="ws-tab-label">Workspaces</span>
                 </div>
@@ -233,7 +259,7 @@ export default function CodeEditor() {
               <div
                 key={tabId}
                 className={`ws-tab${isActive ? " ws-tab-active" : ""}`}
-                onClick={() => setActiveTab(tabId)}
+                onClick={() => { setActiveTab(tabId); const w = wsMap.get(tabId); onWorkspaceChange?.(w ? slugify(w.name) : ""); }}
               >
                 <span className="ws-tab-label">{ws.name}</span>
                 <button

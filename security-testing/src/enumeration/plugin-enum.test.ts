@@ -12,7 +12,7 @@ describe("ENUMERATION: unauthenticated plugin/container discovery", () => {
       "messaging-telegram",
       "messaging-chat",
       "infra-cost-tracking",
-      "infra-workspace-manager",
+      "workspace-manager",
       "storage-minio",
     ];
 

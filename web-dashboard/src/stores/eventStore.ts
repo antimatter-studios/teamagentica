@@ -93,13 +93,24 @@ async function readSSE(
         } else if (line.startsWith("data: ")) {
           try {
             const parsed = JSON.parse(line.slice(6));
-            if (currentChannel === "event") {
-              onEvent(parsed as EventLogEntry);
-            } else {
+            // Unified stream — all events go to the event log.
+            if (currentChannel === "audit") {
               onAudit(parsed as DebugEvent);
+            } else {
+              // Normalize infra-redis EventMessage to EventLogEntry.
+              const entry: EventLogEntry = {
+                id: parsed.id ?? Date.now(),
+                event_type: parsed.event_type ?? "",
+                source_plugin_id: parsed.source ?? parsed.source_plugin_id ?? "",
+                target_plugin_id: parsed.target ?? parsed.target_plugin_id ?? "",
+                status: parsed.status ?? "",
+                detail: parsed.detail ?? "",
+                created_at: parsed.timestamp ?? parsed.created_at ?? new Date().toISOString(),
+              };
+              onEvent(entry);
             }
           } catch {}
-          currentChannel = "audit"; // reset after consuming data
+          currentChannel = "event"; // default channel for unified stream
         }
         // keepalive comments (": keepalive") are implicitly handled —
         // the chunk arrival already reset the stale timer above.
@@ -155,26 +166,26 @@ export const useEventStore = create<EventStore>((set) => ({
     const loadHistory = (signal: AbortSignal) => {
       const t = localStorage.getItem("teamagentica_token");
       if (!t) return Promise.resolve();
-      return fetch(apiClient.events.historyUrl(), {
+      return fetch(apiClient.events.historyUrl() + "?count=200", {
         headers: { Authorization: `Bearer ${t}` },
         signal,
       })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data?.events?.length) {
-            const msgs = data.events as Array<{ channel: string; data: any }>;
-            const audits: DebugEvent[] = [];
-            const evtLogs: EventLogEntry[] = [];
-            for (const msg of msgs) {
-              if (msg.channel === "event") {
-                evtLogs.push(msg.data as EventLogEntry);
-              } else {
-                audits.push(msg.data as DebugEvent);
-              }
-            }
+            // infra-redis returns flat EventMessage array (newest first).
+            // Normalize field names to match EventLogEntry.
+            const evtLogs: EventLogEntry[] = data.events.map((e: any) => ({
+              id: e.id ?? Date.now(),
+              event_type: e.event_type ?? "",
+              source_plugin_id: e.source ?? "",
+              target_plugin_id: e.target ?? "",
+              status: e.status ?? "",
+              detail: e.detail ?? "",
+              created_at: e.timestamp ?? new Date().toISOString(),
+            })).reverse();
             set({
-              auditEvents: audits.slice(-MAX_EVENTS),
-              eventLogEvents: evtLogs.reverse().slice(0, MAX_EVENTS),
+              eventLogEvents: evtLogs.slice(0, MAX_EVENTS),
             });
           }
         })
