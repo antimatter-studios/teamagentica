@@ -16,8 +16,9 @@ import (
 
 // Disk represents a namespace-isolated disk storage disk.
 type Disk struct {
+	ID        string            `json:"id"`
 	Name      string            `json:"name"`
-	Type      string            `json:"type"`       // "auth" or "storage"
+	Type      string            `json:"type"`       // "shared" or "workspace"
 	Labels    map[string]string `json:"labels"`     // e.g. {"service": "claude", "plugin": "agent-claude"}
 	CreatedAt time.Time         `json:"created_at"`
 }
@@ -33,45 +34,83 @@ func validateDiskName(name string) error {
 
 func validateDiskType(t string) error {
 	switch t {
-	case "auth", "storage":
+	case "shared", "workspace":
 		return nil
 	default:
-		return fmt.Errorf("invalid disk type %q: must be 'auth' or 'storage'", t)
+		return fmt.Errorf("invalid disk type %q: must be 'shared' or 'workspace'", t)
 	}
 }
 
-// metaPath returns the path to the disk's metadata JSON file.
-// Metadata is stored under dataPath/meta (not disksPath) to keep
-// the disks directory clean for bind-mounting.
-func (h *Handler) metaPath(name string) string {
-	return filepath.Join(h.dataPath, "meta", name+".json")
+// typePath returns the directory for a disk type: storageRoot/shared or storageRoot/workspace.
+func (h *Handler) typePath(diskType string) string {
+	return filepath.Join(h.storageRoot, diskType)
 }
 
-// diskDataPath returns the data directory path for a disk.
-func (h *Handler) diskDataPath(name string) string {
-	return filepath.Join(h.disksPath, name)
+// diskDataPath returns the data directory path for a disk: storageRoot/<type>/<name>.
+func (h *Handler) diskDataPath(diskType, name string) string {
+	return filepath.Join(h.storageRoot, diskType, name)
 }
 
-// loadDiskMeta reads and parses a disk's metadata file.
+// findDiskType looks up the type for a disk by name from the database,
+// falling back to checking both type directories on disk.
+func (h *Handler) findDiskType(name string) string {
+	var rec DiskRecord
+	if err := h.db.First(&rec, "name = ?", name).Error; err == nil {
+		return rec.Type
+	}
+	// Fallback: check filesystem.
+	for _, t := range []string{"shared", "workspace"} {
+		if _, err := os.Stat(filepath.Join(h.storageRoot, t, name)); err == nil {
+			return t
+		}
+	}
+	return "workspace"
+}
+
+// loadDiskMeta reads disk metadata from the database.
 func (h *Handler) loadDiskMeta(name string) (*Disk, error) {
-	data, err := os.ReadFile(h.metaPath(name))
-	if err != nil {
+	var rec DiskRecord
+	if err := h.db.First(&rec, "name = ?", name).Error; err != nil {
 		return nil, err
 	}
-	var d Disk
-	if err := json.Unmarshal(data, &d); err != nil {
-		return nil, fmt.Errorf("parse disk meta %s: %w", name, err)
+	d := &Disk{
+		ID:        rec.ID,
+		Name:      rec.Name,
+		Type:      rec.Type,
+		CreatedAt: rec.CreatedAt,
 	}
-	return &d, nil
+	if rec.Labels != "" {
+		json.Unmarshal([]byte(rec.Labels), &d.Labels)
+	}
+	if d.Labels == nil {
+		d.Labels = map[string]string{}
+	}
+	return d, nil
 }
 
-// saveDiskMeta writes disk metadata to the filesystem.
+// saveDiskMeta writes disk metadata to the database.
 func (h *Handler) saveDiskMeta(d *Disk) error {
-	data, err := json.MarshalIndent(d, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal disk meta: %w", err)
+	labelsJSON, _ := json.Marshal(d.Labels)
+	rec := DiskRecord{
+		ID:        d.ID,
+		Name:      d.Name,
+		Type:      d.Type,
+		Labels:    string(labelsJSON),
+		CreatedAt: d.CreatedAt,
 	}
-	return os.WriteFile(h.metaPath(d.Name), data, 0644)
+	return h.db.Save(&rec).Error
+}
+
+// deleteDiskMeta removes disk metadata from the database.
+func (h *Handler) deleteDiskMeta(name string) error {
+	return h.db.Delete(&DiskRecord{}, "name = ?", name).Error
+}
+
+// diskMetaExists checks if a disk has metadata in the database.
+func (h *Handler) diskMetaExists(name string) bool {
+	var count int64
+	h.db.Model(&DiskRecord{}).Where("name = ?", name).Count(&count)
+	return count > 0
 }
 
 // DiskDetail extends Disk with runtime info.
@@ -99,7 +138,7 @@ func (h *Handler) CreateDisk(c *gin.Context) {
 	}
 
 	if req.Type == "" {
-		req.Type = "storage"
+		req.Type = "workspace"
 	}
 	if err := validateDiskType(req.Type); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -107,13 +146,13 @@ func (h *Handler) CreateDisk(c *gin.Context) {
 	}
 
 	// Check if disk already exists.
-	if _, err := os.Stat(h.metaPath(req.Name)); err == nil {
+	if h.diskMetaExists(req.Name) {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("disk %q already exists", req.Name)})
 		return
 	}
 
 	// Create data directory.
-	dataDir := h.diskDataPath(req.Name)
+	dataDir := h.diskDataPath(req.Type, req.Name)
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Printf("[disks] create dir error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create disk directory"})
@@ -122,6 +161,7 @@ func (h *Handler) CreateDisk(c *gin.Context) {
 
 	// Save metadata.
 	d := &Disk{
+		ID:        generateDiskID(),
 		Name:      req.Name,
 		Type:      req.Type,
 		Labels:    req.Labels,
@@ -146,48 +186,48 @@ func (h *Handler) CreateDisk(c *gin.Context) {
 }
 
 // ListDisks handles GET /disks.
-// Discovers disks from both metadata files and on-disk directories,
+// Discovers disks from both the database and on-disk directories,
 // so disks created externally (e.g. by workspace-manager) are visible.
 func (h *Handler) ListDisks(c *gin.Context) {
 	filterType := c.Query("type")
 
-	// Collect disks with metadata.
+	// Collect disks with metadata from DB.
 	seen := make(map[string]bool)
 	var disks []DiskDetail
 
-	metaDir := filepath.Join(h.dataPath, "meta")
-	if entries, err := os.ReadDir(metaDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			name := strings.TrimSuffix(e.Name(), ".json")
-			d, err := h.loadDiskMeta(name)
-			if err != nil {
-				log.Printf("[disks] skip unreadable meta %s: %v", name, err)
-				continue
-			}
-			if filterType != "" && d.Type != filterType {
-				continue
-			}
-			seen[name] = true
-			disks = append(disks, DiskDetail{
-				Disk:      *d,
-				SizeBytes: dirSize(h.diskDataPath(name)),
-				Path:      h.diskDataPath(name),
-			})
+	var recs []DiskRecord
+	q := h.db
+	if filterType != "" {
+		q = q.Where("type = ?", filterType)
+	}
+	q.Find(&recs)
+	for _, rec := range recs {
+		d := Disk{ID: rec.ID, Name: rec.Name, Type: rec.Type, CreatedAt: rec.CreatedAt}
+		if rec.Labels != "" {
+			json.Unmarshal([]byte(rec.Labels), &d.Labels)
 		}
+		if d.Labels == nil {
+			d.Labels = map[string]string{}
+		}
+		seen[rec.Name] = true
+		disks = append(disks, DiskDetail{
+			Disk:      d,
+			SizeBytes: dirSize(h.diskDataPath(rec.Type, rec.Name)),
+			Path:      h.diskDataPath(rec.Type, rec.Name),
+		})
 	}
 
-	// Also scan the disks directory for directories without metadata.
-	if dirEntries, err := os.ReadDir(h.disksPath); err == nil {
+	// Also scan both type directories for directories without metadata.
+	for _, diskType := range []string{"shared", "workspace"} {
+		if filterType != "" && filterType != diskType {
+			continue
+		}
+		dirEntries, err := os.ReadDir(h.typePath(diskType))
+		if err != nil {
+			continue
+		}
 		for _, e := range dirEntries {
 			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || seen[e.Name()] {
-				continue
-			}
-			// Infer type from name convention; skip type filter for unmanaged disks
-			// unless filtering for "storage" (the default type).
-			if filterType != "" && filterType != "storage" {
 				continue
 			}
 			info, _ := e.Info()
@@ -198,12 +238,12 @@ func (h *Handler) ListDisks(c *gin.Context) {
 			disks = append(disks, DiskDetail{
 				Disk: Disk{
 					Name:      e.Name(),
-					Type:      "storage",
+					Type:      diskType,
 					Labels:    map[string]string{},
 					CreatedAt: createdAt,
 				},
-				SizeBytes: dirSize(h.diskDataPath(e.Name())),
-				Path:      h.diskDataPath(e.Name()),
+				SizeBytes: dirSize(h.diskDataPath(diskType, e.Name())),
+				Path:      h.diskDataPath(diskType, e.Name()),
 			})
 		}
 	}
@@ -215,82 +255,190 @@ func (h *Handler) ListDisks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"disks": disks})
 }
 
-// GetDisk handles GET /disks/:name.
+// GetDisk handles GET /disks/:type/:name.
 func (h *Handler) GetDisk(c *gin.Context) {
+	diskType := c.Param("type")
 	name := c.Param("name")
+
+	if err := validateDiskType(diskType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := validateDiskName(name); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	dataPath := h.diskDataPath(diskType, name)
+	if _, err := os.Stat(dataPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk %s/%s not found", diskType, name)})
 		return
 	}
 
 	d, err := h.loadDiskMeta(name)
 	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk %q not found", name)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		// No metadata in DB — construct from filesystem.
+		d = &Disk{Name: name, Type: diskType, Labels: map[string]string{}}
 	}
 
 	detail := DiskDetail{
 		Disk:      *d,
-		SizeBytes: dirSize(h.diskDataPath(name)),
-		Path:      h.diskDataPath(name),
+		SizeBytes: dirSize(dataPath),
+		Path:      dataPath,
 	}
 
 	c.JSON(http.StatusOK, detail)
 }
 
-// GetDiskPath handles GET /disks/:name/path.
+// GetDiskPath handles GET /disks/:type/:name/path.
 func (h *Handler) GetDiskPath(c *gin.Context) {
+	diskType := c.Param("type")
 	name := c.Param("name")
+
+	if err := validateDiskType(diskType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := validateDiskName(name); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if _, err := h.loadDiskMeta(name); err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk %q not found", name)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	dataPath := h.diskDataPath(diskType, name)
+	if _, err := os.Stat(dataPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk %s/%s not found", diskType, name)})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"name": name, "path": h.diskDataPath(name)})
+	c.JSON(http.StatusOK, gin.H{"name": name, "type": diskType, "path": dataPath})
 }
 
-// DeleteDisk handles DELETE /disks/:name.
-func (h *Handler) DeleteDisk(c *gin.Context) {
+// GetDiskByID handles GET /disks/by-id/:id.
+// Resolves a stable disk ID to its current name, type, and path.
+func (h *Handler) GetDiskByID(c *gin.Context) {
+	id := c.Param("id")
+
+	var rec DiskRecord
+	if err := h.db.First(&rec, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk with id %q not found", id)})
+		return
+	}
+
+	d := Disk{ID: rec.ID, Name: rec.Name, Type: rec.Type, CreatedAt: rec.CreatedAt}
+	if rec.Labels != "" {
+		json.Unmarshal([]byte(rec.Labels), &d.Labels)
+	}
+	if d.Labels == nil {
+		d.Labels = map[string]string{}
+	}
+
+	c.JSON(http.StatusOK, DiskDetail{
+		Disk:      d,
+		SizeBytes: dirSize(h.diskDataPath(rec.Type, rec.Name)),
+		Path:      h.diskDataPath(rec.Type, rec.Name),
+	})
+}
+
+// RenameDisk handles PATCH /disks/:type/:name.
+// Renames the disk directory and updates the metadata. The stable ID is preserved.
+func (h *Handler) RenameDisk(c *gin.Context) {
+	diskType := c.Param("type")
 	name := c.Param("name")
-	if err := validateDiskName(name); err != nil {
+
+	if err := validateDiskType(diskType); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if _, err := h.loadDiskMeta(name); err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk %q not found", name)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	var req struct {
+		Name string `json:"name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+
+	if err := validateDiskName(req.Name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Name == name {
+		// No-op — return current state.
+		h.GetDisk(c)
+		return
+	}
+
+	// Check new name doesn't collide.
+	newPath := h.diskDataPath(diskType, req.Name)
+	if _, err := os.Stat(newPath); err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("disk %q already exists", req.Name)})
+		return
+	}
+
+	oldPath := h.diskDataPath(diskType, name)
+	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("disk %s/%s not found", diskType, name)})
+		return
+	}
+
+	// Rename directory.
+	if err := os.Rename(oldPath, newPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename disk: " + err.Error()})
+		return
+	}
+
+	// Update DB record: delete old key, insert new (primary key is Name).
+	var rec DiskRecord
+	if err := h.db.First(&rec, "name = ?", name).Error; err == nil {
+		h.db.Delete(&rec)
+		rec.Name = req.Name
+		h.db.Create(&rec)
+	}
+
+	log.Printf("[storage-disk] renamed disk %s/%s -> %s", diskType, name, req.Name)
+
+	d := Disk{ID: rec.ID, Name: req.Name, Type: diskType, CreatedAt: rec.CreatedAt}
+	if rec.Labels != "" {
+		json.Unmarshal([]byte(rec.Labels), &d.Labels)
+	}
+	if d.Labels == nil {
+		d.Labels = map[string]string{}
+	}
+	c.JSON(http.StatusOK, DiskDetail{
+		Disk:      d,
+		SizeBytes: dirSize(newPath),
+		Path:      newPath,
+	})
+}
+
+// DeleteDisk handles DELETE /disks/:type/:name.
+func (h *Handler) DeleteDisk(c *gin.Context) {
+	diskType := c.Param("type")
+	name := c.Param("name")
+
+	if err := validateDiskType(diskType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateDiskName(name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Move disk data to trash before deleting.
-	diskPath := h.diskDataPath(name)
+	typeDir := h.typePath(diskType)
+	diskPath := h.diskDataPath(diskType, name)
 	if _, err := os.Stat(diskPath); err == nil {
-		if err := h.moveToTrash(h.disksPath, diskPath); err != nil {
+		if err := h.moveToTrash(typeDir, diskPath); err != nil {
 			log.Printf("[disks] trash data error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to trash disk data"})
 			return
 		}
 	}
 
-	// Remove metadata (not trashed — it's just a small JSON pointer).
-	if err := os.Remove(h.metaPath(name)); err != nil && !os.IsNotExist(err) {
+	// Remove metadata from database.
+	if err := h.deleteDiskMeta(name); err != nil {
 		log.Printf("[disks] delete meta error: %v", err)
 	}
 
@@ -338,12 +486,17 @@ func (h *Handler) ToolListDisks(c *gin.Context) {
 func (h *Handler) ToolDeleteDisk(c *gin.Context) {
 	var req struct {
 		Name string `json:"name"`
+		Type string `json:"type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
 
+	if req.Type == "" {
+		req.Type = h.findDiskType(req.Name)
+	}
+	c.Params = append(c.Params, gin.Param{Key: "type", Value: req.Type})
 	c.Params = append(c.Params, gin.Param{Key: "name", Value: req.Name})
 	h.DeleteDisk(c)
 }
@@ -353,14 +506,14 @@ func DiskToolDefs() []gin.H {
 	return []gin.H{
 		{
 			"name":        "create_disk",
-			"description": "Create a new namespace-isolated disk storage disk. Use type 'auth' for credential storage (read-only by default) or 'storage' for general purpose.",
+			"description": "Create a new disk. Use type 'shared' for persistent state shared across workspaces (e.g. auth tokens, config) or 'workspace' for per-workspace project files.",
 			"endpoint":    "/mcp/create_disk",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"name":   gin.H{"type": "string", "description": "Disk name (alphanumeric, hyphens, underscores, dots). E.g. 'claude-auth', 'workspace-task-123'"},
-					"type":   gin.H{"type": "string", "description": "Disk type: 'auth' for credentials or 'storage' for general data. Defaults to 'storage'.", "enum": []string{"auth", "storage"}},
-					"labels": gin.H{"type": "object", "description": "Optional key-value labels for the disk, e.g. {\"service\": \"claude\", \"plugin\": \"agent-claude\"}"},
+					"name":   gin.H{"type": "string", "description": "Disk name (alphanumeric, hyphens, underscores, dots). E.g. 'claude-shared', 'ws-abc123-myproject'"},
+					"type":   gin.H{"type": "string", "description": "Disk type: 'shared' for cross-workspace persistent state or 'workspace' for per-workspace data. Defaults to 'workspace'.", "enum": []string{"shared", "workspace"}},
+					"labels": gin.H{"type": "object", "description": "Optional key-value labels for the disk, e.g. {\"service\": \"claude\", \"environment\": \"workspace-env-claude-terminal\"}"},
 				},
 				"required": []string{"name"},
 			},
@@ -372,14 +525,14 @@ func DiskToolDefs() []gin.H {
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"type": gin.H{"type": "string", "description": "Filter by disk type: 'auth' or 'storage'. Omit to list all.", "enum": []string{"auth", "storage"}},
+					"type": gin.H{"type": "string", "description": "Filter by disk type: 'shared' or 'workspace'. Omit to list all.", "enum": []string{"shared", "workspace"}},
 				},
 				"required": []string{},
 			},
 		},
 		{
 			"name":        "delete_disk",
-			"description": "Delete a disk storage disk. Contents are moved to .Trash before removal and can be recovered.",
+			"description": "Delete a disk storage disk. Contents are moved to .trash before removal and can be recovered.",
 			"endpoint":    "/mcp/delete_disk",
 			"parameters": gin.H{
 				"type": "object",

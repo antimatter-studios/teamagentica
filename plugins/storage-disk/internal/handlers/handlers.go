@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,20 +13,70 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sys/unix"
+	"gorm.io/gorm"
+
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
 type Handler struct {
-	dataPath  string
-	disksPath string
-	debug     bool
+	dataPath    string
+	storageRoot string
+	debug       bool
+	db          *gorm.DB
 }
 
-func NewHandler(dataPath, disksPath string, debug bool) *Handler {
-	return &Handler{
-		dataPath:  dataPath,
-		disksPath: disksPath,
-		debug:     debug,
+func NewHandler(dataPath, storageRoot string, debug bool) *Handler {
+	dbDir := filepath.Join(dataPath, "database")
+	os.MkdirAll(dbDir, 0755)
+	db, err := pluginsdk.OpenDatabase(dbDir, "storage.db", &DiskRecord{})
+	if err != nil {
+		log.Fatalf("[storage-disk] failed to open database: %v", err)
 	}
+
+	backfillDiskIDs(db)
+
+	return &Handler{
+		dataPath:    dataPath,
+		storageRoot: storageRoot,
+		debug:       debug,
+		db:          db,
+	}
+}
+
+// DiskRecord stores disk metadata in the database.
+type DiskRecord struct {
+	ID        string `gorm:"uniqueIndex;size:36"` // stable UUID — survives renames
+	Name      string `gorm:"primaryKey"`
+	Type      string `gorm:"default:workspace"`
+	Labels    string // JSON object
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// backfillDiskIDs assigns UUIDs to any DiskRecord rows that have an empty ID.
+func backfillDiskIDs(db *gorm.DB) {
+	var recs []DiskRecord
+	db.Where("id = '' OR id IS NULL").Find(&recs)
+	for _, r := range recs {
+		r.ID = generateDiskID()
+		db.Save(&r)
+	}
+	if len(recs) > 0 {
+		log.Printf("[storage-disk] backfilled IDs for %d disk(s)", len(recs))
+	}
+}
+
+func generateDiskID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: timestamp-based (extremely unlikely).
+		return fmt.Sprintf("disk-%d", time.Now().UnixNano())
+	}
+	// UUID v4 format.
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 type diskStats struct {
@@ -56,7 +107,7 @@ func getDiskStats(path string) (*diskStats, error) {
 }
 
 func (h *Handler) Health(c *gin.Context) {
-	stats, err := getDiskStats(h.disksPath)
+	stats, err := getDiskStats(h.storageRoot)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"status": "ok",
@@ -73,21 +124,21 @@ func (h *Handler) Health(c *gin.Context) {
 	})
 }
 
-// moveToTrash copies a file or directory to .Trash preserving its relative path,
+// moveToTrash copies a file or directory to .trash preserving its relative path,
 // then removes the original only after the copy succeeds.
-// root is the base directory (dataPath or disksPath) that contains .Trash.
+// root is the type directory (e.g. storageRoot/shared) that contains .trash.
 func (h *Handler) moveToTrash(root, fullPath string) error {
 	rel, err := filepath.Rel(root, fullPath)
 	if err != nil {
 		return fmt.Errorf("compute relative path: %w", err)
 	}
 
-	// Never trash the .Trash directory itself.
-	if strings.HasPrefix(rel, ".Trash") {
-		return fmt.Errorf("cannot trash the .Trash directory")
+	// Never trash the .trash directory itself.
+	if strings.HasPrefix(rel, ".trash") {
+		return fmt.Errorf("cannot trash the .trash directory")
 	}
 
-	trashDest := filepath.Join(root, ".Trash", rel)
+	trashDest := filepath.Join(root, ".trash", rel)
 
 	// Handle collision: if dest already exists, append a timestamp suffix.
 	if _, err := os.Stat(trashDest); err == nil {

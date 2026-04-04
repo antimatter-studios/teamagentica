@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,34 +34,28 @@ func main() {
 		Port:         defaultPort,
 		Capabilities: manifest.Capabilities,
 		Version:      pluginsdk.DevVersion(manifest.Version),
-		DiscordCommands: []pluginsdk.DiscordCommand{
+		ChatCommands: []pluginsdk.ChatCommand{
 			{
-				Name:        "disk",
-				Description: "Manage storage disks",
-				Subcommands: []pluginsdk.DiscordSubcommand{
-					{
-						Name:        "list",
-						Description: "List all storage disks with size and metadata",
-						Endpoint:    "/discord-command/disk/list",
-					},
-					{
-						Name:        "create",
-						Description: "Create a new storage disk",
-						Endpoint:    "/discord-command/disk/create",
-						Options: []pluginsdk.DiscordCommandOption{
-							{Name: "name", Description: "Disk name (alphanumeric, hyphens, underscores, dots)", Type: "string", Required: true},
-							{Name: "type", Description: "Disk type: auth or storage (default: storage)", Type: "string"},
-						},
-					},
-					{
-						Name:        "rename",
-						Description: "Rename an existing disk",
-						Endpoint:    "/discord-command/disk/rename",
-						Options: []pluginsdk.DiscordCommandOption{
-							{Name: "disk", Description: "Current disk name", Type: "string", Required: true},
-							{Name: "name", Description: "New disk name", Type: "string", Required: true},
-						},
-					},
+				Name: "list", Namespace: "disk",
+				Description: "List all storage disks with size and metadata",
+				Endpoint:    "/chat-command/disk/list",
+			},
+			{
+				Name: "create", Namespace: "disk",
+				Description: "Create a new storage disk",
+				Endpoint:    "/chat-command/disk/create",
+				Params: []pluginsdk.ChatCommandParam{
+					{Name: "name", Description: "Disk name (alphanumeric, hyphens, underscores, dots)", Type: "string", Required: true},
+					{Name: "type", Description: "Disk type: shared or workspace (default: workspace)", Type: "string"},
+				},
+			},
+			{
+				Name: "rename", Namespace: "disk",
+				Description: "Rename an existing disk",
+				Endpoint:    "/chat-command/disk/rename",
+				Params: []pluginsdk.ChatCommandParam{
+					{Name: "disk", Description: "Current disk name", Type: "string", Required: true},
+					{Name: "name", Description: "New disk name", Type: "string", Required: true},
 				},
 			},
 		},
@@ -82,7 +74,7 @@ func main() {
 	sdkClient.Start(ctx)
 
 	// Subscribe to config updates.
-	sdkClient.OnEvent("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	sdkClient.Events().On("config:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		log.Printf("Received config:update (seq=%d)", event.Seq)
 	}))
 
@@ -94,25 +86,32 @@ func main() {
 
 	// Extract config values with defaults.
 	dataPath := configOrDefault(pluginConfig, "STORAGE_DATA_PATH", "/data")
-	disksPath := configOrDefault(pluginConfig, "STORAGE_DISKS_PATH", "/data/disks")
+	storageRoot := configOrDefault(pluginConfig, "STORAGE_ROOT_PATH", "/data/storage-root")
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 	port := parseIntOrDefault(configOrDefault(pluginConfig, "STORAGE_DISK_PORT", ""), defaultPort)
 
-	// Ensure disks and metadata directories exist.
-	for _, dir := range []string{disksPath, filepath.Join(dataPath, "meta")} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Printf("[storage-disk] WARNING: failed to create directory %s: %v (some operations may fail)", dir, err)
+	// Ensure type directories exist.
+	for _, sub := range []string{"shared", "workspace"} {
+		if err := os.MkdirAll(filepath.Join(storageRoot, sub), 0755); err != nil {
+			log.Printf("[storage-disk] WARNING: failed to create directory %s/%s: %v", storageRoot, sub, err)
 		}
 	}
 
 	router := gin.Default()
-	router.GET("/schema", gin.WrapF(sdkClient.SchemaHandler()))
-	router.POST("/events", gin.WrapF(sdkClient.EventHandler()))
-	h = handlers.NewHandler(dataPath, disksPath, debug)
+	h = handlers.NewHandler(dataPath, storageRoot, debug)
 
 	router.GET("/health", h.Health)
 
-	// storage:api — standard file interface on dataPath.
+	// Disk management endpoints.
+	router.POST("/disks", h.CreateDisk)
+	router.GET("/disks", h.ListDisks)
+	router.GET("/disks/by-id/:id", h.GetDiskByID)
+	router.GET("/disks/:type/:name", h.GetDisk)
+	router.GET("/disks/:type/:name/path", h.GetDiskPath)
+	router.PATCH("/disks/:type/:name", h.RenameDisk)
+	router.DELETE("/disks/:type/:name", h.DeleteDisk)
+
+	// File operations (scoped to within disks).
 	router.GET("/browse", h.Browse)
 	router.PUT("/objects/*key", h.PutObject)
 	router.GET("/objects/*key", h.GetObject)
@@ -122,22 +121,15 @@ func main() {
 	router.POST("/objects/move", h.MoveObject)
 	router.GET("/download/zip", h.DownloadZip)
 
-	// Trash endpoints.
-	router.GET("/trash/browse", h.BrowseTrash)
-	router.POST("/trash/restore", h.RestoreTrash)
-	router.POST("/trash/empty", h.EmptyTrash)
+	// Trash endpoints (per-type, whole-disk only).
+	router.GET("/trash/:type/browse", h.BrowseTrash)
+	router.POST("/trash/:type/restore", h.RestoreTrash)
+	router.POST("/trash/:type/empty", h.EmptyTrash)
 
-	// storage:disk — disk management endpoints.
-	router.POST("/disks", h.CreateDisk)
-	router.GET("/disks", h.ListDisks)
-	router.GET("/disks/:name", h.GetDisk)
-	router.GET("/disks/:name/path", h.GetDiskPath)
-	router.DELETE("/disks/:name", h.DeleteDisk)
-
-	// Discord slash command handlers.
-	router.POST("/discord-command/disk/list", h.DiscordCommandDiskList)
-	router.POST("/discord-command/disk/create", h.DiscordCommandDiskCreate)
-	router.POST("/discord-command/disk/rename", h.DiscordCommandDiskRename)
+	// Chat command handlers (used by infra-chat-command-server).
+	router.POST("/chat-command/disk/list", h.ChatCommandDiskList)
+	router.POST("/chat-command/disk/create", h.ChatCommandDiskCreate)
+	router.POST("/chat-command/disk/rename", h.ChatCommandDiskRename)
 
 	// Tool interface for AI agents.
 	router.GET("/mcp", h.Tools)
@@ -153,17 +145,13 @@ func main() {
 	router.POST("/mcp/empty_trash", h.ToolEmptyTrash)
 
 	// Push tools to MCP server when it becomes available.
-	sdkClient.WhenPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
+	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {
 			log.Printf("failed to register tools with MCP: %v", err)
 		}
 	})
 
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
-	}
-	pluginsdk.RunWithGracefulShutdown(server, sdkClient)
+	sdkClient.ListenAndServe(port, router)
 }
 
 func configOrDefault(m map[string]string, key, fallback string) string {

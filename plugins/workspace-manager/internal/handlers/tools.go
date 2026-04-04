@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -72,6 +71,30 @@ func (h *Handler) ToolDefs() interface{} {
 			},
 		},
 		{
+			"name":        "stop_workspace",
+			"description": "Stop a running workspace container. The workspace record and volume are preserved — use start_workspace to re-launch it later.",
+			"endpoint":    "/mcp/stop_workspace",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"workspace_id": gin.H{"type": "string", "description": "ID of the workspace to stop"},
+				},
+				"required": []string{"workspace_id"},
+			},
+		},
+		{
+			"name":        "delete_workspace",
+			"description": "Permanently delete a workspace record. Stops the container if running. The volume (disk data) is NOT deleted — use volume management to remove it separately.",
+			"endpoint":    "/mcp/delete_workspace",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"workspace_id": gin.H{"type": "string", "description": "ID of the workspace to delete"},
+				},
+				"required": []string{"workspace_id"},
+			},
+		},
+		{
 			"name":        "build_plugin",
 			"description": "Build a Docker image for a plugin from source in a storage volume. Requires the infra-builder plugin to be installed. Returns build status and image tag.",
 			"endpoint":    "/mcp/build_plugin",
@@ -133,32 +156,19 @@ func (h *Handler) Tools(c *gin.Context) {
 
 // ToolListEnvironments handles POST /mcp/list_environments.
 func (h *Handler) ToolListEnvironments(c *gin.Context) {
-	if h.sdk == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
-		return
-	}
-
-	plugins, err := h.sdk.SearchPlugins("workspace:environment")
+	recs, err := h.db.ListEnvironments()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to discover environments"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list environments"})
 		return
 	}
 
-	var envs []gin.H
-	for _, p := range plugins {
-		ws := h.fetchWorkspaceSchema(p.ID)
-		if ws == nil {
-			continue
-		}
+	envs := make([]gin.H, 0, len(recs))
+	for _, r := range recs {
 		envs = append(envs, gin.H{
-			"environment_id": p.ID,
-			"name":           ws.DisplayName,
-			"description":    ws.Description,
+			"environment_id": r.PluginID,
+			"name":           r.DisplayName,
+			"description":    r.Description,
 		})
-	}
-
-	if envs == nil {
-		envs = []gin.H{}
 	}
 	c.JSON(http.StatusOK, gin.H{"environments": envs})
 }
@@ -212,6 +222,56 @@ func (h *Handler) ToolStartWorkspace(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// ToolStopWorkspace handles POST /mcp/stop_workspace.
+func (h *Handler) ToolStopWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	var req struct {
+		WorkspaceID string `json:"workspace_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace_id is required"})
+		return
+	}
+
+	mc, err := h.sdk.StopManagedContainer(req.WorkspaceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop workspace: " + err.Error()})
+		return
+	}
+
+	h.emitEvent("workspace:stopped", fmt.Sprintf(`{"id":"%s"}`, req.WorkspaceID))
+	c.JSON(http.StatusOK, gin.H{"status": "stopped", "id": mc.ID, "name": mc.Name})
+}
+
+// ToolDeleteWorkspace handles POST /mcp/delete_workspace.
+func (h *Handler) ToolDeleteWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	var req struct {
+		WorkspaceID string `json:"workspace_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace_id is required"})
+		return
+	}
+
+	if err := h.sdk.DeleteManagedContainer(req.WorkspaceID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete workspace: " + err.Error()})
+		return
+	}
+
+	h.db.Delete(req.WorkspaceID)
+	h.emitEvent("workspace:deleted", fmt.Sprintf(`{"id":"%s"}`, req.WorkspaceID))
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": req.WorkspaceID})
+}
+
 // ToolRenameWorkspace handles POST /mcp/rename_workspace.
 func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 	if h.sdk == nil {
@@ -261,8 +321,8 @@ func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 	newVolumeName := wsPrefix + newSlug
 
 	if newVolumeName != found.VolumeName {
-		oldPath := filepath.Join(h.workspaceDir, "volumes", found.VolumeName)
-		newPath := filepath.Join(h.workspaceDir, "volumes", newVolumeName)
+		oldPath := h.diskPath(found.VolumeName)
+		newPath := h.diskPath(newVolumeName)
 
 		if _, err := os.Stat(newPath); err == nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "a volume with that name already exists"})
@@ -282,8 +342,8 @@ func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 		})
 		if err != nil {
 			os.Rename(
-				filepath.Join(h.workspaceDir, "volumes", newVolumeName),
-				filepath.Join(h.workspaceDir, "volumes", found.VolumeName),
+				h.diskPath(newVolumeName),
+				h.diskPath(found.VolumeName),
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace: " + err.Error()})
 			return

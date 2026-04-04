@@ -41,11 +41,11 @@ func mimeByExt(name string) string {
 	return ct
 }
 
-// resolvePath safely resolves a key to a filesystem path within dataPath.
+// resolvePath safely resolves a key to a filesystem path within storageRoot (read-only access).
 func (h *Handler) resolvePath(key string) (string, error) {
 	cleaned := filepath.Clean("/" + key)
-	full := filepath.Join(h.dataPath, cleaned)
-	cleanBase := filepath.Clean(h.dataPath)
+	full := filepath.Join(h.storageRoot, cleaned)
+	cleanBase := filepath.Clean(h.storageRoot)
 	if !strings.HasPrefix(full, cleanBase) {
 		return "", fmt.Errorf("path traversal denied")
 	}
@@ -68,11 +68,68 @@ func (h *Handler) resolvePath(key string) (string, error) {
 	return full, nil
 }
 
+// resolveWritablePath resolves a key and ensures it's inside a disk (type/disk/...).
+// Files can only be created inside a disk, not at the storageRoot or type level.
+func (h *Handler) resolveWritablePath(key string) (string, error) {
+	full, err := h.resolvePath(key)
+	if err != nil {
+		return "", err
+	}
+
+	// Key must have at least 3 path components: <type>/<disk>/<something>
+	parts := strings.Split(strings.Trim(filepath.Clean(key), "/"), "/")
+	if len(parts) < 3 {
+		return "", fmt.Errorf("files can only be written inside a disk (e.g. shared/my-disk/file.txt)")
+	}
+
+	// First component must be a valid disk type.
+	if err := validateDiskType(parts[0]); err != nil {
+		return "", err
+	}
+
+	return full, nil
+}
+
 // --- storage:api REST endpoints ---
 
 // Browse handles GET /browse?prefix=.
+// At the root level, a virtual .trash/ folder is injected that aggregates
+// the per-type .trash directories. Browsing .trash/ shows type subdirectories,
+// and .trash/<type>/... maps to storageRoot/<type>/.trash/...
 func (h *Handler) Browse(c *gin.Context) {
 	prefix := c.Query("prefix")
+
+	// Virtual .trash/ at root: list type subdirs that have .trash contents.
+	if prefix == ".trash/" {
+		result := browseResult{Prefix: prefix}
+		for _, t := range []string{"shared", "workspace"} {
+			trashDir := filepath.Join(h.storageRoot, t, ".trash")
+			if entries, err := os.ReadDir(trashDir); err == nil && len(entries) > 0 {
+				result.Folders = append(result.Folders, prefix+t+"/")
+			}
+		}
+		c.JSON(http.StatusOK, result)
+		return
+	}
+
+	// Virtual .trash/<type>/... → storageRoot/<type>/.trash/...
+	if strings.HasPrefix(prefix, ".trash/") {
+		rest := strings.TrimPrefix(prefix, ".trash/")
+		// Extract type from first path component.
+		parts := strings.SplitN(rest, "/", 2)
+		diskType := parts[0]
+		if err := validateDiskType(diskType); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		subPrefix := ""
+		if len(parts) > 1 {
+			subPrefix = parts[1]
+		}
+		dirPath := filepath.Join(h.storageRoot, diskType, ".trash", subPrefix)
+		h.browseDir(c, prefix, dirPath, false)
+		return
+	}
 
 	dirPath, err := h.resolvePath(prefix)
 	if err != nil {
@@ -80,19 +137,38 @@ func (h *Handler) Browse(c *gin.Context) {
 		return
 	}
 
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, browseResult{Prefix: prefix})
-			return
+	result := h.buildBrowseResult(prefix, dirPath, true)
+
+	// At root, inject virtual .trash/ if any type has trash contents.
+	if prefix == "" {
+		for _, t := range []string{"shared", "workspace"} {
+			trashDir := filepath.Join(h.storageRoot, t, ".trash")
+			if entries, err := os.ReadDir(trashDir); err == nil && len(entries) > 0 {
+				result.Folders = append(result.Folders, ".trash/")
+				break
+			}
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
 	}
 
+	c.JSON(http.StatusOK, result)
+}
+
+// browseDir lists a directory and returns the result as JSON.
+func (h *Handler) browseDir(c *gin.Context, prefix, dirPath string, skipTrash bool) {
+	c.JSON(http.StatusOK, h.buildBrowseResult(prefix, dirPath, skipTrash))
+}
+
+// buildBrowseResult reads a directory and builds a browseResult.
+func (h *Handler) buildBrowseResult(prefix, dirPath string, skipTrash bool) browseResult {
 	result := browseResult{Prefix: prefix}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return result
+	}
+
 	for _, e := range entries {
-		if e.Name() == ".Trash" {
+		if skipTrash && e.Name() == ".trash" {
 			continue
 		}
 		if e.IsDir() {
@@ -112,7 +188,7 @@ func (h *Handler) Browse(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, result)
+	return result
 }
 
 // PutObject handles PUT /objects/*key.
@@ -123,7 +199,7 @@ func (h *Handler) PutObject(c *gin.Context) {
 		return
 	}
 
-	fullPath, err := h.resolvePath(key)
+	fullPath, err := h.resolveWritablePath(key)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -194,7 +270,7 @@ func (h *Handler) DeleteObject(c *gin.Context) {
 		return
 	}
 
-	fullPath, err := h.resolvePath(key)
+	fullPath, err := h.resolveWritablePath(key)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -205,8 +281,8 @@ func (h *Handler) DeleteObject(c *gin.Context) {
 		return
 	}
 
-	if err := h.moveToTrash(h.dataPath, fullPath); err != nil {
-		log.Printf("[storage-api] trash error: %v", err)
+	if err := os.RemoveAll(fullPath); err != nil {
+		log.Printf("[storage-api] delete error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -231,7 +307,7 @@ func (h *Handler) CopyObject(c *gin.Context) {
 		return
 	}
 
-	dstPath, err := h.resolvePath(req.Destination)
+	dstPath, err := h.resolveWritablePath(req.Destination)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -301,13 +377,13 @@ func (h *Handler) MoveObject(c *gin.Context) {
 		return
 	}
 
-	srcPath, err := h.resolvePath(req.Source)
+	srcPath, err := h.resolveWritablePath(req.Source)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	dstPath, err := h.resolvePath(req.Destination)
+	dstPath, err := h.resolveWritablePath(req.Destination)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -446,7 +522,7 @@ func StorageAPIToolDefs() []gin.H {
 		},
 		{
 			"name":        "delete_file",
-			"description": "Delete a file from storage. The file is moved to .Trash before removal and can be recovered.",
+			"description": "Permanently delete a file from storage.",
 			"endpoint":    "/mcp/delete_file",
 			"parameters": gin.H{
 				"type": "object",
@@ -460,6 +536,7 @@ func StorageAPIToolDefs() []gin.H {
 }
 
 // ToolListFiles handles POST /mcp/list_files.
+// Delegates to Browse via query params so virtual .trash/ logic is shared.
 func (h *Handler) ToolListFiles(c *gin.Context) {
 	var req struct {
 		Prefix string `json:"prefix"`
@@ -468,46 +545,8 @@ func (h *Handler) ToolListFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-
-	dirPath, err := h.resolvePath(req.Prefix)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, browseResult{Prefix: req.Prefix})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	result := browseResult{Prefix: req.Prefix}
-	for _, e := range entries {
-		if e.Name() == ".Trash" {
-			continue
-		}
-		if e.IsDir() {
-			result.Folders = append(result.Folders, req.Prefix+e.Name()+"/")
-		} else {
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			result.Files = append(result.Files, storageFile{
-				Key:          req.Prefix + e.Name(),
-				Size:         info.Size(),
-				ContentType:  mimeByExt(e.Name()),
-				LastModified: info.ModTime(),
-				ETag:         fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size()),
-			})
-		}
-	}
-
-	c.JSON(http.StatusOK, result)
+	c.Request.URL.RawQuery = "prefix=" + req.Prefix
+	h.Browse(c)
 }
 
 // ToolReadFile handles POST /mcp/read_file.
@@ -568,7 +607,7 @@ func (h *Handler) ToolWriteFile(c *gin.Context) {
 		return
 	}
 
-	fullPath, err := h.resolvePath(req.Key)
+	fullPath, err := h.resolveWritablePath(req.Key)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -610,7 +649,7 @@ func (h *Handler) ToolDeleteFile(c *gin.Context) {
 		return
 	}
 
-	fullPath, err := h.resolvePath(req.Key)
+	fullPath, err := h.resolveWritablePath(req.Key)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -621,8 +660,8 @@ func (h *Handler) ToolDeleteFile(c *gin.Context) {
 		return
 	}
 
-	if err := h.moveToTrash(h.dataPath, fullPath); err != nil {
-		log.Printf("[storage-api] trash error: %v", err)
+	if err := os.RemoveAll(fullPath); err != nil {
+		log.Printf("[storage-api] delete error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -630,17 +669,17 @@ func (h *Handler) ToolDeleteFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "deleted"})
 }
 
-// --- Trash endpoints ---
+// --- Trash endpoints (per-type .trash) ---
 
-// trashBasePath returns the .Trash directory path within dataPath.
-func (h *Handler) trashBasePath() string {
-	return filepath.Join(h.dataPath, ".Trash")
+// trashPath returns the .trash directory for a disk type.
+func (h *Handler) trashPath(diskType string) string {
+	return filepath.Join(h.storageRoot, diskType, ".trash")
 }
 
-// resolveTrashPath safely resolves a key to a path within .Trash.
-func (h *Handler) resolveTrashPath(key string) (string, error) {
+// resolveTrashPath safely resolves a key to a path within a type's .trash.
+func (h *Handler) resolveTrashPath(diskType, key string) (string, error) {
 	cleaned := filepath.Clean("/" + key)
-	trashBase := h.trashBasePath()
+	trashBase := h.trashPath(diskType)
 	full := filepath.Join(trashBase, cleaned)
 	if !strings.HasPrefix(full, filepath.Clean(trashBase)) {
 		return "", fmt.Errorf("path traversal denied")
@@ -648,15 +687,19 @@ func (h *Handler) resolveTrashPath(key string) (string, error) {
 	return full, nil
 }
 
-// BrowseTrash handles GET /trash/browse?prefix=.
+// BrowseTrash handles GET /trash/:type/browse?prefix=.
 func (h *Handler) BrowseTrash(c *gin.Context) {
-	prefix := c.Query("prefix")
+	diskType := c.Param("type")
+	if err := validateDiskType(diskType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-	trashDir := h.trashBasePath()
-	dirPath := trashDir
+	prefix := c.Query("prefix")
+	dirPath := h.trashPath(diskType)
 	if prefix != "" {
 		var err error
-		dirPath, err = h.resolveTrashPath(prefix)
+		dirPath, err = h.resolveTrashPath(diskType, prefix)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -695,126 +738,92 @@ func (h *Handler) BrowseTrash(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// RestoreTrash handles POST /trash/restore — move a file from .Trash back to its original location.
+// RestoreTrash handles POST /trash/:type/restore — move a disk from .trash back to its type directory.
 func (h *Handler) RestoreTrash(c *gin.Context) {
+	diskType := c.Param("type")
+	if err := validateDiskType(diskType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	var req struct {
-		Key string `json:"key"`
+		Name string `json:"name"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Key == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
 
-	trashPath, err := h.resolveTrashPath(req.Key)
+	trashItemPath, err := h.resolveTrashPath(diskType, req.Name)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if _, err := os.Stat(trashPath); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Key)})
+	if _, err := os.Stat(trashItemPath); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Name)})
 		return
 	}
 
-	// Restore to original location under dataPath.
-	restorePath, err := h.resolvePath(req.Key)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Don't overwrite existing files.
+	restorePath := h.diskDataPath(diskType, req.Name)
 	if _, err := os.Stat(restorePath); err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("file already exists at original location: %s", req.Key)})
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("disk %q already exists", req.Name)})
 		return
 	}
 
-	if err := os.MkdirAll(filepath.Dir(restorePath), 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := os.Rename(trashPath, restorePath); err != nil {
+	if err := os.Rename(trashItemPath, restorePath); err != nil {
 		// Fallback: copy + delete (cross-device).
-		info, statErr := os.Stat(trashPath)
-		if statErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if cpErr := copyDirRecursive(trashItemPath, restorePath); cpErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": cpErr.Error()})
 			return
 		}
-		if info.IsDir() {
-			if cpErr := copyDirRecursive(trashPath, restorePath); cpErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": cpErr.Error()})
-				return
-			}
-			os.RemoveAll(trashPath)
-		} else {
-			if cpErr := copySingleFile(trashPath, restorePath); cpErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": cpErr.Error()})
-				return
-			}
-			os.Remove(trashPath)
-		}
+		os.RemoveAll(trashItemPath)
 	}
 
-	// Clean up empty parent dirs in .Trash.
-	h.cleanEmptyTrashDirs(filepath.Dir(trashPath))
-
-	log.Printf("[storage] restored from trash: %s", req.Key)
-	c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "restored"})
+	log.Printf("[storage] restored from trash: %s/%s", diskType, req.Name)
+	c.JSON(http.StatusOK, gin.H{"name": req.Name, "type": diskType, "status": "restored"})
 }
 
-// EmptyTrash handles POST /trash/empty — permanently delete trash contents.
+// EmptyTrash handles POST /trash/:type/empty — permanently delete trash contents.
 func (h *Handler) EmptyTrash(c *gin.Context) {
+	diskType := c.Param("type")
+	if err := validateDiskType(diskType); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	var req struct {
-		Key string `json:"key"` // Optional: empty specific item, or all if empty.
+		Name string `json:"name"`
 	}
 	c.ShouldBindJSON(&req)
 
-	if req.Key != "" {
-		trashPath, err := h.resolveTrashPath(req.Key)
+	if req.Name != "" {
+		trashItemPath, err := h.resolveTrashPath(diskType, req.Name)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if _, err := os.Stat(trashPath); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Key)})
+		if _, err := os.Stat(trashItemPath); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("not found in trash: %s", req.Name)})
 			return
 		}
-		if err := os.RemoveAll(trashPath); err != nil {
+		if err := os.RemoveAll(trashItemPath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		h.cleanEmptyTrashDirs(filepath.Dir(trashPath))
-		log.Printf("[storage] permanently deleted from trash: %s", req.Key)
-		c.JSON(http.StatusOK, gin.H{"key": req.Key, "status": "permanently_deleted"})
+		log.Printf("[storage] permanently deleted from trash: %s/%s", diskType, req.Name)
+		c.JSON(http.StatusOK, gin.H{"name": req.Name, "type": diskType, "status": "permanently_deleted"})
 		return
 	}
 
-	// Empty entire trash.
-	trashBase := h.trashBasePath()
+	// Empty entire type trash.
+	trashBase := h.trashPath(diskType)
 	if err := os.RemoveAll(trashBase); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[storage] emptied trash")
-	c.JSON(http.StatusOK, gin.H{"status": "trash_emptied"})
-}
-
-// cleanEmptyTrashDirs removes empty parent directories up to the .Trash root.
-func (h *Handler) cleanEmptyTrashDirs(dir string) {
-	trashBase := filepath.Clean(h.trashBasePath())
-	for {
-		dir = filepath.Clean(dir)
-		if dir == trashBase || !strings.HasPrefix(dir, trashBase) {
-			break
-		}
-		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
-			break
-		}
-		os.Remove(dir)
-		dir = filepath.Dir(dir)
-	}
+	log.Printf("[storage] emptied %s trash", diskType)
+	c.JSON(http.StatusOK, gin.H{"type": diskType, "status": "trash_emptied"})
 }
 
 // TrashToolDefs returns tool definitions for trash management.
@@ -822,38 +831,41 @@ func TrashToolDefs() []gin.H {
 	return []gin.H{
 		{
 			"name":        "browse_trash",
-			"description": "Browse deleted files in the trash. Returns folder names and file metadata, same format as list_files.",
+			"description": "Browse deleted disks in the trash for a given type (shared or workspace).",
 			"endpoint":    "/mcp/browse_trash",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
+					"type":   gin.H{"type": "string", "description": "Disk type: 'shared' or 'workspace'.", "enum": []string{"shared", "workspace"}},
 					"prefix": gin.H{"type": "string", "description": "Path prefix within trash to browse. Use empty string for trash root."},
 				},
-				"required": []string{},
+				"required": []string{"type"},
 			},
 		},
 		{
 			"name":        "restore_from_trash",
-			"description": "Restore a deleted file or folder from trash back to its original location.",
+			"description": "Restore a deleted disk from trash back to its type directory.",
 			"endpoint":    "/mcp/restore_from_trash",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"key": gin.H{"type": "string", "description": "Path/key of the file in trash to restore (same as original path)"},
+					"type": gin.H{"type": "string", "description": "Disk type: 'shared' or 'workspace'.", "enum": []string{"shared", "workspace"}},
+					"name": gin.H{"type": "string", "description": "Name of the disk to restore from trash"},
 				},
-				"required": []string{"key"},
+				"required": []string{"type", "name"},
 			},
 		},
 		{
 			"name":        "empty_trash",
-			"description": "Permanently delete files from trash. Specify a key to delete one item, or omit to empty all trash.",
+			"description": "Permanently delete disks from trash. Specify a name to delete one item, or omit to empty all trash for the type.",
 			"endpoint":    "/mcp/empty_trash",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"key": gin.H{"type": "string", "description": "Optional: specific path/key to permanently delete from trash. Omit to empty all trash."},
+					"type": gin.H{"type": "string", "description": "Disk type: 'shared' or 'workspace'.", "enum": []string{"shared", "workspace"}},
+					"name": gin.H{"type": "string", "description": "Optional: specific disk name to permanently delete from trash. Omit to empty all trash for the type."},
 				},
-				"required": []string{},
+				"required": []string{"type"},
 			},
 		},
 	}
@@ -862,10 +874,14 @@ func TrashToolDefs() []gin.H {
 // ToolBrowseTrash handles POST /mcp/browse_trash.
 func (h *Handler) ToolBrowseTrash(c *gin.Context) {
 	var req struct {
+		Type   string `json:"type"`
 		Prefix string `json:"prefix"`
 	}
-	c.ShouldBindJSON(&req)
-
+	if err := c.ShouldBindJSON(&req); err != nil || req.Type == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type is required"})
+		return
+	}
+	c.Params = append(c.Params, gin.Param{Key: "type", Value: req.Type})
 	if req.Prefix != "" {
 		c.Request.URL.RawQuery = "prefix=" + req.Prefix
 	}
@@ -874,11 +890,28 @@ func (h *Handler) ToolBrowseTrash(c *gin.Context) {
 
 // ToolRestoreFromTrash handles POST /mcp/restore_from_trash.
 func (h *Handler) ToolRestoreFromTrash(c *gin.Context) {
+	var req struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Type == "" || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type and name are required"})
+		return
+	}
+	c.Params = append(c.Params, gin.Param{Key: "type", Value: req.Type})
 	h.RestoreTrash(c)
 }
 
 // ToolEmptyTrash handles POST /mcp/empty_trash.
 func (h *Handler) ToolEmptyTrash(c *gin.Context) {
+	var req struct {
+		Type string `json:"type"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Type == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type is required"})
+		return
+	}
+	c.Params = append(c.Params, gin.Param{Key: "type", Value: req.Type})
 	h.EmptyTrash(c)
 }
 
