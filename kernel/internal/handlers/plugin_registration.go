@@ -475,15 +475,18 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 			detail = string(body)
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
-		h.Events.Emit(events.DebugEvent{
-			Type:     eventType,
-			PluginID: pluginID,
-			Method:   c.Request.Method,
-			Path:     path,
-			Status:   resp.StatusCode,
-			Duration: time.Since(start).Milliseconds(),
-			Detail:   detail,
-		})
+		// Only emit on errors — successful proxies are noise.
+		if resp.StatusCode >= 400 {
+			h.Events.Emit(events.DebugEvent{
+				Type:     eventType + "-error",
+				PluginID: pluginID,
+				Method:   c.Request.Method,
+				Path:     path,
+				Status:   resp.StatusCode,
+				Duration: time.Since(start).Milliseconds(),
+				Detail:   detail,
+			})
+		}
 		return nil
 	}
 
