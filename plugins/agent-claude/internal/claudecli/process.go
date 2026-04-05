@@ -163,6 +163,9 @@ type streamContentBlock struct {
 // a "result" event arrives. Returns all events (including intermediates) via
 // the provided callback, or collects and returns the final ChatResponse.
 func (p *process) sendMessage(prompt string, streamCb func(StreamEvent)) (*ChatResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	msg := streamInputMessage{
 		Type:      "user",
 		UUID:      generateUUID(),

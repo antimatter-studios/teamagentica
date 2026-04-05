@@ -1,12 +1,7 @@
 package anthropic
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
 )
 
 // ToolDef describes a tool available for function calling.
@@ -15,8 +10,6 @@ type ToolDef struct {
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
 }
-
-const defaultEndpoint = "https://api.anthropic.com/v1"
 
 // Message represents a single chat message.
 type Message struct {
@@ -63,146 +56,3 @@ type ChatResponse struct {
 	Usage      Usage          `json:"usage"`
 }
 
-var httpClient = &http.Client{
-	Timeout: 120 * time.Second,
-}
-
-// chatRequest is the request body for the Anthropic messages API.
-type chatRequest struct {
-	Model     string        `json:"model"`
-	MaxTokens int           `json:"max_tokens"`
-	Messages  []interface{} `json:"messages"`
-	System    string        `json:"system,omitempty"`
-	Tools     []ToolDef     `json:"tools,omitempty"`
-}
-
-// ChatCompletion calls the Anthropic messages API directly.
-// Optional tools can be passed to enable function calling.
-func ChatCompletion(apiKey, model string, messages []Message, maxTokens int, tools ...ToolDef) (*ChatResponse, error) {
-	if maxTokens <= 0 {
-		maxTokens = 8192
-	}
-
-	reqBody := chatRequest{
-		Model:     model,
-		MaxTokens: maxTokens,
-		Messages:  buildAPIMessages(messages),
-	}
-	if len(tools) > 0 {
-		reqBody.Tools = tools
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := defaultEndpoint + "/messages"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Anthropic returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	return &chatResp, nil
-}
-
-// GetResponseText extracts the text content from a response.
-func GetResponseText(resp *ChatResponse) string {
-	for _, block := range resp.Content {
-		if block.Type == "text" {
-			return block.Text
-		}
-	}
-	return ""
-}
-
-// GetToolUseBlocks returns tool_use content blocks from the response.
-func GetToolUseBlocks(resp *ChatResponse) []ContentBlock {
-	var blocks []ContentBlock
-	for _, b := range resp.Content {
-		if b.Type == "tool_use" {
-			blocks = append(blocks, b)
-		}
-	}
-	return blocks
-}
-
-// buildAPIMessages converts Message slices into the interface{} format
-// required by the Anthropic API, handling structured content for tool use
-// and tool results.
-func buildAPIMessages(messages []Message) []interface{} {
-	result := make([]interface{}, 0, len(messages))
-	for _, msg := range messages {
-		// Assistant message with tool use blocks.
-		if msg.Role == "assistant" && len(msg.ToolUseBlocks) > 0 {
-			blocks := make([]interface{}, 0)
-			if msg.Content != "" {
-				blocks = append(blocks, map[string]interface{}{
-					"type": "text",
-					"text": msg.Content,
-				})
-			}
-			for _, tb := range msg.ToolUseBlocks {
-				blocks = append(blocks, map[string]interface{}{
-					"type":  "tool_use",
-					"id":    tb.ID,
-					"name":  tb.Name,
-					"input": tb.Input,
-				})
-			}
-			result = append(result, map[string]interface{}{
-				"role":    "assistant",
-				"content": blocks,
-			})
-			continue
-		}
-
-		// User message with tool results.
-		if msg.Role == "user" && len(msg.ToolResults) > 0 {
-			blocks := make([]interface{}, 0)
-			for _, tr := range msg.ToolResults {
-				blocks = append(blocks, map[string]interface{}{
-					"type":        "tool_result",
-					"tool_use_id": tr.ToolUseID,
-					"content":     tr.Content,
-				})
-			}
-			result = append(result, map[string]interface{}{
-				"role":    "user",
-				"content": blocks,
-			})
-			continue
-		}
-
-		// Regular message.
-		result = append(result, map[string]interface{}{
-			"role":    msg.Role,
-			"content": msg.Content,
-		})
-	}
-	return result
-}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -143,8 +144,7 @@ func main() {
 
 	// Register routes.
 	router.GET("/health", h.Health)
-	router.POST("/chat", h.Chat)
-	router.POST("/chat/stream", h.ChatStream)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.GET("/mcp", h.DiscoveredTools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
@@ -168,38 +168,46 @@ func main() {
 
 	// MCP server integration: CLI subprocess connects to the plugin's own
 	// /mcp-proxy route on localhost, which forwards to infra-mcp-server via SDK mTLS.
+	//
+	// Two modes — enable or disable — each leaves the system fully consistent:
+	//   Enable:  peer cache set + mcpPluginID set + config file written
+	//   Disable: peer cache cleared + mcpPluginID cleared + config file removed
 	if backend == "cli" {
 		claudeDir := dataPath + "/claude-home"
 		proxyURL := fmt.Sprintf("https://localhost:%d/mcp-proxy", defaultPort)
+		const mcpPlugin = "infra-mcp-server"
 
-		// Helper to configure MCP when the server is discovered.
-		configureMCP := func(mcpPluginID string) {
-			h.SetMCPPluginID(mcpPluginID)
+		enableMCP := func(host string, port int) {
+			sdkClient.SetPeer(mcpPlugin, host, port)
+			h.SetMCPPluginID(mcpPlugin)
 			if err := claudecli.WriteMCPConfig(claudeDir, proxyURL); err != nil {
-				log.Printf("[mcp] failed to write MCP config: %v", err)
-			} else {
-				h.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
-				log.Printf("[mcp] configured MCP proxy → %s (plugin=%s)", proxyURL, mcpPluginID)
-			}
-		}
-
-		// Proactively discover MCP server at startup (don't wait for event).
-		go func() {
-			plugins, err := sdkClient.SearchPlugins("infra:mcp-server")
-			if err != nil {
-				log.Printf("[mcp] startup discovery failed: %v", err)
+				log.Printf("[mcp] enable: failed to write config: %v", err)
 				return
 			}
-			for _, p := range plugins {
-				if p.ID == "infra-mcp-server" {
-					configureMCP(p.ID)
-					return
-				}
+			h.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
+			log.Printf("[mcp] enabled: peer=%s:%d proxy=%s", host, port, proxyURL)
+		}
+
+		disableMCP := func() {
+			sdkClient.InvalidatePeer(mcpPlugin)
+			h.SetMCPPluginID("")
+			h.SetMCPConfig("")
+			if err := claudecli.RemoveMCPConfig(claudeDir); err != nil {
+				log.Printf("[mcp] disable: failed to remove config: %v", err)
 			}
-			log.Printf("[mcp] infra-mcp-server not found at startup, waiting for event")
+			log.Printf("[mcp] disabled")
+		}
+
+		// Discover MCP server at startup via peer registry (already loaded).
+		go func() {
+			if host, port, ok := sdkClient.GetPeer(mcpPlugin); ok {
+				enableMCP(host, port)
+				return
+			}
+			log.Printf("[mcp] %s not in peer registry at startup, waiting for event", mcpPlugin)
 		}()
 
-		// Also subscribe to events for hot-reload when MCP server restarts.
+		// Hot-reload when MCP server comes online.
 		sdkClient.Events().On("mcp_server:enabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			var detail struct {
 				Endpoint string `json:"endpoint"`
@@ -208,17 +216,27 @@ func main() {
 				log.Printf("[mcp] failed to parse mcp_server:enabled detail: %v", err)
 				return
 			}
-			// Extract plugin ID from endpoint hostname (e.g. "http://teamagentica-plugin-infra-mcp-server:8081/mcp").
-			configureMCP("infra-mcp-server")
+			if detail.Endpoint == "" {
+				log.Printf("[mcp] mcp_server:enabled with empty endpoint, ignoring")
+				return
+			}
+			u, err := url.Parse(detail.Endpoint)
+			if err != nil {
+				log.Printf("[mcp] bad endpoint URL %q: %v", detail.Endpoint, err)
+				return
+			}
+			host := u.Hostname()
+			port := 8081
+			if p := u.Port(); p != "" {
+				if pv, err := strconv.Atoi(p); err == nil {
+					port = pv
+				}
+			}
+			enableMCP(host, port)
 		}))
 
 		sdkClient.Events().On("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
-			if err := claudecli.RemoveMCPConfig(claudeDir); err != nil {
-				log.Printf("[mcp] failed to remove MCP config: %v", err)
-			}
-			h.SetMCPConfig("")
-			h.SetMCPPluginID("")
-			log.Printf("[mcp] MCP server disabled, config removed")
+			disableMCP()
 		}))
 	}
 
