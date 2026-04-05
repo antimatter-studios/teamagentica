@@ -246,6 +246,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 
 	go func() {
 		defer close(ch)
+		start := time.Now()
 
 		cfg := c.resolveConfig(model, systemPrompt, maxTurns, allowedTools, mcpConfig, opts)
 		pool := c.ensurePool(cfg)
@@ -256,8 +257,13 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 			ch <- StreamEvent{Err: fmt.Errorf("pool acquire: %w", err)}
 			return
 		}
+		acquireMs := time.Since(start).Milliseconds()
 
+		firstToken := time.Time{}
 		streamCb := func(ev StreamEvent) {
+			if firstToken.IsZero() && ev.Text != "" {
+				firstToken = time.Now()
+			}
 			select {
 			case ch <- ev:
 			case <-ctx.Done():
@@ -274,6 +280,13 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 		}
 
 		pool.Release(convKey)
+
+		firstTokenMs := ""
+		if !firstToken.IsZero() {
+			firstTokenMs = fmt.Sprintf("first_token=%dms", firstToken.Sub(start).Milliseconds())
+		}
+		log.Printf("[claude-cli] [timing] acquire=%dms %s total=%dms",
+			acquireMs, firstTokenMs, time.Since(start).Milliseconds())
 		ch <- StreamEvent{Done: true}
 	}()
 
