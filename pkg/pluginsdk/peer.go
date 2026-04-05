@@ -25,9 +25,9 @@ func (c *Client) resolvePeer(pluginID string) (peerEntry, bool) {
 	return entry, ok
 }
 
-// invalidatePeer removes a plugin from the peer cache (e.g. on connection failure
+// InvalidatePeer removes a plugin from the peer cache (e.g. on connection failure
 // or plugin:stopped lifecycle event).
-func (c *Client) invalidatePeer(pluginID string) {
+func (c *Client) InvalidatePeer(pluginID string) {
 	c.peersMu.Lock()
 	delete(c.peers, pluginID)
 	c.peersMu.Unlock()
@@ -40,6 +40,18 @@ func (c *Client) SetPeer(pluginID, host string, httpPort int) {
 	c.peersMu.Lock()
 	c.peers[pluginID] = peerEntry{Host: host, HTTPPort: httpPort}
 	c.peersMu.Unlock()
+}
+
+// GetPeer returns the cached host and port for a plugin.
+// Returns false if the plugin is not in the peer cache.
+func (c *Client) GetPeer(pluginID string) (host string, port int, ok bool) {
+	c.peersMu.RLock()
+	entry, found := c.peers[pluginID]
+	c.peersMu.RUnlock()
+	if !found {
+		return "", 0, false
+	}
+	return entry.Host, entry.HTTPPort, true
 }
 
 // loadPeerRegistry bulk-loads all running plugin addresses from the kernel.
@@ -95,8 +107,15 @@ func (c *Client) RouteHTTPClient() *http.Client {
 }
 
 // ResolvePeerURL resolves a plugin ID to a direct URL for the given path.
+// On cache miss, refreshes the peer registry from the kernel before giving up.
 // Returns empty string if the peer cannot be resolved.
 func (c *Client) ResolvePeerURL(pluginID, path string) string {
+	if entry, ok := c.resolvePeer(pluginID); ok {
+		return c.peerURL(entry, path)
+	}
+	// Cache miss — peer may have been invalidated by a lifecycle event.
+	// Refresh from registry and retry once.
+	c.loadPeerRegistry()
 	if entry, ok := c.resolvePeer(pluginID); ok {
 		return c.peerURL(entry, path)
 	}
@@ -187,14 +206,14 @@ func (c *Client) RouteToPluginStream(ctx context.Context, pluginID, method, path
 	streamClient := &http.Client{Transport: c.routeClient.Transport}
 	resp, err := streamClient.Do(req)
 	if err != nil {
-		c.invalidatePeer(pluginID)
+		c.InvalidatePeer(pluginID)
 		return nil, fmt.Errorf("stream to %s: %w", pluginID, err)
 	}
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		c.invalidatePeer(pluginID)
+		c.InvalidatePeer(pluginID)
 		return nil, fmt.Errorf("plugin %s returned status %d: %s", pluginID, resp.StatusCode, string(respBody))
 	}
 

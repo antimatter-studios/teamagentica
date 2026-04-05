@@ -143,12 +143,12 @@ func (c *Client) handleLifecycleEvent(event EventCallback) bool {
 		}
 	case "plugin:stopped", "plugin:unhealthy":
 		if payload.Plugin != "" {
-			c.invalidatePeer(payload.Plugin)
+			c.InvalidatePeer(payload.Plugin)
 		}
 	case "plugin:started":
 		// Container booting — invalidate stale address, plugin:ready will set the new one.
 		if payload.Plugin != "" {
-			c.invalidatePeer(payload.Plugin)
+			c.InvalidatePeer(payload.Plugin)
 		}
 	case "plugin:registry-sync":
 		c.peersMu.Lock()
