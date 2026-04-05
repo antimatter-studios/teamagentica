@@ -55,16 +55,25 @@ Single `codex app-server` process, threads reused per conversation:
 
 ## Test Data
 
-### Batch 3 (final, 10 messages same conversation):
+### Batch 4 (final consistency test, 10 messages same conversation):
 ```
-msg 1:  5.5s
-msg 2:  4.3s
-msg 3:  3.2s
-msg 4:  5.4s
-msg 5:  4.3s
-msg 6:  4.3s
-msg 7:  6.6s
-msg 8:  6.4s
-msg 9:  5.3s
-msg 10: 5.4s
+msg 1:  5.4s      Min: 4.2s
+msg 2:  5.4s      Max: 6.5s
+msg 3:  4.3s      Avg: 5.0s (includes 1s polling overhead)
+msg 4:  5.4s      Median: 5.4s
+msg 5:  6.5s
+msg 6:  4.3s      Relay internal avg: 4.1s
+msg 7:  4.4s        memory: ~550ms
+msg 8:  5.4s        agent_call: ~4.2s (Codex API)
+msg 9:  4.3s
+msg 10: 4.2s
 ```
+
+### Improvement Summary
+| Metric | Before | After | Improvement |
+|---|---|---|---|
+| First message | ~18s | ~18s | Same (thread create + cold API) |
+| Subsequent messages | ~18s | ~4-5s | **3.6x faster** |
+| Memory overhead | ~1.5s | ~0.5s | **3x faster** |
+| Thread create (per conv) | 5.5s every msg | 5.5s once | **Eliminated for msg 2+** |
+| CLI cold start | Per request | Once at boot | **Eliminated** |
