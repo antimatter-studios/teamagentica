@@ -1,11 +1,9 @@
 package kimi
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -120,96 +118,6 @@ func buildAPIMessages(messages []Message) []interface{} {
 		})
 	}
 	return result
-}
-
-// ChatCompletion sends a chat request to the Kimi chat/completions endpoint.
-func (c *Client) ChatCompletion(model string, messages []Message, tools ...ToolDef) (*ChatResponse, error) {
-	reqBody := chatCompletionRequest{
-		Model:    model,
-		Messages: buildAPIMessages(messages),
-		Stream:   false,
-	}
-	if len(tools) > 0 {
-		reqBody.Tools = tools
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", baseURL)
-
-	if c.debug {
-		log.Printf("[kimi] POST %s body=%s", url, string(jsonBody))
-	}
-
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	if c.debug {
-		log.Printf("[kimi] response status=%d body=%s", resp.StatusCode, string(respBody))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("kimi API returned %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content          string     `json:"content"`
-				ReasoningContent string     `json:"reasoning_content,omitempty"`
-				ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-		} `json:"usage"`
-	}
-
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	responseText := ""
-	reasoningText := ""
-	finishReason := ""
-	var toolCalls []ToolCall
-	if len(result.Choices) > 0 {
-		responseText = result.Choices[0].Message.Content
-		reasoningText = result.Choices[0].Message.ReasoningContent
-		toolCalls = result.Choices[0].Message.ToolCalls
-		finishReason = result.Choices[0].FinishReason
-	}
-
-	return &ChatResponse{
-		Content:          responseText,
-		ReasoningContent: reasoningText,
-		ToolCalls:        toolCalls,
-		FinishReason:     finishReason,
-		Usage: Usage{
-			PromptTokens:     result.Usage.PromptTokens,
-			CompletionTokens: result.Usage.CompletionTokens,
-			TotalTokens:      result.Usage.TotalTokens,
-		},
-		Headers: resp.Header,
-	}, nil
 }
 
 // ListModels returns available models from the Kimi API.

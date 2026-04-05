@@ -137,8 +137,7 @@ func main() {
 
 	// Register routes.
 	router.GET("/health", h.Health)
-	router.POST("/chat", h.Chat)
-	router.POST("/chat/stream", h.ChatStream)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.GET("/mcp", h.DiscoveredTools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)

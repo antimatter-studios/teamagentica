@@ -2,7 +2,7 @@ id: agent-kimi
 name: "Kimi K2 Agent"
 description: "AI agent powered by Moonshot's Kimi K2 with 128K context and thinking mode"
 group: agents
-version: "1.0.34"
+version: "1.0.35"
 image: "teamagentica-agent-kimi:latest"
 author: teamagentica
 tags: [chat, ai, agent, kimi, moonshot]

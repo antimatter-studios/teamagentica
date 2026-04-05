@@ -51,19 +51,6 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens,omitempty"`
 }
 
-// Choice is one completion choice in a chat response.
-type Choice struct {
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
-}
-
-// ChatResponse is the response from the OpenAI-compatible chat completions API.
-type ChatResponse struct {
-	ID      string   `json:"id"`
-	Choices []Choice `json:"choices"`
-	Usage   Usage    `json:"usage"`
-}
-
 var httpClient = &http.Client{
 	Timeout: 300 * time.Second,
 }
@@ -97,59 +84,6 @@ func buildAPIMessages(messages []Message) []interface{} {
 		})
 	}
 	return result
-}
-
-// ChatCompletion calls the Ollama OpenAI-compatible chat completions API.
-func ChatCompletion(endpoint, model string, messages []Message) (*ChatResponse, error) {
-	return chatCompletionInternal(endpoint, model, messages, nil)
-}
-
-// ChatCompletionWithTools calls the API with tool definitions included.
-func ChatCompletionWithTools(endpoint, model string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
-	return chatCompletionInternal(endpoint, model, messages, tools)
-}
-
-func chatCompletionInternal(endpoint, model string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
-	reqBody := map[string]interface{}{
-		"model":    model,
-		"messages": buildAPIMessages(messages),
-	}
-	if len(tools) > 0 {
-		reqBody["tools"] = tools
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/v1/chat/completions", endpoint)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-	return &chatResp, nil
 }
 
 // ── Streaming ───────────────────────────────────────────────────────────────────

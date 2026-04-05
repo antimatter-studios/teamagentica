@@ -1,11 +1,9 @@
 package handlers
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -71,103 +69,6 @@ func (h *Handler) Health(c *gin.Context) {
 		"version":    "1.0.0",
 		"configured": h.apiKey != "",
 		"model":      h.model,
-	})
-}
-
-type chatRequest struct {
-	Message      string              `json:"message"`
-	Model        string              `json:"model,omitempty"`
-	Conversation []openrouter.Message `json:"conversation"`
-}
-
-func (h *Handler) Chat(c *gin.Context) {
-	var req chatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
-
-	messages := req.Conversation
-	if len(messages) == 0 {
-		if req.Message == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "message or conversation required"})
-			return
-		}
-		messages = []openrouter.Message{
-			{Role: "user", Content: req.Message},
-		}
-	}
-
-	if h.apiKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set OPENROUTER_API_KEY."})
-		return
-	}
-
-	// Use per-request model override if provided.
-	model := h.model
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	lastMsg := ""
-	if len(messages) > 0 {
-		lastMsg = messages[len(messages)-1].Content
-	}
-	if h.debug {
-		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d content=%s", model, len(messages), truncateStr(lastMsg, 200)))
-	} else {
-		h.emitEvent("chat_request", fmt.Sprintf("model=%s messages=%d", model, len(messages)))
-	}
-
-	start := time.Now()
-
-	resp, err := h.client.ChatCompletion(model, messages)
-	if err != nil {
-		log.Printf("OpenRouter error: %v", err)
-		h.emitEvent("error", fmt.Sprintf("openrouter: %v", err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "OpenRouter request failed: " + err.Error()})
-		return
-	}
-
-	elapsed := time.Since(start)
-
-	h.usage.RecordRequest(usage.RequestRecord{
-		Model:        model,
-		InputTokens:  resp.Usage.PromptTokens,
-		OutputTokens: resp.Usage.CompletionTokens,
-		TotalTokens:  resp.Usage.TotalTokens,
-		DurationMs:   elapsed.Milliseconds(),
-	})
-	if h.sdk != nil {
-		h.sdk.ReportUsage(pluginsdk.UsageReport{
-			UserID:       userID,
-			Provider:     "openrouter",
-			Model:        model,
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-			TotalTokens:  resp.Usage.TotalTokens,
-			DurationMs:   elapsed.Milliseconds(),
-		})
-	}
-
-	if h.debug {
-		h.emitEvent("chat_response", fmt.Sprintf("model=%s tokens=%d+%d time=%dms response=%s",
-			model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, elapsed.Milliseconds(), truncateStr(resp.Content, 200)))
-	} else {
-		h.emitEvent("chat_response", fmt.Sprintf("model=%s tokens=%d+%d time=%dms len=%d",
-			model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, elapsed.Milliseconds(), len(resp.Content)))
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"response": resp.Content,
-		"model":    model,
-		"backend":  "openrouter",
-		"usage": gin.H{
-			"prompt_tokens":     resp.Usage.PromptTokens,
-			"completion_tokens": resp.Usage.CompletionTokens,
-		},
 	})
 }
 

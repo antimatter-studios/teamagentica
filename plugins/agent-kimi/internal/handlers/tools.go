@@ -166,31 +166,22 @@ func executeToolCall(sdk *pluginsdk.Client, tools []discoveredTool, call kimi.To
 	return string(resp), nil
 }
 
-// mediaAttachment represents an extracted media item from a tool result.
-type mediaAttachment struct {
-	MimeType  string `json:"mime_type"`
-	ImageData string `json:"image_data,omitempty"`
-	Type      string `json:"type,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Filename  string `json:"filename,omitempty"`
-}
-
 // processToolResultMedia inspects a tool result for embedded media.
 // Handles both base64 image_data and URL-based attachments (e.g. video URLs).
 // Returns (cleanedResult, attachments extracted).
-func processToolResultMedia(result string) (string, []mediaAttachment) {
+func processToolResultMedia(result string) (string, []pluginsdk.AgentAttachment) {
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 		return result, nil
 	}
 
-	var attachments []mediaAttachment
+	var attachments []pluginsdk.AgentAttachment
 
 	// Check for inline base64 image data.
 	imageData, hasImage := parsed["image_data"].(string)
 	mimeType, hasMime := parsed["mime_type"].(string)
 	if hasImage && hasMime && imageData != "" && mimeType != "" {
-		attachments = append(attachments, mediaAttachment{
+		attachments = append(attachments, pluginsdk.AgentAttachment{
 			MimeType:  mimeType,
 			ImageData: imageData,
 		})
@@ -209,7 +200,7 @@ func processToolResultMedia(result string) (string, []mediaAttachment) {
 			attType, _ := att["type"].(string)
 			attFilename, _ := att["filename"].(string)
 			if attURL != "" && attMime != "" {
-				attachments = append(attachments, mediaAttachment{
+				attachments = append(attachments, pluginsdk.AgentAttachment{
 					MimeType: attMime,
 					Type:     attType,
 					URL:      attURL,

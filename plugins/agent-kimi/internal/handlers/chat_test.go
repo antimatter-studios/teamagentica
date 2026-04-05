@@ -1,12 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/gin-gonic/gin"
 )
 
@@ -68,84 +69,33 @@ func TestHealthNotConfigured(t *testing.T) {
 	}
 }
 
-func TestChatEmptyBody(t *testing.T) {
-	h := newTestHandler("test-key", "kimi-k2-turbo-preview", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`{}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if resp["error"] != "message or conversation required" {
-		t.Errorf("unexpected error: %v", resp["error"])
-	}
-}
-
-func TestChatEmptyMessage(t *testing.T) {
-	h := newTestHandler("test-key", "kimi-k2-turbo-preview", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`{"message":""}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestChatInvalidJSON(t *testing.T) {
-	h := newTestHandler("test-key", "kimi-k2-turbo-preview", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`not json`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["error"] != "invalid request body" {
-		t.Errorf("unexpected error: %v", resp["error"])
-	}
-}
-
-func TestChatNoAPIKey(t *testing.T) {
+func TestChatStreamNoAPIKey(t *testing.T) {
 	h := newTestHandler("", "kimi-k2-turbo-preview", t.TempDir())
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`{"message":"hello"}`))
-	c.Request.Header.Set("Content-Type", "application/json")
+	ch := h.ChatStream(context.Background(), pluginsdk.AgentChatRequest{
+		Message: "hello",
+	})
 
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	var got pluginsdk.AgentStreamEvent
+	for ev := range ch {
+		got = ev
 	}
+	if got.Type != "error" {
+		t.Fatalf("expected error event, got %s", got.Type)
+	}
+}
 
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	errStr, _ := resp["error"].(string)
-	if !strings.Contains(errStr, "KIMI_API_KEY") {
-		t.Errorf("expected error mentioning KIMI_API_KEY, got: %v", errStr)
+func TestChatStreamEmptyMessage(t *testing.T) {
+	h := newTestHandler("test-key", "kimi-k2-turbo-preview", t.TempDir())
+
+	ch := h.ChatStream(context.Background(), pluginsdk.AgentChatRequest{})
+
+	var got pluginsdk.AgentStreamEvent
+	for ev := range ch {
+		got = ev
+	}
+	if got.Type != "error" {
+		t.Fatalf("expected error event, got %s", got.Type)
 	}
 }
 

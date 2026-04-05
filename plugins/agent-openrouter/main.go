@@ -70,7 +70,7 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
-	router.POST("/chat", h.Chat)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)

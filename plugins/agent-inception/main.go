@@ -88,7 +88,7 @@ func main() {
 
 	// Standard agent routes.
 	router.GET("/health", h.Health)
-	router.POST("/chat", h.Chat)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.GET("/mcp", h.DiscoveredTools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)

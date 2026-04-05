@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -127,108 +126,6 @@ func buildAPIMessages(messages []Message) []interface{} {
 		}
 	}
 	return result
-}
-
-// ChatCompletion calls the OpenAI chat completions API and returns the response.
-func ChatCompletion(apiKey, endpoint, model string, messages []Message) (*ChatResponse, error) {
-	reqBody := ChatRequest{
-		Model:    model,
-		Messages: buildAPIMessages(messages),
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", endpoint)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OpenAI returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	return &chatResp, nil
-}
-
-// ChatCompletionWithTools calls the OpenAI API with tool definitions included.
-func ChatCompletionWithTools(apiKey, endpoint, model string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
-	return chatCompletionInternal(apiKey, endpoint, model, messages, tools)
-}
-
-// ChatCompletionRaw is an alias that returns the full ChatResponse so callers
-// can inspect FinishReason and ToolCalls on each choice.
-func ChatCompletionRaw(apiKey, endpoint, model string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
-	return chatCompletionInternal(apiKey, endpoint, model, messages, tools)
-}
-
-// chatCompletionInternal is the shared implementation for all chat completion variants.
-func chatCompletionInternal(apiKey, endpoint, model string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
-	reqBody := ChatRequest{
-		Model:    model,
-		Messages: buildAPIMessages(messages),
-	}
-	if len(tools) > 0 {
-		reqBody.Tools = tools
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", endpoint)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OpenAI returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	return &chatResp, nil
 }
 
 // modelsResponse is the response from the OpenAI /v1/models endpoint.

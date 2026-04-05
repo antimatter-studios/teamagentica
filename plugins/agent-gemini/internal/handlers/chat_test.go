@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/gemini"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/usage"
 )
@@ -79,69 +80,37 @@ func TestHealthNotConfigured(t *testing.T) {
 	}
 }
 
-func TestChatEmptyMessage(t *testing.T) {
+func TestChatStreamEmptyMessage(t *testing.T) {
 	tmpDir := t.TempDir()
 	h := newHandlerWithTmpDir("test-key", "gemini-2.5-flash", tmpDir)
 
-	reqBody := `{"message":"","conversation":[]}`
+	req := pluginsdk.AgentChatRequest{}
+	ch := h.ChatStream(context.Background(), req)
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(reqBody))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	var events []pluginsdk.AgentStreamEvent
+	for ev := range ch {
+		events = append(events, ev)
 	}
 
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-
-	if body["error"] != "message or conversation required" {
-		t.Errorf("expected error about empty message, got %v", body["error"])
+	if len(events) != 1 || events[0].Type != "error" {
+		t.Fatalf("expected single error event, got %d events", len(events))
 	}
 }
 
-func TestChatNoAPIKey(t *testing.T) {
+func TestChatStreamNoAPIKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	h := newHandlerWithTmpDir("", "gemini-2.5-flash", tmpDir)
 
-	reqBody := `{"message":"hello"}`
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(reqBody))
-	c.Request.Header.Set("Content-Type", "application/json")
+	req := pluginsdk.AgentChatRequest{Message: "hello"}
+	ch := h.ChatStream(context.Background(), req)
 
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	var events []pluginsdk.AgentStreamEvent
+	for ev := range ch {
+		events = append(events, ev)
 	}
 
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-
-	errMsg, _ := body["error"].(string)
-	if errMsg != "No API key configured. Set GEMINI_API_KEY." {
-		t.Errorf("unexpected error: %v", body["error"])
-	}
-}
-
-func TestChatInvalidJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("test-key", "gemini-2.5-flash", tmpDir)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(`{bad`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	if len(events) != 1 || events[0].Type != "error" {
+		t.Fatalf("expected single error event, got %d events", len(events))
 	}
 }
 

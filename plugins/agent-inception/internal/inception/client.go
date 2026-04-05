@@ -124,40 +124,6 @@ func buildAPIMessages(messages []Message) []interface{} {
 	return result
 }
 
-// ChatCompletion calls the Inception chat completions API.
-func ChatCompletion(apiKey, endpoint, model string, messages []Message, opts ...RequestOption) (*ChatResponse, error) {
-	o := defaultOptions()
-	for _, fn := range opts {
-		fn(o)
-	}
-
-	reqBody := ChatRequest{
-		Model:    model,
-		Messages: buildAPIMessages(messages),
-	}
-	if o.maxTokens > 0 {
-		reqBody.MaxTokens = o.maxTokens
-	}
-	if o.temperature != nil {
-		reqBody.Temperature = o.temperature
-	}
-	if o.diffusing {
-		reqBody.Diffusing = true
-	}
-	if o.reasoningEffort != "" {
-		reqBody.ReasoningEffort = o.reasoningEffort
-	}
-	if len(o.tools) > 0 {
-		reqBody.Tools = o.tools
-		reqBody.ToolChoice = "auto"
-	}
-	if o.responseFormat != nil {
-		reqBody.ResponseFormat = o.responseFormat
-	}
-
-	return doRequest(apiKey, fmt.Sprintf("%s/chat/completions", endpoint), reqBody)
-}
-
 // ApplyEdit calls POST /v1/apply/completions — merges update snippet into original code.
 func ApplyEdit(apiKey, endpoint, originalCode, updateSnippet string) (*ChatResponse, error) {
 	content := fmt.Sprintf("<|original_code|>\n%s\n<|/original_code|>\n\n<|update_snippet|>\n%s\n<|/update_snippet|>", originalCode, updateSnippet)
