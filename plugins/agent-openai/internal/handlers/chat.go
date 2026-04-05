@@ -133,6 +133,7 @@ type chatRequest struct {
 	WorkspaceID  string           `json:"workspace_id,omitempty"`
 	AgentAlias   string           `json:"agent_alias,omitempty"`
 	SystemPrompt string           `json:"system_prompt,omitempty"`
+	SessionID    string           `json:"session_id,omitempty"`
 }
 
 // Chat handles a chat completion request.

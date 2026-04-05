@@ -95,7 +95,7 @@ func (h *Handler) ChatStream(c *gin.Context) {
 
 	switch backend {
 	case "subscription":
-		h.chatStreamSubscription(ctx, c, model, messages, req.ImageURLs, req.WorkspaceID, debug, userID, start, writeSSE, writeError)
+		h.chatStreamSubscription(ctx, c, model, messages, req.ImageURLs, req.WorkspaceID, req.SessionID, debug, userID, start, writeSSE, writeError)
 	case "api_key":
 		if apiKey == "" {
 			writeError("api_key backend is configured but OPENAI_API_KEY is not set")
@@ -108,7 +108,7 @@ func (h *Handler) ChatStream(c *gin.Context) {
 }
 
 // chatStreamSubscription handles streaming via the Codex CLI backend.
-func (h *Handler) chatStreamSubscription(ctx context.Context, c *gin.Context, model string, messages []openai.Message, imageURLs []string, workspaceID string, debug bool, userID string, start time.Time, writeSSE func(string, interface{}), writeError func(string)) {
+func (h *Handler) chatStreamSubscription(ctx context.Context, c *gin.Context, model string, messages []openai.Message, imageURLs []string, workspaceID string, sessionID string, debug bool, userID string, start time.Time, writeSSE func(string, interface{}), writeError func(string)) {
 	if h.codexCLI == nil || !h.codexCLI.IsAuthenticated() {
 		writeError("subscription backend is not authenticated")
 		return
@@ -123,7 +123,7 @@ func (h *Handler) chatStreamSubscription(ctx context.Context, c *gin.Context, mo
 		workdir = workdir + "/workspaces/" + workspaceID
 	}
 
-	stream := h.codexCLI.ChatCompletionStream(ctx, model, messages, imageURLs, workdir)
+	stream := h.codexCLI.ChatCompletionStream(ctx, model, messages, imageURLs, workdir, sessionID)
 
 	var fullResponse string
 	var totalInput, totalOutput int

@@ -44,6 +44,10 @@ type Client struct {
 	// Persistent app-server.
 	server   *appServer
 	serverMu sync.Mutex // serializes chat requests through the app-server
+
+	// Thread cache: reuse threads across messages to avoid 5s thread/start cost.
+	threads   map[string]string // channelID → threadID
+	threadsMu sync.Mutex
 }
 
 // NewClient creates a new Codex CLI client. codexHome is the path for
@@ -55,6 +59,7 @@ func NewClient(binary, workdir, codexHome string, timeoutSec int, debug bool) *C
 		codexHome: codexHome,
 		timeout:   time.Duration(timeoutSec) * time.Second,
 		debug:     debug,
+		threads:   make(map[string]string),
 	}
 }
 
@@ -420,7 +425,8 @@ type StreamEvent struct {
 }
 
 // ChatCompletionStream streams a chat completion via the persistent app-server.
-func (c *Client) ChatCompletionStream(ctx context.Context, model string, messages []openai.Message, imageURLs []string, workdirOverride string) <-chan StreamEvent {
+// sessionID identifies the conversation — threads are reused across messages with the same sessionID.
+func (c *Client) ChatCompletionStream(ctx context.Context, model string, messages []openai.Message, imageURLs []string, workdirOverride string, sessionID string) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 32)
 
 	go func() {
@@ -441,38 +447,45 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 			return fmt.Sprintf("%s=%dms", label, time.Since(start).Milliseconds())
 		}
 
-		log.Printf("[codex-cli] app-server: starting thread (model=%s)", model)
+		// Reuse thread for same session, or create a new one.
+		c.threadsMu.Lock()
+		threadID := c.threads[sessionID]
+		c.threadsMu.Unlock()
 
-		// thread/start
-		threadResult, err := c.server.sendRequest("thread/start", map[string]interface{}{
-			"model":          model,
-			"cwd":            cwd,
-			"approvalPolicy": "never",
-			"sandbox":        "danger-full-access",
-			"ephemeral":      true,
-		}, nil)
-		if err != nil {
-			log.Printf("[codex-cli] app-server thread/start failed: %v", err)
-			ch <- StreamEvent{Err: fmt.Errorf("thread/start: %w", err)}
-			return
+		if threadID == "" {
+			log.Printf("[codex-cli] app-server: creating thread (model=%s session=%s)", model, sessionID)
+			threadResult, err := c.server.sendRequest("thread/start", map[string]interface{}{
+				"model":          model,
+				"cwd":            cwd,
+				"approvalPolicy": "never",
+				"sandbox":        "danger-full-access",
+			}, nil)
+			if err != nil {
+				ch <- StreamEvent{Err: fmt.Errorf("thread/start: %w", err)}
+				return
+			}
+			var tsr struct {
+				Thread struct{ ID string } `json:"thread"`
+			}
+			if err := json.Unmarshal(threadResult, &tsr); err != nil || tsr.Thread.ID == "" {
+				ch <- StreamEvent{Err: fmt.Errorf("bad thread/start response")}
+				return
+			}
+			threadID = tsr.Thread.ID
+			c.threadsMu.Lock()
+			c.threads[sessionID] = threadID
+			c.threadsMu.Unlock()
+		} else {
+			log.Printf("[codex-cli] app-server: reusing thread %s (session=%s)", threadID, sessionID)
 		}
-
-		var tsr struct {
-			Thread struct{ ID string } `json:"thread"`
-		}
-		if err := json.Unmarshal(threadResult, &tsr); err != nil || tsr.Thread.ID == "" {
-			ch <- StreamEvent{Err: fmt.Errorf("bad thread/start response")}
-			return
-		}
-		threadID := tsr.Thread.ID
-		tThread := mark("thread_start")
+		tThread := mark("thread")
 
 		// Build input.
 		input := []map[string]string{{"type": "text", "text": prompt}}
 
 		// turn/start
 		firstToken := time.Time{}
-		_, err = c.server.sendRequest("turn/start", map[string]interface{}{
+		_, err := c.server.sendRequest("turn/start", map[string]interface{}{
 			"threadId": threadID,
 			"input":    input,
 			"model":    model,
