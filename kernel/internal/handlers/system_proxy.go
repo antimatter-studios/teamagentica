@@ -74,21 +74,24 @@ func (h *PluginHandler) SystemPluginProxy(pluginID, pathPrefix string) gin.Handl
 				detail = string(body)
 				resp.Body = io.NopCloser(bytes.NewReader(body))
 			}
-			h.Events.Emit(events.DebugEvent{
-				Type:     "system-proxy",
-				PluginID: pluginID,
-				Method:   c.Request.Method,
-				Path:     path,
-				Status:   resp.StatusCode,
-				Duration: time.Since(start).Milliseconds(),
-				Detail:   detail,
-			})
+			// Only emit proxy events for errors — successful proxies are noise.
+			if resp.StatusCode >= 400 {
+				h.Events.Emit(events.DebugEvent{
+					Type:     "proxy-error",
+					PluginID: pluginID,
+					Method:   c.Request.Method,
+					Path:     path,
+					Status:   resp.StatusCode,
+					Duration: time.Since(start).Milliseconds(),
+					Detail:   detail,
+				})
+			}
 			return nil
 		}
 
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			h.Events.Emit(events.DebugEvent{
-				Type:     "system-proxy",
+				Type:     "proxy-error",
 				PluginID: pluginID,
 				Method:   c.Request.Method,
 				Path:     path,
