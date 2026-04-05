@@ -347,8 +347,8 @@ function startBackgroundPoll() {
 // Auto-start polling when the module loads.
 startBackgroundPoll();
 
-// Track how many events we've processed so we only scan new ones.
-let _lastSeenCount = 0;
+// Track the timestamp of the last event we processed.
+let _lastSeenTimestamp = "";
 
 useEventStore.subscribe((state, prevState) => {
   const events = state.eventLogEvents;
@@ -373,17 +373,14 @@ useEventStore.subscribe((state, prevState) => {
   }
 
   if (watchedIds.size === 0 && shelvedIds.size === 0) {
-    _lastSeenCount = events.length;
+    if (events[0]?.created_at) _lastSeenTimestamp = events[0].created_at;
     return;
   }
 
-  // Process only new events (newest-first, so new events are at the start).
-  const newEventCount = events.length - _lastSeenCount;
-  if (newEventCount <= 0) return;
-
+  // Scan new events (newest-first) until we hit one we've already processed.
   const refreshedConvs = new Set<number>();
-  for (let i = 0; i < newEventCount && i < events.length; i++) {
-    const evt = events[i];
+  for (const evt of events) {
+    if (evt.created_at && evt.created_at <= _lastSeenTimestamp) break;
     if (evt.event_type !== "relay:progress") continue;
 
     try {
@@ -451,5 +448,5 @@ useEventStore.subscribe((state, prevState) => {
   }
 
   // Update high-water mark.
-  _lastSeenCount = events.length;
+  if (events[0]?.created_at) _lastSeenTimestamp = events[0].created_at;
 });

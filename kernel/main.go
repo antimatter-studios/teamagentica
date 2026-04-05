@@ -289,10 +289,7 @@ func main() {
 	debugGroup := r.Group("/api/debug")
 	debugGroup.Use(middleware.AuthRequired())
 	{
-		debugGroup.GET("/events", handlers.DebugEventsSSE(pluginHandler.Events))
-		debugGroup.GET("/history", handlers.DebugEventsHistory(pluginHandler.Events))
 		debugGroup.GET("/event-log", handlers.DebugEventLog(database.Get()))
-		debugGroup.GET("/test", handlers.DebugEventsTest(pluginHandler.Events))
 	}
 
 	// Boot orchestrator: start all enabled plugins in background.
