@@ -611,13 +611,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		timings = append(timings, fmt.Sprintf("%s=%dms", label, time.Since(processStart).Milliseconds()))
 	}
 
-	// Emit "thinking" status immediately — include agent name if @mentioned.
-	thinkingMsg := "Thinking..."
-	if name, _, ok := parseAtPrefix(req.Message); ok && name != "" {
-		thinkingMsg = fmt.Sprintf("@%s is thinking...", name)
-	}
-	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", thinkingMsg, nil)
-	mark("emit_thinking")
+	// Stage 1: Message received.
+	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", "Message received, loading context...", nil)
+	mark("received")
 
 	// Store, fetch history, and search facts all in parallel.
 	var history []conversationMsg
@@ -671,8 +667,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			return
 		}
 
+		// Stage 2: Routing to agent.
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
-			fmt.Sprintf("Asking @%s...", resolved.Alias), nil)
+			fmt.Sprintf("Sending to @%s...", resolved.Alias), nil)
 		mark("routing")
 
 		callStart := time.Now()
@@ -745,8 +742,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		return
 	}
 
+	// Stage 2: Routing to default agent.
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
-		fmt.Sprintf("Asking @%s...", defaultAgent.Alias), nil)
+		fmt.Sprintf("Sending to @%s...", defaultAgent.Alias), nil)
 	mark("routing")
 
 	callStart := time.Now()
