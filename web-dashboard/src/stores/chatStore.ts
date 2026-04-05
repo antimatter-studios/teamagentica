@@ -333,6 +333,8 @@ useChatStore.subscribe((state, prev) => {
 const POLL_INTERVAL_MS = 30_000;
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
+const STALE_TASK_MS = 120_000; // 2 minutes — clear zombie bubbles
+
 function startBackgroundPoll() {
   if (_pollTimer) return;
   _pollTimer = setInterval(() => {
@@ -340,6 +342,26 @@ function startBackgroundPoll() {
     state.loadConversations();
     if (state.activeConversationId) {
       state.refreshMessages();
+    }
+
+    // Reap zombie in-flight tasks — if a task has been pending for > 2 min,
+    // the completed event was likely missed. Clear it and refresh.
+    const now = Date.now();
+    const inFlight = state.inFlightTasks;
+    for (const [convIdStr, task] of Object.entries(inFlight)) {
+      if (now - task.startedAt > STALE_TASK_MS) {
+        const convId = Number(convIdStr);
+        console.log("[chat-poll] reaping stale task", task.taskGroupId, "for conv", convId);
+        state.clearProgressInfo(convId);
+        const { [convId]: _, ...rest } = inFlight;
+        useChatStore.setState({
+          inFlightTasks: rest,
+          ...(state.activeConversationId === convId
+            ? { sending: false, activeTaskGroupId: null, sendStartedAt: null }
+            : {}),
+        });
+        state.refreshMessages();
+      }
     }
   }, POLL_INTERVAL_MS);
 }
