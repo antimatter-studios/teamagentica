@@ -605,21 +605,31 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	ctx := context.Background()
 	sessionID := req.SourcePlugin + ":" + req.ChannelID
 
+	// --- Timing helper ---
+	var timings []string
+	mark := func(label string) {
+		timings = append(timings, fmt.Sprintf("%s=%dms", label, time.Since(processStart).Milliseconds()))
+	}
+
 	// Emit "thinking" status immediately — include agent name if @mentioned.
 	thinkingMsg := "Thinking..."
 	if name, _, ok := parseAtPrefix(req.Message); ok && name != "" {
 		thinkingMsg = fmt.Sprintf("@%s is thinking...", name)
 	}
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", thinkingMsg, nil)
+	mark("emit_thinking")
 
 	// Store the incoming user message in episodic memory (LCM).
 	r.memoryStore(sessionID, "user", req.Message, "")
+	mark("memory_store")
 
 	// Fetch conversation history from episodic memory (LCM).
 	history := r.memoryGetHistory(ctx, sessionID)
+	mark("memory_history")
 
 	// Search semantic memory (Mem0) for relevant facts about the user/topic.
 	memoryFacts := r.memorySearchFacts(ctx, req.Message)
+	mark("memory_facts")
 
 	var reqTraceID string
 	if r.debug {
@@ -653,6 +663,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
 			fmt.Sprintf("Asking @%s...", resolved.Alias), nil)
+		mark("routing")
 
 		callStart := time.Now()
 		enrichedPrompt := r.enrichSystemPrompt(resolved.Alias, resolved.SystemPrompt, aliases)
@@ -667,7 +678,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		}
 		agentResp, err := r.callAgentWithRetry(ctx, resolved.PluginID, resolved.Model,
 			remainder, req.ImageURLs, history, resolved.Alias, enrichedPrompt, cb)
+		mark("agent_call")
 		if err != nil {
+			log.Printf("[timing] tg=%s FAILED %s | %s", taskGroupID, strings.Join(timings, " "), err)
 			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
 				fmt.Sprintf("Agent error: %v", err), nil)
 			return
@@ -697,6 +710,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			{Role: "assistant", Content: agentResp.Response},
 		})
 
+		mark("total")
+		log.Printf("[timing] tg=%s %s", taskGroupID, strings.Join(timings, " "))
+
 		rr := &relayResponse{
 			Response:    agentResp.Response,
 			Responder:   resolved.Alias,
@@ -721,6 +737,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "running",
 		fmt.Sprintf("Asking @%s...", defaultAgent.Alias), nil)
+	mark("routing")
 
 	callStart := time.Now()
 	enrichedPrompt := r.enrichSystemPrompt(defaultAgent.Alias, defaultAgent.SystemPrompt, aliases)
@@ -735,7 +752,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	}
 	agentResp, err := r.callAgentWithRetry(ctx, defaultAgent.PluginID, defaultAgent.Model,
 		req.Message, req.ImageURLs, history, defaultAgent.Alias, enrichedPrompt, cb)
+	mark("agent_call")
 	if err != nil {
+		log.Printf("[timing] tg=%s FAILED %s | %s", taskGroupID, strings.Join(timings, " "), err)
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
 			fmt.Sprintf("Agent error: %v", err), nil)
 		return
@@ -751,6 +770,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		{Role: "user", Content: req.Message},
 		{Role: "assistant", Content: agentResp.Response},
 	})
+
+	mark("total")
+	log.Printf("[timing] tg=%s %s", taskGroupID, strings.Join(timings, " "))
 
 	rr := &relayResponse{
 		Response:    agentResp.Response,
