@@ -215,17 +215,21 @@ func (p *process) sendMessage(prompt string, streamCb func(StreamEvent)) (*ChatR
 					streamCb(StreamEvent{Model: event.Message.Model})
 				}
 			}
-			// Extract text content blocks for streaming deltas.
+			// Extract content blocks — text deltas and tool use.
 			var raw struct {
 				Message struct {
 					Content []struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
+						Name string `json:"name"` // tool_use name
 					} `json:"content"`
 				} `json:"message"`
 			}
 			if err := json.Unmarshal([]byte(line), &raw); err == nil {
 				for _, block := range raw.Message.Content {
+					if block.Type == "tool_use" && block.Name != "" && streamCb != nil {
+						streamCb(StreamEvent{ToolName: block.Name})
+					}
 					if block.Type == "text" && block.Text != "" {
 						if streamCb != nil {
 							// Emit delta.

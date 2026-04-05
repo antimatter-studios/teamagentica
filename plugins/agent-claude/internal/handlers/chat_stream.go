@@ -133,6 +133,14 @@ func (h *Handler) ChatStream(c *gin.Context) {
 				writeSSE("token", gin.H{"content": ev.Text})
 			}
 
+			if ev.ToolName != "" {
+				writeSSE("tool_use", gin.H{"name": ev.ToolName})
+			}
+
+			if ev.ToolDone != "" {
+				writeSSE("tool_result", gin.H{"name": ev.ToolDone})
+			}
+
 			if ev.Model != "" {
 				respModel = ev.Model
 			}

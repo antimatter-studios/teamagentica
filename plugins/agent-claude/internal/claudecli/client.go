@@ -304,6 +304,8 @@ func truncate(s string, n int) string {
 // StreamEvent represents a single event from the Claude CLI stream.
 type StreamEvent struct {
 	Text      string
+	ToolName  string // non-empty when Claude starts using a tool (e.g. "Bash", "Edit", "Read")
+	ToolDone  string // non-empty when tool result arrives (tool name)
 	Usage     *ChatResponseUsage
 	CostUSD   float64
 	NumTurns  int
