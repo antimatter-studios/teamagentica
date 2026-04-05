@@ -619,17 +619,25 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "thinking", thinkingMsg, nil)
 	mark("emit_thinking")
 
-	// Store the incoming user message in episodic memory (LCM).
-	r.memoryStore(sessionID, "user", req.Message, "")
-	mark("memory_store")
-
-	// Fetch conversation history from episodic memory (LCM).
-	history := r.memoryGetHistory(ctx, sessionID)
-	mark("memory_history")
-
-	// Search semantic memory (Mem0) for relevant facts about the user/topic.
-	memoryFacts := r.memorySearchFacts(ctx, req.Message)
-	mark("memory_facts")
+	// Store, fetch history, and search facts all in parallel.
+	var history []conversationMsg
+	var memoryFacts string
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		r.memoryStore(sessionID, "user", req.Message, "")
+	}()
+	go func() {
+		defer wg.Done()
+		history = r.memoryGetHistory(ctx, sessionID)
+	}()
+	go func() {
+		defer wg.Done()
+		memoryFacts = r.memorySearchFacts(ctx, req.Message)
+	}()
+	wg.Wait()
+	mark("memory")
 
 	var reqTraceID string
 	if r.debug {
