@@ -436,6 +436,11 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 			cwd = workdirOverride
 		}
 
+		start := time.Now()
+		mark := func(label string) string {
+			return fmt.Sprintf("%s=%dms", label, time.Since(start).Milliseconds())
+		}
+
 		log.Printf("[codex-cli] app-server: starting thread (model=%s)", model)
 
 		// thread/start
@@ -460,20 +465,21 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 			return
 		}
 		threadID := tsr.Thread.ID
-		log.Printf("[codex-cli] app-server: thread %s started", threadID)
+		tThread := mark("thread_start")
 
 		// Build input.
 		input := []map[string]string{{"type": "text", "text": prompt}}
-		// TODO: handle imageURLs as localImage input items
 
 		// turn/start
-		log.Printf("[codex-cli] app-server: starting turn...")
+		firstToken := time.Time{}
 		_, err = c.server.sendRequest("turn/start", map[string]interface{}{
 			"threadId": threadID,
 			"input":    input,
 			"model":    model,
 		}, func(n notification) {
-			// Forward streaming notifications during the turn/start response wait.
+			if firstToken.IsZero() && n.Method == "item/agentMessage/delta" {
+				firstToken = time.Now()
+			}
 			c.handleNotification(n, ch)
 		})
 		if err != nil {
@@ -481,19 +487,26 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 			ch <- StreamEvent{Err: fmt.Errorf("turn/start: %w", err)}
 			return
 		}
-
-		log.Printf("[codex-cli] app-server: turn started, reading notifications...")
+		tTurnStart := mark("turn_start")
 
 		// Read notifications until turn completes.
 		err = c.server.readNotifications(func(n notification) {
+			if firstToken.IsZero() && n.Method == "item/agentMessage/delta" {
+				firstToken = time.Now()
+			}
 			c.handleNotification(n, ch)
 		})
 		if err != nil {
 			ch <- StreamEvent{Err: err}
 			return
 		}
+		tTurnDone := mark("turn_done")
 
-		log.Printf("[codex-cli] app-server: turn complete")
+		firstTokenMs := ""
+		if !firstToken.IsZero() {
+			firstTokenMs = fmt.Sprintf("first_token=%dms", firstToken.Sub(start).Milliseconds())
+		}
+		log.Printf("[codex-cli] [timing] %s %s %s %s", tThread, tTurnStart, firstTokenMs, tTurnDone)
 		ch <- StreamEvent{Done: true}
 	}()
 
