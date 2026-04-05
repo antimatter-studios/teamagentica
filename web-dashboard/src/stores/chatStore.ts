@@ -369,22 +369,19 @@ function startBackgroundPoll() {
 // Auto-start polling when the module loads.
 startBackgroundPoll();
 
-// Track the timestamp of the last event we processed.
-let _lastSeenTimestamp = "";
+// Track which task_group_id + status combos we've already handled.
+const _processedEvents = new Set<string>();
 
 useEventStore.subscribe((state, prevState) => {
   const events = state.eventLogEvents;
   const prevEvents = prevState.eventLogEvents;
   if (events.length === 0 || events === prevEvents) return;
 
-  const newCount = events.length - prevEvents.length;
-  console.log("[chat-sub] eventLogEvents changed, new events:", newCount, "total:", events.length);
-
   const chatState = useChatStore.getState();
   const inFlightTasks = chatState.inFlightTasks;
   const shelved = chatState.shelvedTasks;
 
-  // Build set of task group IDs we care about, mapped to their conversation IDs.
+  // Build set of task group IDs we care about.
   const watchedIds = new Map<string, number>();
   for (const [convIdStr, task] of Object.entries(inFlightTasks)) {
     watchedIds.set(task.taskGroupId, Number(convIdStr));
@@ -394,16 +391,15 @@ useEventStore.subscribe((state, prevState) => {
     if (t.status === "processing") shelvedIds.add(t.taskGroupId);
   }
 
-  if (watchedIds.size === 0 && shelvedIds.size === 0) {
-    if (events[0]?.created_at) _lastSeenTimestamp = events[0].created_at;
-    return;
-  }
+  if (watchedIds.size === 0 && shelvedIds.size === 0) return;
 
-  // Scan new events (newest-first) until we hit one we've already processed.
+  // Scan ALL events — deduplicate by tg+status+timestamp to avoid reprocessing.
   const refreshedConvs = new Set<number>();
   for (const evt of events) {
-    if (evt.created_at && evt.created_at <= _lastSeenTimestamp) break;
     if (evt.event_type !== "relay:progress") continue;
+    const evtKey = `${evt.created_at}:${evt.detail?.substring(0, 80)}`;
+    if (_processedEvents.has(evtKey)) continue;
+    _processedEvents.add(evtKey);
 
     try {
       const detail = JSON.parse(evt.detail);
@@ -418,17 +414,21 @@ useEventStore.subscribe((state, prevState) => {
         const currentState = useChatStore.getState();
 
         if (isTerminal) {
-          // Terminal: clear progress, fetch final message from DB.
+          // Terminal: clear progress + in-flight task, fetch final message.
+          console.log("[chat-sub] MATCH conv", convId, "terminal:", detail.status);
           currentState.clearProgressInfo(convId);
+          const { [convId]: _, ...rest } = currentState.inFlightTasks;
+          useChatStore.setState({
+            inFlightTasks: rest,
+            ...(currentState.activeConversationId === convId
+              ? { sending: false, activeTaskGroupId: null, sendStartedAt: null }
+              : {}),
+          });
           if (currentState.activeConversationId === convId && !refreshedConvs.has(convId)) {
-            console.log("[chat-sub] MATCH conv", convId, "terminal — fetching final message");
             currentState.refreshMessages();
             refreshedConvs.add(convId);
           } else if (currentState.activeConversationId !== convId) {
-            // Non-active conv completed — clear in-flight + bump unread.
-            const { [convId]: _, ...rest } = currentState.inFlightTasks;
             useChatStore.setState((s) => ({
-              inFlightTasks: rest,
               conversations: s.conversations.map((c) =>
                 c.id === convId ? { ...c, unread_count: (c.unread_count ?? 0) + 1 } : c
               ),
@@ -469,6 +469,11 @@ useEventStore.subscribe((state, prevState) => {
     }
   }
 
-  // Update high-water mark.
-  if (events[0]?.created_at) _lastSeenTimestamp = events[0].created_at;
+  // Prune old entries from the processed set to prevent memory leak.
+  if (_processedEvents.size > 1000) {
+    const entries = Array.from(_processedEvents);
+    entries.splice(0, entries.length - 500);
+    _processedEvents.clear();
+    entries.forEach((e) => _processedEvents.add(e));
+  }
 });
