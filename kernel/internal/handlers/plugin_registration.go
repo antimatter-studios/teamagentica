@@ -275,10 +275,9 @@ func (h *PluginHandler) Heartbeat(c *gin.Context) {
 		})
 	}
 
-	h.Events.Emit(events.DebugEvent{
-		Type:     "heartbeat",
-		PluginID: req.ID,
-	})
+	// Heartbeats are not emitted to the event hub — they flood the stream
+	// and push out useful events. The health monitor tracks heartbeats via
+	// the last_seen timestamp in the database.
 
 	// If host/port is empty, tell the plugin to re-register so the kernel
 	// can recover the connection without restarting the container.

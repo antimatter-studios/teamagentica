@@ -191,14 +191,9 @@ func (h *PluginHandler) BroadcastRegistrySync() {
 // so they appear in the unified SSE stream. Call after plugins have started.
 func (h *PluginHandler) EnableEventPublisher() {
 	h.Events.SetPublisher(func(eventType, source, detail string) {
-		// Skip heartbeats — they flood the event stream and push out
-		// useful events like relay:progress before the dashboard can read them.
-		if strings.HasSuffix(eventType, "heartbeat") {
-			return
-		}
 		h.PublishEvent(eventType, detail)
 	})
-	log.Printf("kernel: event publisher enabled (events → infra-redis, heartbeats filtered)")
+	log.Printf("kernel: event publisher enabled (events → infra-redis)")
 }
 
 // stripHTMLTags removes all HTML tags from a string to prevent XSS.
