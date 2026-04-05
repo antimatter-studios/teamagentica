@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -839,22 +838,16 @@ func (r *relay) routeToWorkspace(c *gin.Context, ws *router.WorkspaceRoute, req 
 	})
 }
 
-// agentChatRequest is the standard chat format used by all agent plugins.
-type agentChatRequest struct {
-	Message       string            `json:"message"`
-	Model         string            `json:"model,omitempty"`
-	ImageURLs     []string          `json:"image_urls,omitempty"`
-	Conversation  []conversationMsg `json:"conversation"`
-	AgentAlias    string            `json:"agent_alias,omitempty"`
-	SystemPrompt  string            `json:"system_prompt,omitempty"`
-	SessionID     string            `json:"session_id,omitempty"`
-}
+// conversationMsg aliases the SDK type for relay-internal use.
+type conversationMsg = pluginsdk.ConversationMsg
 
-type conversationMsg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
+// agentUsage aliases the SDK type.
+type agentUsage = pluginsdk.AgentUsage
 
+// agentAttachment aliases the SDK type.
+type agentAttachment = pluginsdk.AgentAttachment
+
+// agentChatResponse wraps an agent's streaming result with relay-specific fields.
 type agentChatResponse struct {
 	Response    string              `json:"response"`
 	Model       string              `json:"model,omitempty"`
@@ -867,57 +860,45 @@ type agentChatResponse struct {
 	TaskID      string              `json:"task_id,omitempty"` // plugin's internal task ID
 }
 
-type agentUsage struct {
-	PromptTokens     int `json:"prompt_tokens,omitempty"`
-	CompletionTokens int `json:"completion_tokens,omitempty"`
-	CachedTokens     int `json:"cached_tokens,omitempty"`
-}
-
-type agentAttachment struct {
-	MimeType  string `json:"mime_type"`
-	ImageData string `json:"image_data,omitempty"`
-	Type      string `json:"type,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Filename  string `json:"filename,omitempty"`
-}
-
-// callAgent sends a chat request to an agent plugin via the kernel route.
-// The caller is responsible for resolving the persona/alias and passing the
-// system prompt; callAgent no longer does its own persona lookup.
-// Optional headers are merged into the outgoing request (e.g. call depth).
-func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string, extraHeaders ...map[string]string) (*agentChatResponse, error) {
+// buildAgentRequest constructs a pluginsdk.AgentChatRequest from relay parameters.
+func buildAgentRequest(message, model string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt, sessionID string) pluginsdk.AgentChatRequest {
 	conversation := append(history, conversationMsg{Role: "user", Content: message})
-
-	reqBody := agentChatRequest{
-		Message:       message,
-		Model:         model,
-		ImageURLs:     imageURLs,
-		Conversation:  conversation,
-		AgentAlias:    agentAlias,
-		SystemPrompt:  systemPrompt,
+	return pluginsdk.AgentChatRequest{
+		Message:      message,
+		Model:        model,
+		ImageURLs:    imageURLs,
+		Conversation: conversation,
+		AgentAlias:   agentAlias,
+		SystemPrompt: systemPrompt,
+		SessionID:    sessionID,
 	}
+}
 
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
+// doneToResponse converts a pluginsdk.DoneEvent into an agentChatResponse.
+func doneToResponse(d *pluginsdk.DoneEvent) *agentChatResponse {
+	resp := &agentChatResponse{
+		Response:    d.Response,
+		Model:       d.Model,
+		Backend:     d.Backend,
+		Attachments: d.Attachments,
 	}
+	if d.Usage != nil {
+		resp.Usage = d.Usage
+	}
+	return resp
+}
 
-	var respBody []byte
-	if len(extraHeaders) > 0 && extraHeaders[0] != nil {
-		respBody, err = r.sdk.RouteToPluginWithHeaders(ctx, pluginID, "POST", "/chat", bytes.NewReader(body), extraHeaders[0])
-	} else {
-		respBody, err = r.sdk.RouteToPlugin(ctx, pluginID, "POST", "/chat", bytes.NewReader(body))
-	}
+// callAgent sends a chat request to an agent plugin via the SDK and collects
+// the final response. Used for agent-to-agent delegation.
+func (r *relay) callAgent(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string, extraHeaders ...map[string]string) (*agentChatResponse, error) {
+	req := buildAgentRequest(message, model, imageURLs, history, agentAlias, systemPrompt, "")
+
+	done, err := r.sdk.AgentChat(ctx, pluginID, req)
 	if err != nil {
 		return nil, err
 	}
 
-	var chatResp agentChatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	return &chatResp, nil
+	return doneToResponse(done), nil
 }
 
 // streamCallback receives streaming events from callAgentStream.
@@ -996,120 +977,50 @@ func (r *relay) callAgentWithRetry(
 	return nil, fmt.Errorf("%w (after %d retries)", lastErr, maxAgentRetries)
 }
 
-// callAgentStream sends a chat request to an agent plugin's streaming endpoint
-// and forwards token chunks as relay:progress events. Returns the complete
-// response when the stream finishes.
+// callAgentStream sends a chat request to an agent plugin via the SDK's
+// streaming helper and forwards token/tool events as relay:progress events.
+// Returns the complete response when the stream finishes.
 func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message string, imageURLs []string, history []conversationMsg, agentAlias, systemPrompt string, cb streamCallback) (*agentChatResponse, error) {
-	conversation := append(history, conversationMsg{Role: "user", Content: message})
+	sessionID := cb.SourcePlugin + ":" + cb.ChannelID
+	req := buildAgentRequest(message, model, imageURLs, history, agentAlias, systemPrompt, sessionID)
 
-	reqBody := agentChatRequest{
-		Message:      message,
-		Model:        model,
-		ImageURLs:    imageURLs,
-		Conversation: conversation,
-		AgentAlias:   agentAlias,
-		SystemPrompt: systemPrompt,
-		SessionID:    cb.SourcePlugin + ":" + cb.ChannelID,
-	}
-
-	body, err := json.Marshal(reqBody)
+	stream, err := r.sdk.AgentChatStream(ctx, pluginID, req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
+		return nil, err
 	}
 
-	resp, err := r.sdk.RouteToPluginStream(ctx, pluginID, "POST", "/chat/stream", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("stream to %s: %w", pluginID, err)
-	}
-	defer resp.Body.Close()
-
-	// Parse SSE stream and forward to messaging plugin.
 	var fullText string
 	var lastFlush time.Time
 	flushInterval := 300 * time.Millisecond
-
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
-
 	var finalResp agentChatResponse
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			// Also check for event type lines to track tool calls.
-			if strings.HasPrefix(line, "event: ") {
-				continue
-			}
-			continue
-		}
-
-		// Parse the event type from the preceding "event:" line.
-		// SSE spec: event line comes before data line. But since we process
-		// line by line, we need to parse the event type from the data content.
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var ev struct {
-			Content  string          `json:"content,omitempty"`
-			Name     string          `json:"name,omitempty"`
-			Error    string          `json:"error,omitempty"`
-			Response string          `json:"response,omitempty"`
-			Model    string          `json:"model,omitempty"`
-			Backend  string          `json:"backend,omitempty"`
-			Result   string          `json:"result,omitempty"`
-			Usage    *agentUsage     `json:"usage,omitempty"`
-			Attachments []agentAttachment `json:"attachments,omitempty"`
-		}
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			continue
-		}
-
-		// Token event — accumulate and flush periodically.
-		if ev.Content != "" {
-			fullText += ev.Content
+	for ev := range stream {
+		switch d := ev.Data.(type) {
+		case pluginsdk.TokenEvent:
+			fullText += d.Content
 			if time.Since(lastFlush) >= flushInterval {
 				r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "streaming", fullText, nil)
 				lastFlush = time.Now()
 			}
-		}
 
-		// Tool call event — emit status update.
-		if ev.Name != "" && ev.Result == "" && ev.Error == "" && ev.Response == "" {
+		case pluginsdk.ToolCallEvent:
 			r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "running",
-				fmt.Sprintf("@%s is using %s...", cb.Responder, ev.Name), nil)
-		}
+				fmt.Sprintf("@%s is using %s...", cb.Responder, d.Name), nil)
 
-		// Tool result event.
-		if ev.Name != "" && (ev.Result != "" || ev.Error != "") {
+		case pluginsdk.ToolResultEvent:
 			action := "got result from"
-			if ev.Error != "" {
+			if d.Error != "" {
 				action = "error from"
 			}
 			r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "running",
-				fmt.Sprintf("@%s %s %s", cb.Responder, action, ev.Name), nil)
-		}
+				fmt.Sprintf("@%s %s %s", cb.Responder, action, d.Name), nil)
 
-		// Done event — final response.
-		if ev.Response != "" {
-			finalResp = agentChatResponse{
-				Response:    ev.Response,
-				Model:       ev.Model,
-				Backend:     ev.Backend,
-				Usage:       ev.Usage,
-				Attachments: ev.Attachments,
-			}
-		}
+		case pluginsdk.DoneEvent:
+			finalResp = *doneToResponse(&d)
 
-		// Error event.
-		if ev.Error != "" && ev.Name == "" {
-			return nil, fmt.Errorf("agent stream error: %s", ev.Error)
+		case pluginsdk.ErrorEvent:
+			return nil, fmt.Errorf("agent stream error: %s", d.Error)
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading stream: %w", err)
 	}
 
 	// Send final streaming flush if there's unsent text.

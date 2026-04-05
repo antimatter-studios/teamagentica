@@ -332,30 +332,26 @@ func (s *Server) handleSendMessage(ctx context.Context, req mcplib.CallToolReque
 	}
 
 	identity := fmt.Sprintf("You are @%s (%s). You are one of several AI agents in a collaborative platform.", agentID, pluginID)
-	chatReq := map[string]interface{}{
-		"message": message,
-		"conversation": []map[string]string{
-			{"role": "system", "content": identity},
-			{"role": "user", "content": message},
-		},
-	}
 	if model == "" {
 		model = aliasModel
 	}
-	if model != "" {
-		chatReq["model"] = model
-	}
-	body, _ := json.Marshal(chatReq)
 
 	callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	resp, err := s.sdk.RouteToPlugin(callCtx, pluginID, "POST", "/chat", bytes.NewReader(body))
+	done, err := s.sdk.AgentChat(callCtx, pluginID, pluginsdk.AgentChatRequest{
+		Message: message,
+		Model:   model,
+		Conversation: []pluginsdk.ConversationMsg{
+			{Role: "system", Content: identity},
+			{Role: "user", Content: message},
+		},
+	})
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("Error routing to %s (plugin=%s): %v", agentID, pluginID, err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("Agent %s error: %v", agentID, err)), nil
 	}
 
-	return mcplib.NewToolResultText(string(resp)), nil
+	return mcplib.NewToolResultText(done.Response), nil
 }
 
 // resolveAlias resolves an alias name to a plugin ID and optional model.
