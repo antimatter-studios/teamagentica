@@ -10,7 +10,13 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 )
+
+func generateUUID() string {
+	return uuid.New().String()
+}
 
 // processConfig captures the startup parameters for a persistent CLI process.
 // If any of these change between requests, the process must be restarted.
@@ -47,7 +53,6 @@ func (c *Client) startProcess(cfg processConfig) (*process, error) {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
-		"--bare",
 	}
 
 	if cfg.sessionID != "" {
@@ -135,10 +140,23 @@ func (p *process) kill() {
 	}
 }
 
-// streamInputMessage is the JSON written to the process stdin for each user turn.
+// streamInputMessage matches the Agent SDK envelope for stream-json input.
 type streamInputMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Type              string             `json:"type"`
+	UUID              string             `json:"uuid"`
+	SessionID         string             `json:"session_id"`
+	ParentToolUseID   *string            `json:"parent_tool_use_id"`
+	Message           streamInputPayload `json:"message"`
+}
+
+type streamInputPayload struct {
+	Role    string               `json:"role"`
+	Content []streamContentBlock `json:"content"`
+}
+
+type streamContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 // sendMessage writes a user message to the process stdin and reads events until
@@ -146,8 +164,15 @@ type streamInputMessage struct {
 // the provided callback, or collects and returns the final ChatResponse.
 func (p *process) sendMessage(prompt string, streamCb func(StreamEvent)) (*ChatResponse, error) {
 	msg := streamInputMessage{
-		Type:    "user",
-		Content: prompt,
+		Type:      "user",
+		UUID:      generateUUID(),
+		SessionID: "",
+		Message: streamInputPayload{
+			Role: "user",
+			Content: []streamContentBlock{
+				{Type: "text", Text: prompt},
+			},
+		},
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -277,5 +302,8 @@ func (p *process) sendMessage(prompt string, streamCb func(StreamEvent)) (*ChatR
 
 	// Scanner exited without a result — process died.
 	p.alive = false
+	if err := p.reader.Err(); err != nil {
+		return nil, fmt.Errorf("claude CLI process exited unexpectedly (scanner error: %w)", err)
+	}
 	return nil, fmt.Errorf("claude CLI process exited unexpectedly (no result event)")
 }

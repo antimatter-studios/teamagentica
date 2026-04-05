@@ -451,6 +451,32 @@ func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, t
 }
 
 // buildPrompt concatenates conversation messages into a single prompt string.
+// lastUserMessage returns the content of the last user message in the list.
+func lastUserMessage(messages []anthropic.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+
+// buildPromptWithSystem flattens messages into a single prompt string,
+// prepending the system prompt if provided. Used as fallback when there
+// is no extractable user message.
+func buildPromptWithSystem(messages []anthropic.Message, systemPrompt string) string {
+	if systemPrompt != "" {
+		filtered := make([]anthropic.Message, 0, len(messages))
+		for _, m := range messages {
+			if m.Role != "system" {
+				filtered = append(filtered, m)
+			}
+		}
+		messages = append([]anthropic.Message{{Role: "system", Content: systemPrompt}}, filtered...)
+	}
+	return buildPrompt(messages)
+}
+
 func buildPrompt(messages []anthropic.Message) string {
 	if len(messages) == 1 {
 		return messages[0].Content

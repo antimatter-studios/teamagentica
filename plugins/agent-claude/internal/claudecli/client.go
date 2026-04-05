@@ -1,15 +1,11 @@
 package claudecli
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
@@ -225,8 +221,7 @@ func (c *Client) ChatCompletion(model string, prompt string, systemPrompt string
 
 	proc, err := pool.Acquire(convKey)
 	if err != nil {
-		log.Printf("[claude-cli] pool acquire failed, falling back to one-shot: %v", err)
-		return c.chatCompletionOneShot(model, prompt, systemPrompt, maxTurns, allowedTools, mcpConfig, opts)
+		return nil, fmt.Errorf("pool acquire: %w", err)
 	}
 
 	resp, err := proc.sendMessage(prompt, nil)
@@ -234,8 +229,7 @@ func (c *Client) ChatCompletion(model string, prompt string, systemPrompt string
 		if !proc.alive {
 			pool.MarkDead(convKey)
 		}
-		log.Printf("[claude-cli] persistent process error, falling back to one-shot: %v", err)
-		return c.chatCompletionOneShot(model, prompt, systemPrompt, maxTurns, allowedTools, mcpConfig, opts)
+		return nil, err
 	}
 
 	pool.Release(convKey)
@@ -259,8 +253,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 
 		proc, err := pool.Acquire(convKey)
 		if err != nil {
-			log.Printf("[claude-cli] pool acquire failed, falling back to one-shot stream: %v", err)
-			c.chatCompletionStreamOneShot(ctx, model, prompt, systemPrompt, maxTurns, allowedTools, mcpConfig, opts, ch)
+			ch <- StreamEvent{Err: fmt.Errorf("pool acquire: %w", err)}
 			return
 		}
 
@@ -276,10 +269,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 			if !proc.alive {
 				pool.MarkDead(convKey)
 			}
-			// Only send error if process died mid-stream (streamCb may have already sent partial data).
-			if !proc.alive {
-				ch <- StreamEvent{Err: err}
-			}
+			ch <- StreamEvent{Err: err}
 			return
 		}
 
@@ -290,317 +280,6 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 	return ch
 }
 
-// --- One-shot fallback methods (original per-request exec pattern) ---
-
-func (c *Client) chatCompletionOneShot(model string, prompt string, systemPrompt string, maxTurns int, allowedTools []string, mcpConfig string, opts *ChatOptions) (*ChatResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	isResume := opts != nil && (opts.SessionID != "" || opts.Resume)
-
-	var args []string
-	if isResume {
-		if opts.SessionID != "" {
-			args = append(args, "--session-id", opts.SessionID)
-		} else {
-			args = append(args, "--resume")
-		}
-		args = append(args, "-p", prompt, "--output-format", "stream-json", "--verbose")
-	} else {
-		args = []string{
-			"-p", prompt,
-			"--output-format", "stream-json",
-			"--verbose",
-		}
-	}
-
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	if systemPrompt != "" {
-		args = append(args, "--append-system-prompt", systemPrompt)
-	}
-	if maxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
-	}
-	for _, tool := range allowedTools {
-		args = append(args, "--allowedTools", tool)
-	}
-	if mcpConfig != "" {
-		args = append(args, "--mcp-config", mcpConfig)
-	}
-	if c.skipPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-
-	cmd := exec.CommandContext(ctx, c.binary, args...)
-
-	workdir := c.workdir
-	if opts != nil && opts.WorkspaceDir != "" {
-		workdir = opts.WorkspaceDir
-	}
-	cmd.Dir = workdir
-
-	env := c.env()
-	if opts != nil && opts.WorkspaceDir != "" {
-		wsConfigDir := opts.WorkspaceDir + "/.claude-config"
-		os.MkdirAll(wsConfigDir, 0755)
-		for i, e := range env {
-			if strings.HasPrefix(e, "CLAUDE_CONFIG_DIR=") {
-				env[i] = "CLAUDE_CONFIG_DIR=" + wsConfigDir
-				break
-			}
-		}
-	}
-	cmd.Env = env
-
-	if c.debug {
-		log.Printf("[claude-cli] one-shot: %s %s", c.binary, strings.Join(args, " "))
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("claude CLI timed out after %s", c.timeout)
-		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("claude CLI exited with code %d: stderr=%s stdout=%s",
-				exitErr.ExitCode(), stderr.String(), truncate(stdout.String(), 500))
-		}
-		return nil, fmt.Errorf("claude CLI exec: %w", err)
-	}
-
-	return parseStreamJSON(stdout.Bytes(), c.debug)
-}
-
-func (c *Client) chatCompletionStreamOneShot(ctx context.Context, model string, prompt string, systemPrompt string, maxTurns int, allowedTools []string, mcpConfig string, opts *ChatOptions, ch chan<- StreamEvent) {
-	isResume := opts != nil && (opts.SessionID != "" || opts.Resume)
-
-	var args []string
-	if isResume {
-		if opts.SessionID != "" {
-			args = append(args, "--session-id", opts.SessionID)
-		} else {
-			args = append(args, "--resume")
-		}
-		args = append(args, "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages")
-	} else {
-		args = []string{
-			"-p", prompt,
-			"--output-format", "stream-json",
-			"--verbose",
-			"--include-partial-messages",
-		}
-	}
-
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	if systemPrompt != "" {
-		args = append(args, "--append-system-prompt", systemPrompt)
-	}
-	if maxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
-	}
-	for _, tool := range allowedTools {
-		args = append(args, "--allowedTools", tool)
-	}
-	if mcpConfig != "" {
-		args = append(args, "--mcp-config", mcpConfig)
-	}
-	if c.skipPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-
-	cmd := exec.CommandContext(ctx, c.binary, args...)
-
-	workdir := c.workdir
-	if opts != nil && opts.WorkspaceDir != "" {
-		workdir = opts.WorkspaceDir
-	}
-	cmd.Dir = workdir
-
-	env := c.env()
-	if opts != nil && opts.WorkspaceDir != "" {
-		wsConfigDir := opts.WorkspaceDir + "/.claude-config"
-		os.MkdirAll(wsConfigDir, 0755)
-		for i, e := range env {
-			if strings.HasPrefix(e, "CLAUDE_CONFIG_DIR=") {
-				env[i] = "CLAUDE_CONFIG_DIR=" + wsConfigDir
-				break
-			}
-		}
-	}
-	cmd.Env = env
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		ch <- StreamEvent{Err: fmt.Errorf("stdout pipe: %w", err)}
-		return
-	}
-	cmd.Stderr = nil
-
-	if err := cmd.Start(); err != nil {
-		ch <- StreamEvent{Err: fmt.Errorf("start claude: %w", err)}
-		return
-	}
-
-	if c.debug {
-		log.Printf("[claude-cli] one-shot stream: %s %s", c.binary, strings.Join(args, " "))
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-
-	var lastText string
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var event streamEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-
-		switch event.Type {
-		case "assistant":
-			if event.Message != nil && event.Message.Model != "" {
-				ch <- StreamEvent{Model: event.Message.Model}
-			}
-			var raw struct {
-				Message struct {
-					Content []struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"content"`
-				} `json:"message"`
-			}
-			if err := json.Unmarshal([]byte(line), &raw); err == nil {
-				for _, block := range raw.Message.Content {
-					if block.Type == "text" && block.Text != "" {
-						if strings.HasPrefix(block.Text, lastText) && lastText != "" {
-							delta := block.Text[len(lastText):]
-							if delta != "" {
-								ch <- StreamEvent{Text: delta}
-							}
-						} else if lastText == "" || !strings.HasPrefix(block.Text, lastText) {
-							ch <- StreamEvent{Text: block.Text}
-						}
-						lastText = block.Text
-					}
-				}
-			}
-
-		case "result":
-			if event.IsError {
-				ch <- StreamEvent{Err: fmt.Errorf("claude CLI error: %s", event.Result)}
-				return
-			}
-			if event.Result != "" && event.Result != lastText {
-				if strings.HasPrefix(event.Result, lastText) && lastText != "" {
-					remainder := event.Result[len(lastText):]
-					if remainder != "" {
-						ch <- StreamEvent{Text: remainder}
-					}
-				} else {
-					ch <- StreamEvent{Text: event.Result}
-				}
-			}
-			sev := StreamEvent{
-				CostUSD:   event.TotalCostUSD,
-				NumTurns:  event.NumTurns,
-				SessionID: event.SessionID,
-			}
-			if event.Usage != nil {
-				sev.Usage = &ChatResponseUsage{
-					InputTokens:  event.Usage.InputTokens,
-					OutputTokens: event.Usage.OutputTokens,
-					CachedTokens: event.Usage.CacheRead,
-				}
-			}
-			ch <- sev
-
-		default:
-			if c.debug {
-				log.Printf("[claude-cli] event: %s", event.Type)
-			}
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			ch <- StreamEvent{Err: fmt.Errorf("claude CLI timed out")}
-			return
-		}
-		if lastText == "" {
-			ch <- StreamEvent{Err: fmt.Errorf("claude CLI: %w", err)}
-			return
-		}
-	}
-
-	ch <- StreamEvent{Done: true}
-}
-
-// parseStreamJSON extracts the final result from stream-json output.
-func parseStreamJSON(data []byte, debug bool) (*ChatResponse, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	var resp ChatResponse
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var event streamEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			if debug {
-				log.Printf("[claude-cli] skip unparseable line: %s", truncate(line, 200))
-			}
-			continue
-		}
-
-		switch event.Type {
-		case "result":
-			if event.IsError {
-				return nil, fmt.Errorf("claude CLI returned error: %s", event.Result)
-			}
-			resp.Response = event.Result
-			resp.CostUSD = event.TotalCostUSD
-			resp.DurationMs = event.DurationMs
-			resp.NumTurns = event.NumTurns
-			resp.SessionID = event.SessionID
-			if event.Usage != nil {
-				resp.InputTokens = event.Usage.InputTokens
-				resp.OutputTokens = event.Usage.OutputTokens
-				resp.CachedTokens = event.Usage.CacheRead
-			}
-		case "assistant":
-			if event.Message != nil && event.Message.Model != "" {
-				resp.Model = event.Message.Model
-			}
-		default:
-			if debug {
-				log.Printf("[claude-cli] event: %s", event.Type)
-			}
-		}
-	}
-
-	if resp.Response == "" {
-		return nil, fmt.Errorf("claude CLI produced no result in output (%d bytes)", len(data))
-	}
-
-	return &resp, nil
-}
 
 func truncate(s string, n int) string {
 	if len(s) <= n {

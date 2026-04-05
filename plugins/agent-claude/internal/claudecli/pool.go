@@ -229,13 +229,9 @@ func (p *Pool) reapIdle() {
 			log.Printf("[pool] reaped dead process for %s (session %s preserved)", id, entry.sessionID)
 			continue
 		}
-		if now.Sub(entry.lastUsed) > p.idleTTL {
-			log.Printf("[pool] reaping idle process for %s session=%s (idle %s)",
-				id, entry.sessionID, now.Sub(entry.lastUsed).Round(time.Second))
-			entry.proc.kill()
-			delete(p.active, id)
-			// NOTE: p.sessions[id] is intentionally kept for resumption.
-		}
+		// TODO: TTL-based reaping disabled — requests routinely take 2-3+ minutes.
+		// Re-enable with inUse guard once we have proper idle detection.
+		_ = now
 	}
 
 	// Also clean dead hot processes.

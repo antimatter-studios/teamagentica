@@ -90,17 +90,16 @@ func (h *Handler) ChatStream(c *gin.Context) {
 		if systemPrompt == "" {
 			systemPrompt = h.defaultPrompt
 		}
-		if systemPrompt != "" {
-			filtered := make([]anthropic.Message, 0, len(messages))
-			for _, m := range messages {
-				if m.Role != "system" {
-					filtered = append(filtered, m)
-				}
-			}
-			messages = append([]anthropic.Message{{Role: "system", Content: systemPrompt}}, filtered...)
-		}
 
-		prompt := buildPrompt(messages)
+		// For persistent CLI processes, send only the latest user message.
+		// The system prompt is passed via --append-system-prompt at process
+		// startup, and the session maintains conversation context.
+		// Flattening the full history into one message breaks the CLI's
+		// stream-json input parser.
+		prompt := lastUserMessage(messages)
+		if prompt == "" {
+			prompt = buildPromptWithSystem(messages, systemPrompt)
+		}
 
 		var opts *claudecli.ChatOptions
 		if req.WorkspaceID != "" || req.SessionID != "" {
