@@ -634,7 +634,9 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	}()
 	go func() {
 		defer wg.Done()
-		memoryFacts = r.memorySearchFacts(ctx, req.Message)
+		factsCtx, factsCancel := context.WithTimeout(ctx, 1*time.Second)
+		defer factsCancel()
+		memoryFacts = r.memorySearchFacts(factsCtx, req.Message)
 	}()
 	wg.Wait()
 	mark("memory")
