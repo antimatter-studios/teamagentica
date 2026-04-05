@@ -52,7 +52,7 @@ interface ChatProps {
 }
 
 export default function Chat({ activePage, subpath, onConversationChange }: ChatProps) {
-  const { conversations, activeConversationId, messages, sending, loading, error, sendStartedAt, activeTaskGroupId, shelvedTasks, progressInfo } = useChatStore(
+  const { conversations, activeConversationId, messages, sending, loading, error, sendStartedAt, shelvedTasks, progressInfo } = useChatStore(
     useShallow((s) => ({
       conversations: s.conversations,
       activeConversationId: s.activeConversationId,
@@ -61,7 +61,6 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
       loading: s.loading,
       error: s.error,
       sendStartedAt: s.sendStartedAt,
-      activeTaskGroupId: s.activeTaskGroupId,
       shelvedTasks: s.shelvedTasks,
       progressInfo: s.progressInfo,
     }))
