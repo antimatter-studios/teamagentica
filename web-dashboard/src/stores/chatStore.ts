@@ -347,9 +347,8 @@ function startBackgroundPoll() {
 // Auto-start polling when the module loads.
 startBackgroundPoll();
 
-// Track which event IDs we've already processed so we scan all new events,
-// not just the single newest one (which could be a non-progress event).
-let _lastSeenEventId = 0;
+// Track how many events we've processed so we only scan new ones.
+let _lastSeenCount = 0;
 
 useEventStore.subscribe((state, prevState) => {
   const events = state.eventLogEvents;
@@ -374,17 +373,17 @@ useEventStore.subscribe((state, prevState) => {
   }
 
   if (watchedIds.size === 0 && shelvedIds.size === 0) {
-    // Still update high-water mark even when not watching.
-    if (events[0]?.id > _lastSeenEventId) {
-      _lastSeenEventId = events[0].id;
-    }
+    _lastSeenCount = events.length;
     return;
   }
 
-  // Scan all new events (newest-first) until we hit one we've already seen.
+  // Process only new events (newest-first, so new events are at the start).
+  const newEventCount = events.length - _lastSeenCount;
+  if (newEventCount <= 0) return;
+
   const refreshedConvs = new Set<number>();
-  for (const evt of events) {
-    if (evt.id <= _lastSeenEventId) break;
+  for (let i = 0; i < newEventCount && i < events.length; i++) {
+    const evt = events[i];
     if (evt.event_type !== "relay:progress") continue;
 
     try {
@@ -452,7 +451,5 @@ useEventStore.subscribe((state, prevState) => {
   }
 
   // Update high-water mark.
-  if (events[0]?.id > _lastSeenEventId) {
-    _lastSeenEventId = events[0].id;
-  }
+  _lastSeenCount = events.length;
 });
