@@ -680,6 +680,48 @@ func (h *Handler) ToolDefs() interface{} {
 			},
 		},
 		{
+			"name":        "create_board",
+			"description": "Create a new kanban board with default columns (To Do, In Progress, Review, Done)",
+			"endpoint":    "/mcp/create_board",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"name":        gin.H{"type": "string", "description": "Board name"},
+					"prefix":      gin.H{"type": "string", "description": "Short prefix for card numbers (e.g. PROJ)"},
+					"description": gin.H{"type": "string", "description": "Board description"},
+					"columns":     gin.H{"type": "array", "items": gin.H{"type": "string"}, "description": "Custom column names (defaults to To Do, In Progress, Review, Done)"},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			"name":        "rename_board",
+			"description": "Rename a board and optionally update its prefix or description",
+			"endpoint":    "/mcp/rename_board",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id":    gin.H{"type": "string", "description": "ID of the board"},
+					"name":        gin.H{"type": "string", "description": "New board name"},
+					"prefix":      gin.H{"type": "string", "description": "New prefix"},
+					"description": gin.H{"type": "string", "description": "New description"},
+				},
+				"required": []string{"board_id"},
+			},
+		},
+		{
+			"name":        "delete_board",
+			"description": "Delete a board and all its columns, epics, and tasks",
+			"endpoint":    "/mcp/delete_board",
+			"parameters": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"board_id": gin.H{"type": "string", "description": "ID of the board to delete"},
+				},
+				"required": []string{"board_id"},
+			},
+		},
+		{
 			"name":        "list_tasks",
 			"description": "List all tasks on a board, grouped by status (column)",
 			"endpoint":    "/mcp/list_tasks",
@@ -865,6 +907,106 @@ func (h *Handler) MCPListBoards(c *gin.Context) {
 		result = append(result, boardWithColumns{Board: b, Columns: cols})
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+func (h *Handler) MCPCreateBoard(c *gin.Context) {
+	var req struct {
+		Name        string   `json:"name" binding:"required"`
+		Prefix      string   `json:"prefix"`
+		Description string   `json:"description"`
+		Columns     []string `json:"columns"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	b := &storage.Board{
+		ID:          uuid.New().String(),
+		Name:        req.Name,
+		Prefix:      req.Prefix,
+		Description: req.Description,
+	}
+	if err := h.db.CreateBoard(b); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Create default columns if none specified.
+	colNames := req.Columns
+	if len(colNames) == 0 {
+		colNames = []string{"To Do", "In Progress", "Review", "Done"}
+	}
+	cols := make([]storage.Column, 0, len(colNames))
+	for i, name := range colNames {
+		col := &storage.Column{
+			ID:       uuid.New().String(),
+			BoardID:  b.ID,
+			Name:     name,
+			Position: float64(i),
+		}
+		if err := h.db.CreateColumn(col); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		cols = append(cols, *col)
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"board":   b,
+		"columns": cols,
+	})
+}
+
+func (h *Handler) MCPRenameBoard(c *gin.Context) {
+	var req struct {
+		BoardID     string  `json:"board_id" binding:"required"`
+		Name        *string `json:"name"`
+		Prefix      *string `json:"prefix"`
+		Description *string `json:"description"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	b, err := h.db.GetBoard(req.BoardID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", req.BoardID)})
+		return
+	}
+	if req.Name != nil {
+		b.Name = *req.Name
+	}
+	if req.Prefix != nil {
+		b.Prefix = *req.Prefix
+	}
+	if req.Description != nil {
+		b.Description = *req.Description
+	}
+	if err := h.db.UpdateBoard(b); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, b)
+}
+
+func (h *Handler) MCPDeleteBoard(c *gin.Context) {
+	var req struct {
+		BoardID string `json:"board_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := h.db.GetBoard(req.BoardID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("board %q not found", req.BoardID)})
+		return
+	}
+	if err := h.db.DeleteBoard(req.BoardID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": req.BoardID})
 }
 
 func (h *Handler) MCPListEpics(c *gin.Context) {

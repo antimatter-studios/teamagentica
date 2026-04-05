@@ -98,6 +98,9 @@ func main() {
 	// MCP tool discovery + execution
 	router.GET("/mcp", h.GetTools)
 	router.POST("/mcp/list_boards", h.MCPListBoards)
+	router.POST("/mcp/create_board", h.MCPCreateBoard)
+	router.POST("/mcp/rename_board", h.MCPRenameBoard)
+	router.POST("/mcp/delete_board", h.MCPDeleteBoard)
 	router.POST("/mcp/list_epics", h.MCPListEpics)
 	router.POST("/mcp/create_epic", h.MCPCreateEpic)
 	router.POST("/mcp/update_epic", h.MCPUpdateEpic)
