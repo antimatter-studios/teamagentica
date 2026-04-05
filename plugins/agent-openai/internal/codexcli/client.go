@@ -41,8 +41,9 @@ type Client struct {
 	loginProc *exec.Cmd
 	loginDone chan error
 
-	// Persistent app-server (not yet used for chat — testing lifecycle only).
-	server *appServer
+	// Persistent app-server.
+	server   *appServer
+	serverMu sync.Mutex // serializes chat requests through the app-server
 }
 
 // NewClient creates a new Codex CLI client. codexHome is the path for
@@ -283,6 +284,9 @@ func downloadImage(url string) (string, error) {
 
 // ChatCompletion runs a blocking chat completion via the app-server.
 func (c *Client) ChatCompletion(model string, messages []openai.Message, imageURLs []string, workdirOverride string) (*openai.ChatResponse, error) {
+	c.serverMu.Lock()
+	defer c.serverMu.Unlock()
+
 	if c.server == nil || !c.server.alive {
 		return nil, fmt.Errorf("app-server not running")
 	}
@@ -422,6 +426,10 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 	go func() {
 		defer close(ch)
 
+		// Serialize — stdio is single-channel, one request at a time.
+		c.serverMu.Lock()
+		defer c.serverMu.Unlock()
+
 		prompt := buildPrompt(messages)
 		cwd := c.workdir
 		if workdirOverride != "" {
@@ -496,16 +504,10 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 func (c *Client) handleNotification(n notification, ch chan<- StreamEvent) {
 	switch n.Method {
 	case "item/agentMessage/delta":
+		// v2 protocol delta — use this one (ignore codex/event/agent_message_delta to avoid duplicates).
 		var p struct{ Delta string }
 		if json.Unmarshal(n.Params, &p) == nil && p.Delta != "" {
 			ch <- StreamEvent{Text: p.Delta}
-		}
-	case "codex/event/agent_message_delta":
-		var p struct {
-			Msg struct{ Delta string } `json:"msg"`
-		}
-		if json.Unmarshal(n.Params, &p) == nil && p.Msg.Delta != "" {
-			ch <- StreamEvent{Text: p.Msg.Delta}
 		}
 	case "codex/event/token_count":
 		var p struct {

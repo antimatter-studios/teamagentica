@@ -1,6 +1,7 @@
 package codexcli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,14 +11,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"nhooyr.io/websocket"
 )
 
 // appServer manages a persistent `codex app-server` subprocess over websocket.
 type appServer struct {
 	proc   *exec.Cmd
 	conn   *websocket.Conn
-	mu     sync.Mutex // serializes writes
+	mu     sync.Mutex // serializes reads
+	writeMu sync.Mutex // serializes writes
 	nextID atomic.Int64
 	alive  bool
 	debug  bool
@@ -86,7 +88,6 @@ func (s *appServer) start(binary string, env []string) error {
 		log.Printf("[codex-cli] app-server started (pid %d, ws port %d)", cmd.Process.Pid, port)
 	}
 
-	// Monitor process exit.
 	go func() {
 		err := cmd.Wait()
 		s.alive = false
@@ -95,14 +96,15 @@ func (s *appServer) start(binary string, env []string) error {
 		}
 	}()
 
-	// Wait for the websocket to become available.
+	// Connect websocket — no compression to avoid RSV bit issues.
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d", port)
-	dialer := &websocket.Dialer{
-		EnableCompression: true,
-	}
 	var conn *websocket.Conn
-	for i := 0; i < 50; i++ { // up to 5 seconds
-		conn, _, err = dialer.Dial(wsURL, nil)
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		conn, _, err = websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+			CompressionMode: websocket.CompressionDisabled,
+		})
+		cancel()
 		if err == nil {
 			break
 		}
@@ -110,12 +112,14 @@ func (s *appServer) start(binary string, env []string) error {
 	}
 	if err != nil {
 		s.stop()
-		return fmt.Errorf("connect to app-server ws: %w", err)
+		return fmt.Errorf("connect ws: %w", err)
 	}
+	// Remove default read limit (default is 32768 bytes).
+	conn.SetReadLimit(-1)
 	s.conn = conn
 
 	if s.debug {
-		log.Printf("[codex-cli] websocket connected to %s", wsURL)
+		log.Printf("[codex-cli] websocket connected to %s (no compression)", wsURL)
 	}
 
 	return nil
@@ -124,7 +128,7 @@ func (s *appServer) start(binary string, env []string) error {
 // stop kills the app-server process and closes the websocket.
 func (s *appServer) stop() {
 	if s.conn != nil {
-		s.conn.Close()
+		s.conn.Close(websocket.StatusNormalClosure, "shutdown")
 		s.conn = nil
 	}
 	if s.proc != nil && s.proc.Process != nil {
@@ -147,10 +151,14 @@ func (s *appServer) sendRequest(method string, params interface{}, notifyCb func
 		Method:  method,
 		Params:  params,
 	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", method, err)
+	}
 
-	s.mu.Lock()
-	err := s.conn.WriteJSON(req)
-	s.mu.Unlock()
+	s.writeMu.Lock()
+	err = s.conn.Write(context.Background(), websocket.MessageText, data)
+	s.writeMu.Unlock()
 	if err != nil {
 		s.alive = false
 		return nil, fmt.Errorf("write %s: %w", method, err)
@@ -160,25 +168,26 @@ func (s *appServer) sendRequest(method string, params interface{}, notifyCb func
 		log.Printf("[codex-cli] → %s (id=%d)", method, id)
 	}
 
-	// Read messages until we get a response matching our ID.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for {
-		_, data, err := s.conn.ReadMessage()
+		_, msgData, err := s.conn.Read(context.Background())
 		if err != nil {
 			s.alive = false
 			return nil, fmt.Errorf("read: %w", err)
 		}
 
 		var msg jsonRPCMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
-			if s.debug {
-				log.Printf("[codex-cli] skip unparseable: %s", string(data)[:min(len(data), 100)])
-			}
+		if err := json.Unmarshal(msgData, &msg); err != nil {
 			continue
 		}
 
-		// Notification — no ID, has method.
+		// Notification.
 		if msg.ID == nil && msg.Method != "" {
-			log.Printf("[codex-cli] sendRequest got notification: %s", msg.Method)
+			if s.debug {
+				log.Printf("[codex-cli] ← notify: %s", msg.Method)
+			}
 			if notifyCb != nil {
 				notifyCb(notification{Method: msg.Method, Params: msg.Params})
 			}
@@ -198,20 +207,38 @@ func (s *appServer) sendRequest(method string, params interface{}, notifyCb func
 	}
 }
 
+// sendNotification sends a JSON-RPC notification (no response expected).
+func (s *appServer) sendNotification(method string, params interface{}) error {
+	msg := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+	}
+	if params != nil {
+		msg["params"] = params
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.Write(context.Background(), websocket.MessageText, data)
+}
+
 // readNotifications reads websocket messages until a terminal notification.
-// Calls onNotify for each notification. Returns on turnCompleted or error.
 func (s *appServer) readNotifications(onNotify func(notification)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for {
-		_, data, err := s.conn.ReadMessage()
+		_, msgData, err := s.conn.Read(context.Background())
 		if err != nil {
 			s.alive = false
 			return fmt.Errorf("read: %w", err)
 		}
 
-		log.Printf("[codex-cli] ws ← (%d bytes) %s", len(data), string(data)[:min(len(data), 200)])
-
 		var msg jsonRPCMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
+		if err := json.Unmarshal(msgData, &msg); err != nil {
 			continue
 		}
 
@@ -222,22 +249,30 @@ func (s *appServer) readNotifications(onNotify func(notification)) error {
 		n := notification{Method: msg.Method, Params: msg.Params}
 		onNotify(n)
 
-		if msg.Method == "turn/completed" || msg.Method == "notifications/turnCompleted" ||
-			msg.Method == "notifications/error" || msg.Method == "codex/event/task_complete" {
+		if msg.Method == "turn/completed" || msg.Method == "codex/event/task_complete" ||
+			msg.Method == "notifications/turnCompleted" || msg.Method == "notifications/error" {
 			return nil
 		}
 	}
 }
 
-// initialize sends the initialize handshake.
+// initialize sends the initialize handshake (matching the TypeScript client).
 func (s *appServer) initialize() error {
 	_, err := s.sendRequest("initialize", map[string]interface{}{
+		"protocolVersion": "1.0",
 		"clientInfo": map[string]string{
 			"name":    "teamagentica-agent-openai",
 			"version": "1.0.0",
 		},
+		"capabilities": map[string]bool{
+			"experimentalApi": true,
+		},
 	}, nil)
-	return err
+	if err != nil {
+		return err
+	}
+	// Send initialized notification (required by protocol).
+	return s.sendNotification("initialized", map[string]interface{}{})
 }
 
 func min(a, b int) int {
