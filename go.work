@@ -19,6 +19,7 @@ use (
 	./plugins/infra-alias-registry
 	./plugins/infra-agent-relay
 	./plugins/infra-builder
+	./plugins/infra-container-registry
 	./plugins/infra-cost-tracking
 	./plugins/infra-task-scheduler
 	./plugins/infra-redis

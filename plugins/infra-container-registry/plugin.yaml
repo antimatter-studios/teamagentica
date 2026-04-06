@@ -1,0 +1,17 @@
+id: infra-container-registry
+name: "Container Registry"
+description: "Self-hosted OCI image registry for building and deploying plugin images from within the platform"
+group: infrastructure
+version: "1.0.4"
+image: "teamagentica-infra-container-registry:latest"
+author: teamagentica
+tags: [infrastructure, container, registry, images, oci]
+capabilities: ["infra:container-registry", "tool:container-registry"]
+dependencies: []
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Enable verbose logging"
+    order: 99

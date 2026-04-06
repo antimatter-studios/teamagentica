@@ -58,6 +58,9 @@ includes:
   infra-builder:
     taskfile: ./plugins/infra-builder/Taskfile.yml
     dir: ./plugins/infra-builder
+  infra-container-registry:
+    taskfile: ./plugins/infra-container-registry/Taskfile.yml
+    dir: ./plugins/infra-container-registry
   infra-cost-tracking:
     taskfile: ./plugins/infra-cost-tracking/Taskfile.yml
     dir: ./plugins/infra-cost-tracking
@@ -279,6 +282,7 @@ tasks:
       - task: system-teamagentica-plugin-provider:build
       - task: infra-agent-relay:build
       - task: infra-builder:build
+      - task: infra-container-registry:build
       - task: infra-cost-tracking:build
       - task: infra-task-scheduler:build
       - task: infra-mcp-server:build
@@ -316,6 +320,7 @@ tasks:
       - task: system-teamagentica-plugin-provider:build:dev
       - task: infra-agent-relay:build:dev
       - task: infra-builder:build:dev
+      - task: infra-container-registry:build:dev
       - task: infra-cost-tracking:build:dev
       - task: infra-task-scheduler:build:dev
       - task: infra-mcp-server:build:dev
