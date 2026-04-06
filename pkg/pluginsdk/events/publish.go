@@ -57,6 +57,11 @@ func PublishMCPDisabled(p Publisher) {
 	p.PublishEvent(MCPServerDisabled, "{}")
 }
 
+// PublishMCPToolsChanged signals that the MCP tool list has been updated.
+func PublishMCPToolsChanged(p Publisher) {
+	p.PublishEvent(MCPToolsChanged, "{}")
+}
+
 // --- Relay ---
 
 // PublishRelayReady signals that the relay is accepting chat requests.

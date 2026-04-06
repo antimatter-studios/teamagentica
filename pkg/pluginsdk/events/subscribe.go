@@ -75,6 +75,13 @@ func OnMCPDisabled(client *pluginsdk.Client, handler func()) {
 	}))
 }
 
+// OnMCPToolsChanged subscribes to MCP tool list changes.
+func OnMCPToolsChanged(client *pluginsdk.Client, handler func()) {
+	client.Events().On(MCPToolsChanged, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+		handler()
+	}))
+}
+
 // OnRelayProgress subscribes to relay progress events with a typed payload.
 func OnRelayProgress(client *pluginsdk.Client, handler func(RelayProgressPayload)) {
 	client.Events().On(RelayProgress, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {

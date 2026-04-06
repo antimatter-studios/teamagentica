@@ -17,8 +17,9 @@ const (
 	ConfigUpdate = "config:update"
 
 	// MCP Server
-	MCPServerEnabled  = "mcp_server:enabled"
-	MCPServerDisabled = "mcp_server:disabled"
+	MCPServerEnabled      = "mcp_server:enabled"
+	MCPServerDisabled     = "mcp_server:disabled"
+	MCPToolsChanged       = "mcp:tools_changed"
 
 	// Relay
 	RelayReady        = "relay:ready"

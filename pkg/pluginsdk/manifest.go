@@ -23,6 +23,15 @@ type Manifest struct {
 	Dependencies   []string                     `yaml:"dependencies"`
 	ConfigSchema   map[string]ConfigSchemaField `yaml:"config_schema"`
 	DefaultPricing []PricingEntry               `yaml:"default_pricing"`
+	SharedDisks    []SharedDisk                 `yaml:"shared_disks"`
+}
+
+// SharedDisk declares a named disk that should be mounted into the plugin container.
+// The disk is auto-created by storage-disk if it doesn't exist.
+type SharedDisk struct {
+	Name   string `json:"name" yaml:"name"`     // disk name (convention: plugin-id)
+	Type   string `json:"type" yaml:"type"`     // disk type: "shared" or "workspace"
+	Target string `json:"target" yaml:"target"` // mount path inside the container
 }
 
 // LoadManifest reads plugin.yaml from the current working directory (or the
@@ -52,6 +61,15 @@ func LoadManifest() Manifest {
 	if m.ID == "" {
 		log.Fatalf("pluginsdk: plugin.yaml missing required 'id' field")
 	}
+
+	// Allow the kernel to override the plugin ID via PLUGIN_ID env var.
+	// This is essential for sidecar containers that reuse an existing plugin
+	// image but must register with a unique ID (e.g. ws-83a2e259-agent-claude).
+	if override := os.Getenv("PLUGIN_ID"); override != "" && override != m.ID {
+		log.Printf("pluginsdk: PLUGIN_ID override: %s → %s", m.ID, override)
+		m.ID = override
+	}
+
 	return m
 }
 

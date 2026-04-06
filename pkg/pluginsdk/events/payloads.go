@@ -118,13 +118,16 @@ type WorkspaceEnvironmentRegisterPayload struct {
 	DockerUser   string                 `json:"docker_user,omitempty"`
 	Cmd          []string               `json:"cmd,omitempty"`
 	ExtraCmdArgs []string               `json:"extra_cmd_args,omitempty"`
-	SharedMounts []WorkspaceExtraMount  `json:"shared_mounts,omitempty"`
+	Disks        []WorkspaceDiskSpec    `json:"disks,omitempty"`
 	EnvDefaults  map[string]string      `json:"env_defaults,omitempty"`
 }
 
-// WorkspaceExtraMount describes an additional disk mount for a workspace environment.
-type WorkspaceExtraMount struct {
-	DiskName string `json:"disk_name"`
-	Target   string `json:"target"`
+// WorkspaceDiskSpec declares a disk needed by a workspace environment.
+// For "shared" disks, Name is fixed (get-or-create). For "workspace" disks,
+// Name is empty — workspace-manager generates a unique name at creation time.
+type WorkspaceDiskSpec struct {
+	Type     string `json:"type"`               // "workspace" or "shared"
+	Name     string `json:"name,omitempty"`      // fixed name for shared disks; empty for workspace
+	Target   string `json:"target"`              // mount path inside the container
 	ReadOnly bool   `json:"read_only,omitempty"`
 }

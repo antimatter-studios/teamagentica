@@ -179,7 +179,12 @@ func (c *Client) RouteToPluginWithHeaders(ctx context.Context, pluginID, method,
 func (c *Client) routeToPluginInternal(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
 	entry, ok := c.resolvePeer(pluginID)
 	if !ok {
-		return nil, fmt.Errorf("plugin %s not found in peer registry", pluginID)
+		// Cache miss — refresh from kernel registry and retry once.
+		c.loadPeerRegistry()
+		entry, ok = c.resolvePeer(pluginID)
+		if !ok {
+			return nil, fmt.Errorf("plugin %s not found in peer registry", pluginID)
+		}
 	}
 
 	return c.callPeerDirect(ctx, entry, method, path, body, headers)
@@ -191,7 +196,12 @@ func (c *Client) routeToPluginInternal(ctx context.Context, pluginID, method, pa
 func (c *Client) RouteToPluginStream(ctx context.Context, pluginID, method, path string, body io.Reader) (*http.Response, error) {
 	entry, ok := c.resolvePeer(pluginID)
 	if !ok {
-		return nil, fmt.Errorf("plugin %s not found in peer registry", pluginID)
+		// Cache miss — peer may have been added after startup. Refresh and retry.
+		c.loadPeerRegistry()
+		entry, ok = c.resolvePeer(pluginID)
+		if !ok {
+			return nil, fmt.Errorf("plugin %s not found in peer registry", pluginID)
+		}
 	}
 
 	url := c.peerURL(entry, path)
