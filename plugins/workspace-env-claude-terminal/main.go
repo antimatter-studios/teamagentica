@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 )
@@ -95,6 +96,20 @@ func main() {
 
 	registerEnv()
 
+	// Start the exec server for agent-claude sidecar connections.
+	// Uses a pool of 1 — single persistent Claude process, reactive on first connection.
+	cliBinary := "/usr/local/bin/claude"
+	workdir := "/workspace"
+	claudeDir := "/home/coder/.claude"
+	cliClient := claudecli.NewClient(cliBinary, workdir, claudeDir, 600, pluginConfig["PLUGIN_DEBUG"] == "true")
+	cliClient.SetPoolMax(1)
+	if skipPermissions == "true" {
+		cliClient.SetSkipPermissions(true)
+	}
+
+	execServer := NewExecServer(cliClient)
+	go execServer.Start(":9100")
+
 	sdkClient.ListenAndServe(defaultPort, r)
 }
 
@@ -116,12 +131,13 @@ func getWorkspaceSchema(skipPermissions string) map[string]interface{} {
 		"display_name": "Claude Terminal",
 		"description":  "Web terminal with Claude Code CLI — AI-powered coding assistant",
 		"icon":         `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#D97706"/><path d="M8 10c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2c0 1.1-.9 2-2 2h-4c-1.1 0-2-.9-2-2v-2z" fill="#fff"/><rect x="9" y="15" width="6" height="2" rx="1" fill="#fff"/></svg>`,
-		"image":        "teamagentica-devbox:latest",
+		"image":        "teamagentica-devbox-terminal:latest",
 		"port":         7681,
 		"docker_user":  "",
 		"disks": []events.WorkspaceDiskSpec{
 			{Type: "workspace", Target: "/workspace"},
 			{Type: "shared", Name: "agent-claude", Target: "/home/coder/.claude"},
+			{Type: "shared", Name: "agent-claude-sidecar", Target: "/opt/agent-sidecar"},
 		},
 		"env_defaults": map[string]string{
 			"DEVBOX_APP":              "claude",

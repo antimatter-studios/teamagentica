@@ -7,6 +7,7 @@ RUN apk add --no-cache git gcc musl-dev
 RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
+COPY pkg/claudecli/ pkg/claudecli/
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/workspace-env-claude-terminal/ plugins/workspace-env-claude-terminal/
 WORKDIR /build/plugins/workspace-env-claude-terminal
@@ -22,6 +23,7 @@ ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
+COPY pkg/claudecli/ pkg/claudecli/
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/workspace-env-claude-terminal/ plugins/workspace-env-claude-terminal/
 WORKDIR /build/plugins/workspace-env-claude-terminal
