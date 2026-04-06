@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -27,19 +28,17 @@ func randomID() string {
 }
 
 type Handler struct {
-	workspaceDir string
-	baseDomain   string
-	debug        bool
-	sdk          *pluginsdk.Client
-	db           *storage.DB
+	baseDomain string
+	debug      bool
+	sdk        *pluginsdk.Client
+	db         *storage.DB
 }
 
-func NewHandler(workspaceDir, baseDomain string, debug bool, db *storage.DB) *Handler {
+func NewHandler(baseDomain string, debug bool, db *storage.DB) *Handler {
 	return &Handler{
-		workspaceDir: workspaceDir,
-		baseDomain:   baseDomain,
-		debug:        debug,
-		db:           db,
+		baseDomain: baseDomain,
+		debug:      debug,
+		db:         db,
 	}
 }
 
@@ -47,18 +46,62 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
-// diskPath returns the absolute path for a workspace disk (or the workspace disks root if name is empty).
-func (h *Handler) diskPath(name ...string) string {
-	if len(name) == 0 || name[0] == "" {
-		return filepath.Join(h.workspaceDir, "workspace")
-	}
-	return filepath.Join(h.workspaceDir, "workspace", name[0])
-}
-
 func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
 		h.sdk.PublishEvent(eventType, detail)
 	}
+}
+
+// ensureDisk calls storage-disk's API via P2P routing to get-or-create a disk.
+// Returns the disk ID (stable over renames) and the internal path.
+func (h *Handler) ensureDisk(ctx context.Context, name, diskType string) (diskID string, path string, err error) {
+	body, _ := json.Marshal(map[string]string{"name": name, "type": diskType})
+	data, err := h.sdk.RouteToPlugin(ctx, "storage-disk", "POST", "/disks", bytes.NewReader(body))
+	if err != nil {
+		// RouteToPlugin may return an error wrapping a 409 — try to parse it.
+		// If the error message contains "409" or "already exists", fall back to GET.
+		if !strings.Contains(err.Error(), "409") && !strings.Contains(err.Error(), "already exists") {
+			return "", "", fmt.Errorf("create disk %s: %w", name, err)
+		}
+		// Disk already exists — fetch by name.
+		data, err = h.sdk.RouteToPlugin(ctx, "storage-disk", "GET", fmt.Sprintf("/disks/%s/%s", diskType, name), nil)
+		if err != nil {
+			return "", "", fmt.Errorf("get existing disk %s: %w", name, err)
+		}
+	}
+
+	var result struct {
+		ID   string `json:"id"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", "", fmt.Errorf("decode disk response: %w", err)
+	}
+	return result.ID, result.Path, nil
+}
+
+// resolveWorkspaceDiskPath finds the workspace-type disk in DiskMounts and resolves
+// its host path for git operations. Returns the cross-mounted path accessible from
+// this container (storage-root is cross-mounted from storage-disk).
+func (h *Handler) resolveWorkspaceDiskPath(ctx context.Context, diskMounts []pluginsdk.DiskMount) (string, error) {
+	for _, dm := range diskMounts {
+		if dm.DiskType == "workspace" && dm.DiskID != "" {
+			data, err := h.sdk.RouteToPlugin(ctx, "storage-disk", "GET", fmt.Sprintf("/disks/by-id/%s", dm.DiskID), nil)
+			if err != nil {
+				return "", fmt.Errorf("resolve disk %s: %w", dm.DiskID, err)
+			}
+			var result struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(data, &result); err != nil {
+				return "", fmt.Errorf("decode disk response: %w", err)
+			}
+			// storage-disk returns e.g. "/data/storage-root/workspace/ws-abc123-slug"
+			// workspace-manager has /storage-root cross-mounted, so strip "/data"
+			return strings.Replace(result.Path, "/data/", "/", 1), nil
+		}
+	}
+	return "", fmt.Errorf("no workspace disk found in mounts")
 }
 
 func (h *Handler) Health(c *gin.Context) {
@@ -113,7 +156,6 @@ type workspaceInfo struct {
 	Status          string `json:"status"`
 	Subdomain       string `json:"subdomain"`
 	URL             string `json:"url,omitempty"`
-	DiskName      string `json:"disk_name"`
 }
 
 // ListWorkspaces returns all managed containers owned by this plugin.
@@ -136,11 +178,10 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 	var workspaces []workspaceInfo
 	for _, mc := range containers {
 		ws := workspaceInfo{
-			ID:         mc.ID,
-			Name:       mc.Name,
-			Status:     mc.Status,
-			Subdomain:  mc.Subdomain,
-			DiskName: mc.DiskName,
+			ID:        mc.ID,
+			Name:      mc.Name,
+			Status:    mc.Status,
+			Subdomain: mc.Subdomain,
 		}
 		// Enrich with workspace-manager-level data from local DB.
 		if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
@@ -174,10 +215,10 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	var req struct {
 		Name          string `json:"name" binding:"required"`
 		EnvironmentID string `json:"environment_id" binding:"required"`
-		DiskName    string `json:"disk_name,omitempty"`      // reuse existing disk
+		DiskID        string `json:"disk_id,omitempty"`        // reuse existing disk (by stable ID)
 		GitRepo       string `json:"git_repo,omitempty"`
 		GitRef        string `json:"git_ref,omitempty"`
-		PluginSource  string `json:"plugin_source,omitempty"` // plugin name whose source to bind-mount for dev editing
+		PluginSource  string `json:"plugin_source,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -202,8 +243,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Generate an 8-char random ID for subdomain (permanent) and disk prefix.
-	// Check for collisions against existing workspaces.
+	// Generate an 8-char random ID for subdomain (permanent).
 	var wsID string
 	existingContainers, _ := h.sdk.ListManagedContainers()
 	for attempts := 0; attempts < 10; attempts++ {
@@ -226,62 +266,76 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Reuse existing disk dir or create a new one.
-	var diskName string
-	var diskExisted bool
-	if req.DiskName != "" {
-		diskName = req.DiskName
-		dskPath := h.diskPath(diskName)
-		if info, err := os.Stat(dskPath); err == nil && info.IsDir() {
-			diskExisted = true
+	ctx := c.Request.Context()
+
+	// Ensure all declared disks exist via storage-disk API, collect DiskMounts.
+	var diskMounts []pluginsdk.DiskMount
+	var workspaceDiskPath string
+	for _, spec := range ws.Disks {
+		var diskName string
+		if spec.Type == "workspace" {
+			if req.DiskID != "" {
+				// Reusing an existing disk — verify it exists.
+				data, err := h.sdk.RouteToPlugin(ctx, "storage-disk", "GET", fmt.Sprintf("/disks/by-id/%s", req.DiskID), nil)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "disk not found: " + req.DiskID})
+					return
+				}
+				var existing struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				}
+				json.Unmarshal(data, &existing)
+				diskMounts = append(diskMounts, pluginsdk.DiskMount{
+					DiskID:   existing.ID,
+					DiskType: "workspace",
+					Target:   spec.Target,
+				})
+				workspaceDiskPath = strings.Replace(existing.Path, "/data/", "/", 1)
+				continue
+			}
+			diskName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
 		} else {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "disk not found: " + req.DiskName})
+			diskName = spec.Name
+		}
+
+		diskID, diskPath, err := h.ensureDisk(ctx, diskName, spec.Type)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to ensure disk %s: %v", diskName, err)})
 			return
 		}
-	} else {
-		diskName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
-		diskExisted = false
-	}
-	dskPath := h.diskPath(diskName)
-	if !diskExisted {
-		if err := os.MkdirAll(dskPath, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create disk: " + err.Error()})
-			return
+		diskMounts = append(diskMounts, pluginsdk.DiskMount{
+			DiskID:   diskID,
+			DiskType: spec.Type,
+			Target:   spec.Target,
+			ReadOnly: spec.ReadOnly,
+		})
+		if spec.Type == "workspace" {
+			workspaceDiskPath = strings.Replace(diskPath, "/data/", "/", 1)
 		}
 	}
 
-	// Git clone into disk if requested (skip if reusing existing disk).
-	if req.GitRepo != "" && !diskExisted {
-		cmd := exec.CommandContext(c.Request.Context(), "git", "clone", req.GitRepo, ".")
-		cmd.Dir = dskPath
+	// Git clone into workspace disk if requested (only for new disks).
+	if req.GitRepo != "" && req.DiskID == "" && workspaceDiskPath != "" {
+		cmd := exec.CommandContext(ctx, "git", "clone", req.GitRepo, ".")
+		cmd.Dir = workspaceDiskPath
 		if out, err := cmd.CombinedOutput(); err != nil {
-			os.RemoveAll(dskPath)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "git clone failed: " + string(out)})
 			return
 		}
 		if req.GitRef != "" {
-			checkout := exec.CommandContext(c.Request.Context(), "git", "checkout", req.GitRef)
-			checkout.Dir = dskPath
+			checkout := exec.CommandContext(ctx, "git", "checkout", req.GitRef)
+			checkout.Dir = workspaceDiskPath
 			checkout.CombinedOutput()
 		}
 	}
 
-	// Ensure shared mount directories exist on the host disk.
-	for _, sm := range ws.SharedMounts {
-		if sm.DiskName != "" {
-			os.MkdirAll(h.diskPath(sm.DiskName), 0755)
-		}
-	}
-
-	// Run workspace-type-specific setup scripts declared in the schema.
+	// Run workspace-type-specific setup scripts.
 	for _, script := range ws.SetupScripts {
 		switch script {
 		case "code-server-navigator":
-			// Provision Machine settings per-workspace for navigator support.
-			csSettingsDir := filepath.Join(dskPath, ".code-server", "code-server", "Machine")
-			if err := os.MkdirAll(csSettingsDir, 0755); err == nil {
-				_ = os.WriteFile(filepath.Join(csSettingsDir, "settings.json"),
-					[]byte(`{"extensions.supportNodeGlobalNavigator":true}`+"\n"), 0644)
+			if workspaceDiskPath != "" {
+				setupCodeServerNavigator(workspaceDiskPath)
 			}
 		}
 	}
@@ -299,15 +353,13 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	}
 
 	// Launch managed container via kernel.
-	// Subdomain uses only the random ID — permanent, never changes on rename.
 	subdomain := "ws-" + wsID
 	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
 		Name:         displayName,
 		Image:        ws.Image,
 		Port:         ws.Port,
 		Subdomain:    subdomain,
-		DiskName:   diskName,
-		ExtraMounts:  ws.SharedMounts,
+		DiskMounts:   diskMounts,
 		Env:          env,
 		Cmd:          cmd,
 		DockerUser:   ws.DockerUser,
@@ -318,7 +370,6 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		return
 	}
 
-	// Track workspace-level metadata in local DB.
 	h.db.Put(&storage.WorkspaceRecord{
 		ContainerID:   mc.ID,
 		EnvironmentID: req.EnvironmentID,
@@ -327,11 +378,10 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s","environment":"%s","key":"%s"}`, mc.ID, req.EnvironmentID, wsKey))
 
 	result := workspaceInfo{
-		ID:         mc.ID,
-		Name:       mc.Name,
-		Status:     mc.Status,
-		Subdomain:  mc.Subdomain,
-		DiskName: mc.DiskName,
+		ID:        mc.ID,
+		Name:      mc.Name,
+		Status:    mc.Status,
+		Subdomain: mc.Subdomain,
 	}
 	if mc.Subdomain != "" && h.baseDomain != "" {
 		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -357,11 +407,10 @@ func (h *Handler) GetWorkspace(c *gin.Context) {
 	for _, mc := range containers {
 		if mc.ID == id {
 			ws := workspaceInfo{
-				ID:         mc.ID,
-				Name:       mc.Name,
-				Status:     mc.Status,
-				Subdomain:  mc.Subdomain,
-				DiskName: mc.DiskName,
+				ID:        mc.ID,
+				Name:      mc.Name,
+				Status:    mc.Status,
+				Subdomain: mc.Subdomain,
 			}
 			if mc.Subdomain != "" && h.baseDomain != "" {
 				ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -374,8 +423,8 @@ func (h *Handler) GetWorkspace(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
 }
 
-// RenameWorkspace updates display name and disk directory slug.
-// Subdomain is permanent (based on random ID) — never changes.
+// RenameWorkspace updates display name only.
+// Disk stays linked by stable ID — no filesystem operations needed.
 func (h *Handler) RenameWorkspace(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -397,97 +446,20 @@ func (h *Handler) RenameWorkspace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
-	newSlug := slugify(newDisplayName)
-	if newSlug == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name must contain at least one alphanumeric character"})
-		return
-	}
 
-	// Find the workspace to get current disk name.
-	containers, err := h.sdk.ListManagedContainers()
+	_, err := h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
+		Name: &newDisplayName,
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename workspace: " + err.Error()})
 		return
-	}
-
-	var found *pluginsdk.ManagedContainerInfo
-	for _, mc := range containers {
-		if mc.ID == id {
-			found = &mc
-			break
-		}
-	}
-	if found == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
-		return
-	}
-
-	// Extract the random ID prefix from the current disk name (ws-{id}-{slug}).
-	// Disk name format: "ws-{6hex}-{slug}"
-	wsPrefix := extractDiskPrefix(found.DiskName)
-	newDiskName := wsPrefix + newSlug
-
-	// Only rename disk dir if the slug actually changed.
-	if newDiskName != found.DiskName {
-		oldPath := h.diskPath(found.DiskName)
-		newPath := h.diskPath(newDiskName)
-
-		// Check no disk with new name exists.
-		if _, err := os.Stat(newPath); err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "a disk with that name already exists"})
-			return
-		}
-
-		if _, err := os.Stat(oldPath); err == nil {
-			if err := os.Rename(oldPath, newPath); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename disk: " + err.Error()})
-				return
-			}
-		}
-
-		_, err = h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
-			Name:       &newDisplayName,
-			DiskName: &newDiskName,
-		})
-		if err != nil {
-			// Rollback disk rename.
-			os.Rename(
-				h.diskPath(newDiskName),
-				h.diskPath(found.DiskName),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace: " + err.Error()})
-			return
-		}
-	} else {
-		// Slug unchanged, just update display name.
-		_, err = h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
-			Name: &newDisplayName,
-		})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename workspace: " + err.Error()})
-			return
-		}
 	}
 
 	h.emitEvent("workspace:renamed", fmt.Sprintf(`{"id":"%s","name":"%s"}`, id, newDisplayName))
 	c.JSON(http.StatusOK, gin.H{"status": "renamed"})
 }
 
-// extractDiskPrefix returns the "ws-{id}-" prefix from a disk name like "ws-a1b2c3d4-my-project".
-// Falls back to returning the full name + "-" if format doesn't match.
-func extractDiskPrefix(diskName string) string {
-	// Expected format: ws-{8hex}-{slug}
-	if strings.HasPrefix(diskName, "ws-") && len(diskName) > 12 {
-		// "ws-" (3) + 8 hex chars + "-" = index 12
-		if diskName[11] == '-' {
-			return diskName[:12] // "ws-a1b2c3d4-"
-		}
-	}
-	// Legacy format without random ID — use whole name as prefix.
-	return diskName + "-"
-}
-
-// StartWorkspace re-launches a stopped workspace container.
+// StartWorkspace re-launches a stopped workspace container with options applied.
 func (h *Handler) StartWorkspace(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -495,33 +467,203 @@ func (h *Handler) StartWorkspace(c *gin.Context) {
 	}
 
 	id := c.Param("id")
-	mc, err := h.sdk.StartManagedContainer(id)
+
+	result, err := h.rebuildWorkspace(c.Request.Context(), id)
 	if err != nil {
-		log.Printf("failed to start workspace %s: %v", id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start workspace: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.emitEvent("workspace:started", fmt.Sprintf(`{"id":"%s"}`, id))
+	h.emitEvent("workspace:started", fmt.Sprintf(`{"id":"%s"}`, result.ID))
+	c.JSON(http.StatusOK, result)
+}
 
-	result := workspaceInfo{
-		ID:         mc.ID,
-		Name:       mc.Name,
-		Status:     mc.Status,
-		Subdomain:  mc.Subdomain,
-		DiskName: mc.DiskName,
+// StopWorkspace stops a running workspace container without deleting it.
+func (h *Handler) StopWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
 	}
-	if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
-		result.Environment = rec.EnvironmentID
+
+	id := c.Param("id")
+
+	mc, err := h.sdk.StopManagedContainer(id)
+	if err != nil {
+		log.Printf("failed to stop workspace %s: %v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop workspace: " + err.Error()})
+		return
+	}
+
+	h.emitEvent("workspace:stopped", fmt.Sprintf(`{"id":"%s"}`, id))
+	c.JSON(http.StatusOK, workspaceInfo{
+		ID:        mc.ID,
+		Name:      mc.Name,
+		Status:    mc.Status,
+		Subdomain: mc.Subdomain,
+	})
+}
+
+// RestartWorkspace recreates the workspace container with current options applied.
+func (h *Handler) RestartWorkspace(c *gin.Context) {
+	if h.sdk == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
+		return
+	}
+
+	id := c.Param("id")
+
+	result, err := h.rebuildWorkspace(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.emitEvent("workspace:restarted", fmt.Sprintf(`{"id":"%s"}`, result.ID))
+	c.JSON(http.StatusOK, result)
+}
+
+// rebuildWorkspace stops, deletes, and recreates a workspace container with
+// the current environment schema + per-workspace options (env overrides, extra
+// shared disks) applied. Used by both Start and Restart.
+func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceInfo, error) {
+	// Look up workspace record for environment ID.
+	rec, err := h.db.GetByContainerID(id)
+	if err != nil {
+		return nil, fmt.Errorf("workspace not found")
+	}
+
+	// Get current container info (for subdomain, disk mounts).
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch workspaces")
+	}
+	var current *pluginsdk.ManagedContainerInfo
+	for i := range containers {
+		if containers[i].ID == id {
+			current = &containers[i]
+			break
+		}
+	}
+	if current == nil {
+		return nil, fmt.Errorf("workspace container not found")
+	}
+
+	// Fetch environment schema to rebuild creation params.
+	ws := h.fetchWorkspaceSchema(rec.EnvironmentID)
+	if ws == nil {
+		return nil, fmt.Errorf("workspace environment schema not found")
+	}
+
+	// Build env from schema defaults.
+	env := make(map[string]string)
+	for k, v := range ws.EnvDefaults {
+		env[k] = v
+	}
+
+	// Load per-workspace options: env overrides + extra shared disks.
+	diskMounts := current.DiskMounts
+	if opts, err := h.db.GetOptions(id); err == nil {
+		if opts.EnvOverrides != "" {
+			var overrides map[string]string
+			if json.Unmarshal([]byte(opts.EnvOverrides), &overrides) == nil {
+				for k, v := range overrides {
+					env[k] = v
+				}
+			}
+		}
+		if opts.ExtraDisks != "" {
+			var extras []storage.ExtraDisk
+			if json.Unmarshal([]byte(opts.ExtraDisks), &extras) == nil {
+				for _, d := range extras {
+					// Resolve env vars like $HOME in the target path
+					// using the workspace environment's defaults.
+					target := os.Expand(d.Target, func(key string) string {
+						if v, ok := env[key]; ok {
+							return v
+						}
+						return "$" + key
+					})
+					diskMounts = append(diskMounts, pluginsdk.DiskMount{
+						DiskID:   d.DiskID,
+						DiskType: "shared",
+						Target:   target,
+						ReadOnly: d.ReadOnly,
+					})
+				}
+			}
+		}
+	}
+
+	// Build cmd.
+	cmd := ws.Cmd
+	if len(ws.ExtraCmdArgs) > 0 {
+		cmd = append(append([]string{}, cmd...), ws.ExtraCmdArgs...)
+	}
+
+	// Stop and delete old container.
+	h.sdk.StopManagedContainer(id)
+	h.sdk.DeleteManagedContainer(id)
+
+	// Recreate with same subdomain + env schema disks + extra shared disks.
+	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
+		Name:       current.Name,
+		Image:      ws.Image,
+		Port:       ws.Port,
+		Subdomain:  current.Subdomain,
+		DiskMounts: diskMounts,
+		Env:        env,
+		Cmd:        cmd,
+		DockerUser: ws.DockerUser,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to recreate workspace: %w", err)
+	}
+
+	// Update workspace record with new container ID.
+	h.db.Delete(id)
+	h.db.Put(&storage.WorkspaceRecord{
+		ContainerID:   mc.ID,
+		EnvironmentID: rec.EnvironmentID,
+	})
+
+	// Migrate options to new container ID and re-attach sidecar if needed.
+	if opts, err := h.db.GetOptions(id); err == nil {
+		opts.ContainerID = mc.ID
+
+		// Re-attach agent sidecar if workspace has an agent configured.
+		if opts.AgentPlugin != "" {
+			// Detach old sidecar first (cleans up stale alias/persona/plugin).
+			if opts.SidecarID != "" {
+				h.detachSidecar(ctx, current.Subdomain, opts.SidecarID)
+				opts.SidecarID = ""
+			}
+			sidecarID, err := h.attachSidecar(ctx, mc.ID, current.Subdomain, opts.AgentPlugin, opts.AgentModel, diskMounts)
+			if err != nil {
+				log.Printf("rebuildWorkspace: failed to re-attach sidecar: %v", err)
+			} else {
+				opts.SidecarID = sidecarID
+			}
+		}
+
+		h.db.PutOptions(opts)
+		h.db.DeleteOptions(id)
+	}
+
+	result := &workspaceInfo{
+		ID:          mc.ID,
+		Name:        mc.Name,
+		Environment: rec.EnvironmentID,
+		Status:      mc.Status,
+		Subdomain:   mc.Subdomain,
 	}
 	if mc.Subdomain != "" && h.baseDomain != "" {
 		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
 	}
 
-	c.JSON(http.StatusOK, result)
+	return result, nil
 }
 
-// DeleteWorkspace stops the container and removes the workspace record.
+// DeleteWorkspace stops the container, cleans up any sidecar, and removes the workspace record.
 // The disk data is never deleted — use storage-disk for disk management.
 func (h *Handler) DeleteWorkspace(c *gin.Context) {
 	if h.sdk == nil {
@@ -531,43 +673,54 @@ func (h *Handler) DeleteWorkspace(c *gin.Context) {
 
 	id := c.Param("id")
 
+	// Clean up sidecar if attached.
+	if opts, err := h.db.GetOptions(id); err == nil && opts.SidecarID != "" {
+		// Need subdomain for alias cleanup.
+		containers, _ := h.sdk.ListManagedContainers()
+		for _, mc := range containers {
+			if mc.ID == id {
+				h.detachSidecar(c.Request.Context(), mc.Subdomain, opts.SidecarID)
+				break
+			}
+		}
+	}
+
 	if err := h.sdk.DeleteManagedContainer(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete workspace: " + err.Error()})
 		return
 	}
 
+	h.db.DeleteOptions(id)
 	h.db.Delete(id)
 	h.emitEvent("workspace:deleted", fmt.Sprintf(`{"id":"%s"}`, id))
 	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
 }
 
-// --- Git persistence (operates on the disk directly) ---
+// --- Git persistence ---
 
 func (h *Handler) PersistWorkspace(c *gin.Context) {
 	id := c.Param("id")
 
-	// Find the workspace to get disk name.
 	containers, err := h.sdk.ListManagedContainers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
 		return
 	}
 
-	var diskName string
+	var wsPath string
 	for _, mc := range containers {
 		if mc.ID == id {
-			diskName = mc.DiskName
+			resolved, err := h.resolveWorkspaceDiskPath(c.Request.Context(), mc.DiskMounts)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve workspace disk: " + err.Error()})
+				return
+			}
+			wsPath = resolved
 			break
 		}
 	}
-	if diskName == "" {
+	if wsPath == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("workspace %q not found", id)})
-		return
-	}
-
-	wsPath := h.diskPath(diskName)
-	if _, err := os.Stat(filepath.Join(wsPath, ".git")); os.IsNotExist(err) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "workspace is not a git repository"})
 		return
 	}
 
@@ -647,10 +800,9 @@ func (h *Handler) HandleEnvironmentRegister(detail string) {
 		return
 	}
 
-	// Serialize slice/map fields to JSON for DB storage.
 	cmdJSON, _ := json.Marshal(payload.Cmd)
 	extraCmdJSON, _ := json.Marshal(payload.ExtraCmdArgs)
-	mountsJSON, _ := json.Marshal(payload.SharedMounts)
+	disksJSON, _ := json.Marshal(payload.Disks)
 	envJSON, _ := json.Marshal(payload.EnvDefaults)
 
 	rec := &storage.EnvironmentRecord{
@@ -663,7 +815,7 @@ func (h *Handler) HandleEnvironmentRegister(detail string) {
 		DockerUser:   payload.DockerUser,
 		Cmd:          string(cmdJSON),
 		ExtraCmdArgs: string(extraCmdJSON),
-		SharedMounts: string(mountsJSON),
+		Disks:        string(disksJSON),
 		EnvDefaults:  string(envJSON),
 		Status:       "healthy",
 	}
@@ -676,8 +828,6 @@ func (h *Handler) HandleEnvironmentRegister(detail string) {
 }
 
 // fetchWorkspaceSchema returns workspace schema data for a given environment plugin.
-// Reads from local DB first (populated via push-based registration).
-// Falls back to live schema fetch for backwards compatibility with unregistered plugins.
 func (h *Handler) fetchWorkspaceSchema(pluginID string) *workspaceSchemaData {
 	// Try DB first (push-based registration).
 	if rec, err := h.db.GetEnvironment(pluginID); err == nil {
@@ -691,7 +841,7 @@ func (h *Handler) fetchWorkspaceSchema(pluginID string) *workspaceSchemaData {
 		}
 		json.Unmarshal([]byte(rec.Cmd), &ws.Cmd)
 		json.Unmarshal([]byte(rec.ExtraCmdArgs), &ws.ExtraCmdArgs)
-		json.Unmarshal([]byte(rec.SharedMounts), &ws.SharedMounts)
+		json.Unmarshal([]byte(rec.Disks), &ws.Disks)
 		json.Unmarshal([]byte(rec.EnvDefaults), &ws.EnvDefaults)
 		if ws.Image != "" && ws.Port != 0 {
 			return ws
@@ -728,16 +878,127 @@ func (h *Handler) fetchWorkspaceSchema(pluginID string) *workspaceSchemaData {
 }
 
 type workspaceSchemaData struct {
-	DisplayName  string                 `json:"display_name"`
-	Description  string                 `json:"description"`
-	Image        string                 `json:"image"`
-	Port         int                    `json:"port"`
-	Icon         string                 `json:"icon"`
-	Cmd          []string               `json:"cmd"`
-	DockerUser   string                 `json:"docker_user"`
-	EnvDefaults  map[string]string      `json:"env_defaults"`
-	SharedMounts []pluginsdk.ExtraMount `json:"shared_mounts"`
-	ExtraCmdArgs []string               `json:"extra_cmd_args"`
-	SetupScripts []string               `json:"setup_scripts"` // e.g. ["code-server-navigator"]
+	DisplayName  string                  `json:"display_name"`
+	Description  string                  `json:"description"`
+	Image        string                  `json:"image"`
+	Port         int                     `json:"port"`
+	Icon         string                  `json:"icon"`
+	Cmd          []string                `json:"cmd"`
+	DockerUser   string                  `json:"docker_user"`
+	EnvDefaults  map[string]string       `json:"env_defaults"`
+	Disks        []events.WorkspaceDiskSpec `json:"disks"`
+	ExtraCmdArgs []string                `json:"extra_cmd_args"`
+	SetupScripts []string                `json:"setup_scripts"`
 }
 
+// GetWorkspaceOptions returns per-workspace overrides.
+func (h *Handler) GetWorkspaceOptions(c *gin.Context) {
+	id := c.Param("id")
+
+	opts, err := h.db.GetOptions(id)
+	if err != nil {
+		// No options stored yet — return empty defaults.
+		c.JSON(http.StatusOK, storage.WorkspaceOptions{ContainerID: id})
+		return
+	}
+	c.JSON(http.StatusOK, opts)
+}
+
+// UpdateWorkspaceOptions saves per-workspace overrides.
+func (h *Handler) UpdateWorkspaceOptions(c *gin.Context) {
+	id := c.Param("id")
+
+	// Verify workspace exists.
+	if _, err := h.db.GetByContainerID(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		return
+	}
+
+	var req struct {
+		EnvOverrides map[string]string     `json:"env_overrides"`
+		ExtraDisks   []storage.ExtraDisk   `json:"extra_disks"`
+		AgentPlugin  string                `json:"agent_plugin"`
+		AgentModel   string                `json:"agent_model"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate extra disks.
+	for _, d := range req.ExtraDisks {
+		if d.DiskID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "extra disk must have a disk_id"})
+			return
+		}
+		if d.Target == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "extra disk must have a target path"})
+			return
+		}
+	}
+
+	// Serialize JSON fields.
+	envJSON, _ := json.Marshal(req.EnvOverrides)
+	disksJSON, _ := json.Marshal(req.ExtraDisks)
+
+	opts := &storage.WorkspaceOptions{
+		ContainerID:  id,
+		EnvOverrides: string(envJSON),
+		ExtraDisks:   string(disksJSON),
+		AgentPlugin:  req.AgentPlugin,
+		AgentModel:   req.AgentModel,
+	}
+
+	// Check if agent plugin changed — manage sidecar lifecycle.
+	var oldAgentPlugin, oldSidecarID string
+	if existing, err := h.db.GetOptions(id); err == nil {
+		oldAgentPlugin = existing.AgentPlugin
+		oldSidecarID = existing.SidecarID
+		opts.SidecarID = oldSidecarID
+	}
+
+	// If agent plugin changed, detach old sidecar and attach new one.
+	if req.AgentPlugin != oldAgentPlugin {
+		// Get workspace container info for subdomain and disk mounts.
+		containers, _ := h.sdk.ListManagedContainers()
+		var subdomain string
+		var diskMounts []pluginsdk.DiskMount
+		for _, mc := range containers {
+			if mc.ID == id {
+				subdomain = mc.Subdomain
+				diskMounts = mc.DiskMounts
+				break
+			}
+		}
+
+		// Detach old sidecar if present.
+		if oldSidecarID != "" && subdomain != "" {
+			h.detachSidecar(c.Request.Context(), subdomain, oldSidecarID)
+			opts.SidecarID = ""
+		}
+
+		// Attach new sidecar if requested.
+		if req.AgentPlugin != "" && subdomain != "" {
+			sidecarID, err := h.attachSidecar(c.Request.Context(), id, subdomain, req.AgentPlugin, req.AgentModel, diskMounts)
+			if err != nil {
+				log.Printf("sidecar attach failed: %v", err)
+			} else {
+				opts.SidecarID = sidecarID
+			}
+		}
+	}
+
+	if err := h.db.PutOptions(opts); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save options: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, opts)
+}
+
+// setupCodeServerNavigator provisions Machine settings for navigator support.
+func setupCodeServerNavigator(workspaceDiskPath string) {
+	// Inline the setup since it's a one-time operation.
+	exec.Command("mkdir", "-p", workspaceDiskPath+"/.code-server/code-server/Machine").Run()
+	exec.Command("sh", "-c", fmt.Sprintf(`echo '{"extensions.supportNodeGlobalNavigator":true}' > '%s/.code-server/code-server/Machine/settings.json'`, workspaceDiskPath)).Run()
+}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -33,7 +32,7 @@ func (h *Handler) ToolDefs() interface{} {
 					"environment_id": gin.H{"type": "string", "description": "Environment plugin ID (get from list_environments)"},
 					"git_repo":       gin.H{"type": "string", "description": "Git repository URL to clone into the workspace"},
 					"git_ref":        gin.H{"type": "string", "description": "Git branch or tag to checkout after cloning"},
-					"disk_name":      gin.H{"type": "string", "description": "Reuse an existing disk instead of creating a new one"},
+					"disk_id":        gin.H{"type": "string", "description": "Reuse an existing disk by its stable storage-disk ID"},
 					"plugin_source":  gin.H{"type": "string", "description": "Plugin name whose source to bind-mount into the workspace for dev editing (e.g. 'messaging-discord')"},
 				},
 				"required": []string{"name", "environment_id"},
@@ -59,7 +58,7 @@ func (h *Handler) ToolDefs() interface{} {
 		},
 		{
 			"name":        "rename_workspace",
-			"description": "Rename an existing workspace. Updates the display name and disk directory slug. Use list_workspaces first to find the workspace ID.",
+			"description": "Rename an existing workspace. Updates the display name. Disks stay linked by ID. Use list_workspaces first to find the workspace ID.",
 			"endpoint":    "/mcp/rename_workspace",
 			"parameters": gin.H{
 				"type": "object",
@@ -206,11 +205,10 @@ func (h *Handler) ToolStartWorkspace(c *gin.Context) {
 	}
 
 	result := workspaceInfo{
-		ID:         mc.ID,
-		Name:       mc.Name,
-		Status:     mc.Status,
-		Subdomain:  mc.Subdomain,
-		DiskName: mc.DiskName,
+		ID:        mc.ID,
+		Name:      mc.Name,
+		Status:    mc.Status,
+		Subdomain: mc.Subdomain,
 	}
 	if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
 		result.Environment = rec.EnvironmentID
@@ -273,6 +271,7 @@ func (h *Handler) ToolDeleteWorkspace(c *gin.Context) {
 }
 
 // ToolRenameWorkspace handles POST /mcp/rename_workspace.
+// Disk stays linked by stable ID — only the display name changes.
 func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 	if h.sdk == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "sdk not ready"})
@@ -293,69 +292,13 @@ func (h *Handler) ToolRenameWorkspace(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
-	newSlug := slugify(newDisplayName)
-	if newSlug == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name must contain at least one alphanumeric character"})
-		return
-	}
 
-	containers, err := h.sdk.ListManagedContainers()
+	_, err := h.sdk.UpdateManagedContainer(req.WorkspaceID, pluginsdk.UpdateManagedContainerRequest{
+		Name: &newDisplayName,
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch workspaces"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename workspace: " + err.Error()})
 		return
-	}
-
-	var found *pluginsdk.ManagedContainerInfo
-	for _, mc := range containers {
-		if mc.ID == req.WorkspaceID {
-			found = &mc
-			break
-		}
-	}
-	if found == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
-		return
-	}
-
-	wsPrefix := extractDiskPrefix(found.DiskName)
-	newDiskName := wsPrefix + newSlug
-
-	if newDiskName != found.DiskName {
-		oldPath := h.diskPath(found.DiskName)
-		newPath := h.diskPath(newDiskName)
-
-		if _, err := os.Stat(newPath); err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "a disk with that name already exists"})
-			return
-		}
-
-		if _, err := os.Stat(oldPath); err == nil {
-			if err := os.Rename(oldPath, newPath); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename disk: " + err.Error()})
-				return
-			}
-		}
-
-		_, err = h.sdk.UpdateManagedContainer(req.WorkspaceID, pluginsdk.UpdateManagedContainerRequest{
-			Name:       &newDisplayName,
-			DiskName: &newDiskName,
-		})
-		if err != nil {
-			os.Rename(
-				h.diskPath(newDiskName),
-				h.diskPath(found.DiskName),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workspace: " + err.Error()})
-			return
-		}
-	} else {
-		_, err = h.sdk.UpdateManagedContainer(req.WorkspaceID, pluginsdk.UpdateManagedContainerRequest{
-			Name: &newDisplayName,
-		})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename workspace: " + err.Error()})
-			return
-		}
 	}
 
 	h.emitEvent("workspace:renamed", fmt.Sprintf(`{"id":"%s","name":"%s"}`, req.WorkspaceID, newDisplayName))

@@ -29,12 +29,32 @@ type EnvironmentRecord struct {
 	DockerUser   string         `json:"docker_user"`
 	Cmd          string         `json:"cmd"`           // JSON array
 	ExtraCmdArgs string         `json:"extra_cmd_args"` // JSON array
-	SharedMounts string         `json:"shared_mounts"`  // JSON array
+	Disks        string         `json:"disks"`          // JSON array of WorkspaceDiskSpec
 	EnvDefaults  string         `json:"env_defaults"`   // JSON object
 	Status       string         `json:"status" gorm:"default:healthy"` // healthy, degraded
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+// ExtraDisk describes an additional shared disk mounted into a workspace container.
+type ExtraDisk struct {
+	DiskID   string `json:"disk_id"`              // stable storage-disk ID
+	Name     string `json:"name"`                 // display name
+	Target   string `json:"target"`               // mount path inside the container
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+// WorkspaceOptions stores per-workspace overrides on top of environment defaults.
+type WorkspaceOptions struct {
+	ContainerID  string    `json:"container_id" gorm:"primaryKey"`
+	EnvOverrides string    `json:"env_overrides" gorm:"type:text"` // JSON: {"KEY": "value"}
+	ExtraDisks   string    `json:"extra_disks" gorm:"type:text"`   // JSON: []ExtraDisk
+	AgentPlugin  string    `json:"agent_plugin"`                    // e.g. "agent-claude"
+	AgentModel   string    `json:"agent_model"`                     // e.g. "claude-opus-4-6"
+	SidecarID    string    `json:"sidecar_id"`                      // plugin ID once created
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // DB wraps the GORM connection for workspace storage.
@@ -44,7 +64,7 @@ type DB struct {
 
 // Open creates or opens the workspace manager database.
 func Open(dataPath string) (*DB, error) {
-	conn, err := pluginsdk.OpenDatabase(dataPath, "workspaces.db", &WorkspaceRecord{}, &EnvironmentRecord{})
+	conn, err := pluginsdk.OpenDatabase(dataPath, "workspaces.db", &WorkspaceRecord{}, &EnvironmentRecord{}, &WorkspaceOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -101,4 +121,23 @@ func (d *DB) SetEnvironmentStatus(pluginID, status string) error {
 // DeleteEnvironment removes an environment registration.
 func (d *DB) DeleteEnvironment(pluginID string) error {
 	return d.db.Delete(&EnvironmentRecord{}, "plugin_id = ?", pluginID).Error
+}
+
+// GetOptions returns the workspace options for a container, or nil if none set.
+func (d *DB) GetOptions(containerID string) (*WorkspaceOptions, error) {
+	var opts WorkspaceOptions
+	if err := d.db.First(&opts, "container_id = ?", containerID).Error; err != nil {
+		return nil, err
+	}
+	return &opts, nil
+}
+
+// PutOptions creates or updates workspace options.
+func (d *DB) PutOptions(opts *WorkspaceOptions) error {
+	return d.db.Save(opts).Error
+}
+
+// DeleteOptions removes workspace options by container ID.
+func (d *DB) DeleteOptions(containerID string) error {
+	return d.db.Delete(&WorkspaceOptions{}, "container_id = ?", containerID).Error
 }

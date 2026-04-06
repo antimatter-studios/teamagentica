@@ -89,21 +89,13 @@ func main() {
 	// Base domain for constructing workspace URLs.
 	baseDomain := pluginConfig["TEAMAGENTICA_BASE_DOMAIN"]
 
-	// /data is the plugin's own private storage (DB, internal state).
-	// /storage-root is cross-mounted from storage-disk (shared filesystem).
-	// Workspace disks live at /storage-root/workspace/.
-	workspaceDir := "/storage-root"
-	if err := os.MkdirAll(workspaceDir+"/workspace", 0755); err != nil {
-		log.Printf("WARNING: failed to create workspace dir: %v (some operations may fail)", err)
-	}
-
 	db, err := storage.Open("/data")
 	if err != nil {
 		log.Fatalf("failed to open workspace database: %v", err)
 	}
 
 	router := gin.Default()
-	h = handlers.NewHandler(workspaceDir, baseDomain, debug, db)
+	h = handlers.NewHandler(baseDomain, debug, db)
 	h.SetSDK(sdkClient)
 
 	// Listen for workspace environment registrations (push-based).
@@ -133,6 +125,10 @@ func main() {
 	router.PATCH("/workspaces/:id", h.RenameWorkspace)
 	router.DELETE("/workspaces/:id", h.DeleteWorkspace)
 	router.POST("/workspaces/:id/start", h.StartWorkspace)
+	router.POST("/workspaces/:id/stop", h.StopWorkspace)
+	router.POST("/workspaces/:id/restart", h.RestartWorkspace)
+	router.GET("/workspaces/:id/options", h.GetWorkspaceOptions)
+	router.PUT("/workspaces/:id/options", h.UpdateWorkspaceOptions)
 
 	// Git persistence.
 	router.POST("/workspaces/:id/persist", h.PersistWorkspace)

@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -132,10 +131,29 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 		return
 	}
 
-	diskName := fmt.Sprintf("ws-%s-%s", wsID, wsKey)
-	if err := os.MkdirAll(h.diskPath(diskName), 0755); err != nil {
-		chatError(c, "Failed to create workspace disk.")
-		return
+	ctx := c.Request.Context()
+
+	// Ensure all declared disks exist via storage-disk API.
+	var diskMounts []pluginsdk.DiskMount
+	for _, spec := range ws.Disks {
+		var diskName string
+		if spec.Type == "workspace" {
+			diskName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
+		} else {
+			diskName = spec.Name
+		}
+
+		diskID, _, err := h.ensureDisk(ctx, diskName, spec.Type)
+		if err != nil {
+			chatError(c, fmt.Sprintf("Failed to create disk %s: %v", diskName, err))
+			return
+		}
+		diskMounts = append(diskMounts, pluginsdk.DiskMount{
+			DiskID:   diskID,
+			DiskType: spec.Type,
+			Target:   spec.Target,
+			ReadOnly: spec.ReadOnly,
+		})
 	}
 
 	env := make(map[string]string)
@@ -148,15 +166,14 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 	}
 
 	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
-		Name:        name,
-		Image:       ws.Image,
-		Port:        ws.Port,
-		Subdomain:   "ws-" + wsID,
-		DiskName:  diskName,
-		ExtraMounts: ws.SharedMounts,
-		Env:         env,
-		Cmd:         cmd,
-		DockerUser:  ws.DockerUser,
+		Name:       name,
+		Image:      ws.Image,
+		Port:       ws.Port,
+		Subdomain:  "ws-" + wsID,
+		DiskMounts: diskMounts,
+		Env:        env,
+		Cmd:        cmd,
+		DockerUser: ws.DockerUser,
 	})
 	if err != nil {
 		chatError(c, "Failed to launch workspace: "+err.Error())
@@ -189,6 +206,7 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 }
 
 // ChatCommandWorkspaceRename handles POST /chat-command/workspace/rename.
+// Disk stays linked by stable ID — only the display name changes.
 func (h *Handler) ChatCommandWorkspaceRename(c *gin.Context) {
 	if h.sdk == nil {
 		chatError(c, "Workspace manager not ready.")
@@ -234,49 +252,11 @@ func (h *Handler) ChatCommandWorkspaceRename(c *gin.Context) {
 		return
 	}
 
-	newSlug := slugify(newName)
-	if newSlug == "" {
-		chatError(c, "New name must contain at least one alphanumeric character.")
+	if _, err := h.sdk.UpdateManagedContainer(matched.ID, pluginsdk.UpdateManagedContainerRequest{
+		Name: &newName,
+	}); err != nil {
+		chatError(c, "Failed to rename workspace: "+err.Error())
 		return
-	}
-
-	wsPrefix := extractDiskPrefix(matched.DiskName)
-	newDiskName := wsPrefix + newSlug
-
-	if newDiskName != matched.DiskName {
-		oldPath := h.diskPath(matched.DiskName)
-		newPath := h.diskPath(newDiskName)
-		if _, err := os.Stat(newPath); err == nil {
-			chatError(c, "A disk with that name already exists.")
-			return
-		}
-		if _, err := os.Stat(oldPath); err == nil {
-			if err := os.Rename(oldPath, newPath); err != nil {
-				chatError(c, "Failed to rename disk: "+err.Error())
-				return
-			}
-		}
-	}
-
-	if newDiskName != matched.DiskName {
-		if _, err := h.sdk.UpdateManagedContainer(matched.ID, pluginsdk.UpdateManagedContainerRequest{
-			Name:       &newName,
-			DiskName: &newDiskName,
-		}); err != nil {
-			os.Rename(
-				h.diskPath(newDiskName),
-				h.diskPath(matched.DiskName),
-			)
-			chatError(c, "Failed to update workspace: "+err.Error())
-			return
-		}
-	} else {
-		if _, err := h.sdk.UpdateManagedContainer(matched.ID, pluginsdk.UpdateManagedContainerRequest{
-			Name: &newName,
-		}); err != nil {
-			chatError(c, "Failed to rename workspace: "+err.Error())
-			return
-		}
 	}
 
 	h.emitEvent("workspace:renamed", fmt.Sprintf(`{"id":"%s","name":"%s"}`, matched.ID, newName))
