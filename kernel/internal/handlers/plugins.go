@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -431,6 +432,8 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 }
 
 // EnablePlugin handles POST /api/plugins/:id/enable.
+// Accepts optional shared_disks override in the request body to configure
+// disk mounts for dynamically-created plugins (e.g. workspace agent sidecars).
 func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 	id := c.Param("id")
 
@@ -438,6 +441,18 @@ func (h *PluginHandler) EnablePlugin(c *gin.Context) {
 	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
 		return
+	}
+
+	// Accept optional shared_disks override.
+	var req struct {
+		SharedDisks []models.SharedDiskEntry `json:"shared_disks"`
+	}
+	if c.Request.ContentLength > 0 {
+		c.ShouldBindJSON(&req)
+	}
+	if len(req.SharedDisks) > 0 {
+		plugin.SetSharedDisks(req.SharedDisks)
+		h.db().Model(&plugin).Update("shared_disks", plugin.SharedDisks)
 	}
 
 	if h.runtime == nil && !plugin.IsMetadataOnly() {
@@ -515,6 +530,7 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 	env := map[string]string{
 		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
 		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+		"PLUGIN_ID":                plugin.ID,
 	}
 
 	// Pull image (non-fatal — image may be local-only).
@@ -526,7 +542,10 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 		})
 	}
 
-	containerID, err := h.runtime.StartPlugin(ctx, plugin, env)
+	// Resolve shared disk paths if configured.
+	diskPaths := h.resolveDiskPaths(ctx, plugin)
+
+	containerID, err := h.runtime.StartPlugin(ctx, plugin, env, diskPaths)
 	if err != nil {
 		h.Events.Emit(events.DebugEvent{
 			Type:     "error",
@@ -670,6 +689,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	env := map[string]string{
 		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
 		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+		"PLUGIN_ID":                plugin.ID,
 	}
 
 	h.Events.Emit(events.DebugEvent{
@@ -677,7 +697,8 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 		PluginID: id,
 		Detail:   "starting container image=" + plugin.Image,
 	})
-	containerID, err := h.runtime.StartPlugin(c.Request.Context(), &plugin, env)
+	diskPaths := h.resolveDiskPaths(c.Request.Context(), &plugin)
+	containerID, err := h.runtime.StartPlugin(c.Request.Context(), &plugin, env, diskPaths)
 	if err != nil {
 		h.Events.Emit(events.DebugEvent{
 			Type:     "error",
@@ -1117,7 +1138,7 @@ func (h *PluginHandler) DeletePluginConfigKey(c *gin.Context) {
 //   - "^tool:memory:bank:" — prefix match (tool:memory:bank:semantic, tool:memory:bank:episodic)
 //   - "memory$"            — suffix match (tool:memory, agent:memory)
 //
-// Accessible by both admin users and plugin service tokens.
+// Accessible by both admin users and plugins (via mTLS).
 func (h *PluginHandler) SearchPlugins(c *gin.Context) {
 	capability := c.Query("capability")
 	if capability == "" {
@@ -1241,4 +1262,76 @@ func (h *PluginHandler) fetchPluginSchema(plugin models.Plugin) ([]byte, error) 
 	return body, nil
 }
 
+// resolveDiskPaths resolves shared disk paths for a plugin by calling
+// storage-disk's API. Returns a map of disk name → host-side path.
+func (h *PluginHandler) resolveDiskPaths(ctx context.Context, plugin *models.Plugin) map[string]string {
+	disks := plugin.GetSharedDisks()
+	if len(disks) == 0 {
+		return nil
+	}
 
+	var storageDisk models.Plugin
+	if err := h.db().First(&storageDisk, "id = ?", "storage-disk").Error; err != nil {
+		log.Printf("resolveDiskPaths: storage-disk not found: %v", err)
+		return nil
+	}
+	if storageDisk.Host == "" || storageDisk.HTTPPort == 0 {
+		log.Printf("resolveDiskPaths: storage-disk not ready")
+		return nil
+	}
+
+	baseURL := fmt.Sprintf("http://%s:%d", storageDisk.Host, storageDisk.HTTPPort)
+	client := &http.Client{Timeout: 10 * time.Second}
+	result := map[string]string{}
+
+	for _, sd := range disks {
+		if sd.Name == "" {
+			continue
+		}
+		diskType := sd.Type
+		if diskType == "" {
+			diskType = "shared"
+		}
+
+		// Try create (idempotent: 201 = created, 409 = exists).
+		body := fmt.Sprintf(`{"name":%q,"type":%q}`, sd.Name, diskType)
+		req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/disks", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("resolveDiskPaths: create disk %q failed: %v", sd.Name, err)
+			continue
+		}
+
+		var pathResult struct {
+			Path string `json:"path"`
+		}
+
+		if resp.StatusCode == http.StatusCreated {
+			json.NewDecoder(resp.Body).Decode(&pathResult)
+			resp.Body.Close()
+		} else {
+			resp.Body.Close()
+			// Fetch path for existing disk.
+			pathReq, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/disks/%s/%s/path", baseURL, diskType, sd.Name), nil)
+			pathResp, err := client.Do(pathReq)
+			if err != nil {
+				log.Printf("resolveDiskPaths: get path for %q failed: %v", sd.Name, err)
+				continue
+			}
+			json.NewDecoder(pathResp.Body).Decode(&pathResult)
+			pathResp.Body.Close()
+		}
+
+		if pathResult.Path != "" {
+			// Translate storage-disk internal path to host path.
+			// storage-disk's /data = host's {DataDir}/storage-disk, so strip /data/ prefix.
+			cleaned := strings.TrimPrefix(pathResult.Path, "/data/")
+			hostPath := filepath.Join(h.cfg.DataDir, "storage-disk", cleaned)
+			result[sd.Name] = hostPath
+			log.Printf("resolveDiskPaths: %s → %s", sd.Name, hostPath)
+		}
+	}
+
+	return result
+}

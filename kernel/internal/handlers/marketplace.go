@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,12 +11,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"github.com/antimatter-studios/teamagentica/kernel/internal/auth"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
@@ -460,7 +457,7 @@ func (h *MarketplaceHandler) InstallPlugin(c *gin.Context) {
 	})
 }
 
-// bootstrapPlugin creates a new plugin DB record and service token.
+// bootstrapPlugin creates a new plugin DB record.
 // Called only for first-time installs, before syncPlugin.
 func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugin, error) {
 	plugin := models.Plugin{
@@ -472,26 +469,6 @@ func (h *MarketplaceHandler) bootstrapPlugin(entry *CatalogEntry) (*models.Plugi
 	if err := h.db().Create(&plugin).Error; err != nil {
 		return nil, fmt.Errorf("failed to create plugin %s: %w", plugin.ID, err)
 	}
-
-	expiry := 10 * 365 * 24 * time.Hour
-	token, err := auth.GenerateServiceToken(entry.PluginID, []string{"plugins:search"}, expiry)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate service token for %s: %w", entry.PluginID, err)
-	}
-	hash := sha256.Sum256([]byte(token))
-	tokenHash := fmt.Sprintf("%x", hash)
-	capsJSON, _ := json.Marshal([]string{"plugins:search"})
-	st := models.ServiceToken{
-		Name:         entry.PluginID,
-		TokenHash:    tokenHash,
-		Capabilities: string(capsJSON),
-		IssuedBy:     0,
-		ExpiresAt:    time.Now().Add(expiry),
-	}
-	if err := h.db().Create(&st).Error; err != nil {
-		log.Printf("marketplace: failed to create service token for %s: %v", entry.PluginID, err)
-	}
-	h.db().Model(&plugin).Update("service_token", token)
 
 	return &plugin, nil
 }
@@ -663,6 +640,12 @@ func applyManifest(plugin *models.Plugin, manifest map[string]interface{}, db *g
 		if b, err := json.Marshal(cs); err == nil {
 			plugin.ConfigSchema = models.JSONRawString(b)
 			updates["config_schema"] = plugin.ConfigSchema
+		}
+	}
+	if sd, ok := manifest["shared_disks"]; ok && sd != nil {
+		if b, err := json.Marshal(sd); err == nil {
+			plugin.SharedDisks = models.JSONRawString(b)
+			updates["shared_disks"] = plugin.SharedDisks
 		}
 	}
 

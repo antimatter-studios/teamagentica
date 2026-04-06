@@ -2,8 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,18 +23,37 @@ import (
 
 // Orchestrator manages plugin lifecycle at kernel startup and shutdown.
 type Orchestrator struct {
-	runtime runtime.ContainerRuntime
-	config  *config.Config
-	events  *events.Hub
+	runtime   runtime.ContainerRuntime
+	config    *config.Config
+	events    *events.Hub
+	clientTLS *tls.Config // mTLS config for plugin API calls
 }
 
 // NewOrchestrator creates a new Orchestrator.
-func NewOrchestrator(rt runtime.ContainerRuntime, cfg *config.Config, hub *events.Hub) *Orchestrator {
+func NewOrchestrator(rt runtime.ContainerRuntime, cfg *config.Config, hub *events.Hub, clientTLS *tls.Config) *Orchestrator {
 	return &Orchestrator{
-		runtime: rt,
-		config:  cfg,
-		events:  hub,
+		runtime:   rt,
+		config:    cfg,
+		events:    hub,
+		clientTLS: clientTLS,
 	}
+}
+
+// pluginScheme returns "https" if mTLS is configured, "http" otherwise.
+func (o *Orchestrator) pluginScheme() string {
+	if o.clientTLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// pluginHTTPClient returns an HTTP client configured for mTLS if available.
+func (o *Orchestrator) pluginHTTPClient() *http.Client {
+	transport := &http.Transport{}
+	if o.clientTLS != nil {
+		transport.TLSClientConfig = o.clientTLS
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: transport}
 }
 
 func (o *Orchestrator) db() *gorm.DB { return database.Get() }
@@ -85,17 +109,108 @@ func (o *Orchestrator) StartEnabledPlugins(ctx context.Context) error {
 	log.Printf("orchestrator: starting %d enabled plugin(s)", len(plugins))
 	o.emit("orchestrator", "kernel", fmt.Sprintf("boot: starting %d enabled plugin(s)", len(plugins)))
 
-	// Start all plugins in parallel — each plugin gets its own goroutine.
-	var wg sync.WaitGroup
-	for i := range plugins {
-		plugin := plugins[i] // copy for goroutine
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			o.startPlugin(ctx, &plugin)
-		}()
+	// Build a capability map: which plugin provides which capability.
+	capProviders := map[string]string{} // capability → plugin ID
+	for _, p := range plugins {
+		for _, cap := range p.GetCapabilities() {
+			capProviders[cap] = p.ID
+		}
 	}
-	wg.Wait()
+
+	// Dependency-aware startup queue.
+	// Plugins without unmet deps start immediately. Those with unmet deps
+	// are pushed to the back of the queue. Once a plugin starts and registers,
+	// it satisfies deps for others. If a full pass makes zero progress, we
+	// start remaining plugins anyway (best-effort).
+	queue := make([]models.Plugin, len(plugins))
+	copy(queue, plugins)
+	started := map[string]bool{}     // plugin IDs that have started
+	healthy := map[string]bool{}     // plugin IDs confirmed healthy (registered)
+
+	for len(queue) > 0 {
+		progress := false
+		var deferred []models.Plugin
+
+		// Start a batch of plugins whose deps are all satisfied.
+		var batch []models.Plugin
+		for _, p := range queue {
+			if p.IsMetadataOnly() {
+				// Metadata-only: mark started immediately.
+				o.startPlugin(ctx, &p)
+				started[p.ID] = true
+				healthy[p.ID] = true
+				progress = true
+				continue
+			}
+
+			deps := p.GetDependencies()
+			allMet := true
+			for _, dep := range deps {
+				providerID, known := capProviders[dep]
+				if !known {
+					// Unknown dep — can't be satisfied, don't block forever.
+					log.Printf("orchestrator: plugin %s depends on %q but no plugin provides it — starting anyway", p.ID, dep)
+					continue
+				}
+				if !healthy[providerID] {
+					allMet = false
+					break
+				}
+			}
+
+			if allMet || len(deps) == 0 {
+				batch = append(batch, p)
+			} else {
+				deferred = append(deferred, p)
+			}
+		}
+
+		// Start the batch in parallel.
+		if len(batch) > 0 {
+			var wg sync.WaitGroup
+			for i := range batch {
+				plugin := batch[i]
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					o.startPlugin(ctx, &plugin)
+				}()
+			}
+			wg.Wait()
+
+			// Wait for batch plugins to register (become healthy).
+			for _, p := range batch {
+				started[p.ID] = true
+				progress = true
+				if o.waitForHealthy(ctx, p.ID, 30*time.Second) {
+					healthy[p.ID] = true
+					log.Printf("orchestrator: plugin %s is healthy", p.ID)
+				} else {
+					// Treat as healthy anyway so we don't deadlock.
+					healthy[p.ID] = true
+					log.Printf("orchestrator: plugin %s did not register in time, continuing", p.ID)
+				}
+			}
+		}
+
+		queue = deferred
+
+		// Deadlock detection: if no progress was made, start everything remaining.
+		if !progress && len(queue) > 0 {
+			log.Printf("orchestrator: dependency deadlock detected, force-starting %d remaining plugin(s)", len(queue))
+			var wg sync.WaitGroup
+			for i := range queue {
+				plugin := queue[i]
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					o.startPlugin(ctx, &plugin)
+				}()
+			}
+			wg.Wait()
+			break
+		}
+	}
 
 	log.Printf("orchestrator: all %d plugin(s) started", len(plugins))
 	return nil
@@ -113,19 +228,12 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		return
 	}
 
-	// Look up service token for this plugin.
-	var serviceToken models.ServiceToken
-	if err := o.db().Where("name = ? AND revoked = ?", plugin.ID, false).First(&serviceToken).Error; err != nil {
-		log.Printf("orchestrator: WARNING: no service token found for plugin %s, skipping (plugin cannot auth without a token)", plugin.ID)
-		o.emit("warning", plugin.ID, "no service token found, skipping")
-		return
-	}
-
 	// Build minimal env — only kernel connection info.
 	// Plugin config is fetched via REST API (FetchConfig), not env vars.
 	env := map[string]string{
 		"TEAMAGENTICA_KERNEL_HOST": o.config.AdvertiseHost,
 		"TEAMAGENTICA_KERNEL_PORT": o.config.TLSPort,
+		"PLUGIN_ID":                plugin.ID,
 	}
 
 	// Stop existing container and clear stale registration data before starting
@@ -142,6 +250,28 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		"last_seen":    time.Time{},
 	})
 
+	// Ensure declared disks exist and collect host-side paths.
+	diskPaths := map[string]string{}
+	for _, sd := range plugin.GetSharedDisks() {
+		if sd.Name == "" {
+			continue
+		}
+		diskType := sd.Type
+		if diskType == "" {
+			diskType = "shared"
+		}
+		path, err := o.ensureDisk(ctx, sd.Name, diskType)
+		if err != nil {
+			log.Printf("orchestrator: WARNING: failed to ensure disk %q for plugin %s: %v", sd.Name, plugin.ID, err)
+			o.emit("warning", plugin.ID, fmt.Sprintf("disk %q: %v", sd.Name, err))
+			continue
+		}
+		// Translate storage-disk internal path to host path.
+		// storage-disk returns e.g. "/storage-root/shared/agent-claude"
+		// Host path is: dataDir + "/storage-disk" + path
+		diskPaths[sd.Name] = o.translateDiskPath(path)
+	}
+
 	o.emit("start", plugin.ID, fmt.Sprintf("pulling image=%s", plugin.Image))
 	if err := o.runtime.PullImage(ctx, plugin.Image); err != nil {
 		log.Printf("orchestrator: pull image %s for plugin %s failed (continuing, image may be local): %v", plugin.Image, plugin.ID, err)
@@ -150,7 +280,7 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 
 	// Start the container.
 	o.emit("start", plugin.ID, fmt.Sprintf("starting container image=%s", plugin.Image))
-	containerID, err := o.runtime.StartPlugin(ctx, plugin, env)
+	containerID, err := o.runtime.StartPlugin(ctx, plugin, env, diskPaths)
 	if err != nil {
 		log.Printf("orchestrator: ERROR: failed to start plugin %s: %v", plugin.ID, err)
 		o.emit("error", plugin.ID, fmt.Sprintf("start failed: %v", err))
@@ -165,6 +295,139 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 
 	log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
 	o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
+}
+
+// translateDiskPath converts a storage-disk internal path (e.g. "/data/storage-root/shared/agent-claude")
+// to a host-side path for Docker bind mounting.
+// storage-disk's /data maps to host's {DataDir}/storage-disk, so we strip the /data prefix.
+func (o *Orchestrator) translateDiskPath(storagePath string) string {
+	// Strip the leading /data/ prefix — storage-disk's /data = host's {DataDir}/storage-disk
+	cleaned := strings.TrimPrefix(storagePath, "/data/")
+	return filepath.Join(o.config.DataDir, "storage-disk", cleaned)
+}
+
+// ensureDisk calls storage-disk's API to get-or-create a disk and returns
+// the path (from storage-disk's perspective, e.g. "/storage-root/shared/agent-claude").
+// The kernel translates this to a host-side path for bind mounting.
+func (o *Orchestrator) ensureDisk(ctx context.Context, diskName, diskType string) (string, error) {
+	// Find storage-disk plugin address.
+	var storageDisk models.Plugin
+	if err := o.db().First(&storageDisk, "id = ?", "storage-disk").Error; err != nil {
+		return "", fmt.Errorf("storage-disk plugin not found: %w", err)
+	}
+	if storageDisk.Host == "" || storageDisk.HTTPPort == 0 {
+		return "", fmt.Errorf("storage-disk plugin not ready (host=%q port=%d)", storageDisk.Host, storageDisk.HTTPPort)
+	}
+
+	baseURL := fmt.Sprintf("%s://%s:%d", o.pluginScheme(), storageDisk.Host, storageDisk.HTTPPort)
+	client := o.pluginHTTPClient()
+
+	// Try to create; 409 means it already exists.
+	createBody := fmt.Sprintf(`{"name":%q,"type":%q}`, diskName, diskType)
+	createReq, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/disks", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(createReq)
+	if err != nil {
+		return "", fmt.Errorf("request to storage-disk failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Path string `json:"path"`
+	}
+
+	if resp.StatusCode == http.StatusCreated {
+		json.NewDecoder(resp.Body).Decode(&result)
+		log.Printf("orchestrator: created %s disk %q (path=%s)", diskType, diskName, result.Path)
+		return result.Path, nil
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		// Already exists — fetch the path.
+		pathReq, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/disks/%s/%s/path", baseURL, diskType, diskName), nil)
+		pathResp, err := client.Do(pathReq)
+		if err != nil {
+			return "", fmt.Errorf("failed to get disk path: %w", err)
+		}
+		defer pathResp.Body.Close()
+		json.NewDecoder(pathResp.Body).Decode(&result)
+		log.Printf("orchestrator: %s disk %q already exists (path=%s)", diskType, diskName, result.Path)
+		return result.Path, nil
+	}
+
+	return "", fmt.Errorf("storage-disk returned %d for disk %q", resp.StatusCode, diskName)
+}
+
+// resolveDiskMounts resolves DiskMount entries to host-side paths via storage-disk's by-id API.
+func (o *Orchestrator) resolveDiskMounts(ctx context.Context, mounts []models.DiskMount) ([]runtime.ResolvedDiskMount, error) {
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+
+	var storageDisk models.Plugin
+	if err := o.db().First(&storageDisk, "id = ?", "storage-disk").Error; err != nil {
+		return nil, fmt.Errorf("storage-disk plugin not found: %w", err)
+	}
+	if storageDisk.Host == "" || storageDisk.HTTPPort == 0 {
+		return nil, fmt.Errorf("storage-disk plugin not ready (host=%q port=%d)", storageDisk.Host, storageDisk.HTTPPort)
+	}
+
+	baseURL := fmt.Sprintf("%s://%s:%d", o.pluginScheme(), storageDisk.Host, storageDisk.HTTPPort)
+	client := o.pluginHTTPClient()
+
+	var resolved []runtime.ResolvedDiskMount
+	for _, dm := range mounts {
+		if dm.DiskID == "" || dm.Target == "" {
+			continue
+		}
+
+		req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/disks/by-id/%s", baseURL, dm.DiskID), nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve disk %s: %w", dm.DiskID, err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("storage-disk returned %d for disk id %s", resp.StatusCode, dm.DiskID)
+		}
+
+		var result struct {
+			Path string `json:"path"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+
+		hostPath := o.translateDiskPath(result.Path)
+		resolved = append(resolved, runtime.ResolvedDiskMount{
+			HostPath: hostPath,
+			Target:   dm.Target,
+			ReadOnly: dm.ReadOnly,
+		})
+		log.Printf("orchestrator: resolved disk %s → %s (target=%s)", dm.DiskID, hostPath, dm.Target)
+	}
+
+	return resolved, nil
+}
+
+// waitForHealthy polls the DB until a plugin has registered (host is set)
+// or the timeout expires. Returns true if the plugin registered in time.
+func (o *Orchestrator) waitForHealthy(ctx context.Context, pluginID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var p models.Plugin
+		if err := o.db().First(&p, "id = ?", pluginID).Error; err == nil {
+			if p.Host != "" {
+				return true
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return false
 }
 
 // RestartPlugin restarts a single enabled plugin by ID.
@@ -194,10 +457,28 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	env := map[string]string{
 		"TEAMAGENTICA_KERNEL_HOST": o.config.AdvertiseHost,
 		"TEAMAGENTICA_KERNEL_PORT": o.config.TLSPort,
+		"PLUGIN_ID":                plugin.ID,
+	}
+
+	// Resolve shared disk paths.
+	diskPaths := map[string]string{}
+	for _, sd := range plugin.GetSharedDisks() {
+		if sd.Name == "" {
+			continue
+		}
+		diskType := sd.Type
+		if diskType == "" {
+			diskType = "shared"
+		}
+		if path, err := o.ensureDisk(ctx, sd.Name, diskType); err == nil {
+			diskPaths[sd.Name] = o.translateDiskPath(path)
+		} else {
+			log.Printf("orchestrator: WARNING: restart: failed to ensure disk %q: %v", sd.Name, err)
+		}
 	}
 
 	o.emit("start", pluginID, fmt.Sprintf("starting container image=%s", plugin.Image))
-	containerID, err := o.runtime.StartPlugin(ctx, &plugin, env)
+	containerID, err := o.runtime.StartPlugin(ctx, &plugin, env, diskPaths)
 	if err != nil {
 		o.emit("error", pluginID, fmt.Sprintf("restart failed: %v", err))
 		o.db().Model(&plugin).Updates(map[string]interface{}{
@@ -241,7 +522,13 @@ func (o *Orchestrator) RecoverManagedContainers(ctx context.Context) {
 
 	for i := range containers {
 		mc := &containers[i]
-		containerID, err := o.runtime.StartManagedContainer(ctx, mc, o.config.BaseDomain)
+		resolvedMounts, err := o.resolveDiskMounts(ctx, mc.GetDiskMounts())
+		if err != nil {
+			log.Printf("orchestrator: failed to resolve disks for managed container %s: %v", mc.ID, err)
+			o.db().Model(mc).Update("status", "stopped")
+			continue
+		}
+		containerID, err := o.runtime.StartManagedContainer(ctx, mc, o.config.BaseDomain, resolvedMounts)
 		if err != nil {
 			log.Printf("orchestrator: failed to recover managed container %s: %v", mc.ID, err)
 			o.db().Model(mc).Update("status", "stopped")

@@ -26,13 +26,9 @@ plugin_mounts:
     source: "${NETWORK}-gobuildcache"
     target: /root/.cache/go-build
 
-managed_disk_mount:
+shared_disk_mount:
   type: bind
-  source: "${DATA_DIR}/storage-disk/disks/${DISK_NAME}"
-
-managed_extra_mount:
-  type: bind
-  source: "${DATA_DIR}/storage-disk/disks/${DISK_NAME}"
+  source: "${DATA_DIR}/storage-disk/storage-root/shared/${DISK_NAME}"
 
 managed_plugin_source:
   enabled: true

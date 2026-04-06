@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-// ExtraMount describes an additional bind mount for a managed container.
-type ExtraMount struct {
-	// DiskName is a path relative to the storage-disk disks dir (same
-	// convention as the primary DiskName). In dev mode it resolves to a host
-	// bind mount; in prod it maps to a named-volume subpath.
-	DiskName string `json:"disk_name"`
-	Target   string `json:"target"` // mount path inside the container
+// DiskMount describes a storage-disk-managed mount for a managed container.
+// Each mount references a disk by its stable storage-disk ID, so renames
+// don't break linkage.
+type DiskMount struct {
+	DiskID   string `json:"disk_id"`              // stable storage-disk ID
+	DiskType string `json:"disk_type"`            // "workspace" or "shared"
+	Target   string `json:"target"`               // mount path inside the container
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
@@ -27,14 +27,35 @@ type ManagedContainer struct {
 	Status        string    `json:"status" gorm:"not null;default:'stopped'"`
 	Port          int       `json:"port" gorm:"not null"`
 	Subdomain     string    `json:"subdomain" gorm:"uniqueIndex"`
-	DiskName      string    `json:"disk_name"`
-	ExtraMounts   string    `json:"-" gorm:"type:text"` // JSON array of ExtraMount
+	DiskMounts    string    `json:"-" gorm:"type:text"`           // JSON array of DiskMount
 	Env           string    `json:"-" gorm:"type:text"`
-	Cmd           string    `json:"-" gorm:"type:text"` // JSON array of command args
+	Cmd           string    `json:"-" gorm:"type:text"`           // JSON array of command args
 	DockerUser    string    `json:"-" gorm:"column:docker_user"`
-	PluginSource  string    `json:"plugin_source,omitempty" gorm:"column:plugin_source"` // plugin name whose source to bind-mount for dev editing
+	PluginSource  string    `json:"plugin_source,omitempty" gorm:"column:plugin_source"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// GetDiskMounts parses the stored JSON disk mounts string.
+func (mc *ManagedContainer) GetDiskMounts() []DiskMount {
+	if mc.DiskMounts == "" {
+		return nil
+	}
+	var mounts []DiskMount
+	if err := json.Unmarshal([]byte(mc.DiskMounts), &mounts); err != nil {
+		return nil
+	}
+	return mounts
+}
+
+// SetDiskMounts serializes the disk mounts slice to JSON for storage.
+func (mc *ManagedContainer) SetDiskMounts(mounts []DiskMount) {
+	if len(mounts) == 0 {
+		mc.DiskMounts = ""
+		return
+	}
+	data, _ := json.Marshal(mounts)
+	mc.DiskMounts = string(data)
 }
 
 // GetEnv parses the stored JSON env string into a map.
@@ -69,28 +90,6 @@ func (mc *ManagedContainer) SetCmd(cmd []string) {
 	}
 	data, _ := json.Marshal(cmd)
 	mc.Cmd = string(data)
-}
-
-// GetExtraMounts parses the stored JSON extra mounts string.
-func (mc *ManagedContainer) GetExtraMounts() []ExtraMount {
-	if mc.ExtraMounts == "" {
-		return nil
-	}
-	var mounts []ExtraMount
-	if err := json.Unmarshal([]byte(mc.ExtraMounts), &mounts); err != nil {
-		return nil
-	}
-	return mounts
-}
-
-// SetExtraMounts serializes the extra mounts slice to JSON for storage.
-func (mc *ManagedContainer) SetExtraMounts(mounts []ExtraMount) {
-	if len(mounts) == 0 {
-		mc.ExtraMounts = ""
-		return
-	}
-	data, _ := json.Marshal(mounts)
-	mc.ExtraMounts = string(data)
 }
 
 // SetEnv serializes the env map to JSON for storage.

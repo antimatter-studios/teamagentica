@@ -21,7 +21,6 @@ type Plugin struct {
 	Marketplace  string    `json:"marketplace" gorm:"default:'local'"`
 	Enabled      bool      `json:"enabled" gorm:"default:false"`
 	System       bool      `json:"system" gorm:"default:false"` // system plugins are auto-installed and cannot be uninstalled
-	ServiceToken string    `json:"-"` // internal token for plugin-to-kernel auth
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -45,6 +44,11 @@ type Plugin struct {
 	// Only present on plugins with the workspace:environment capability.
 	// Stored as JSON; see WorkspaceSchemaData for the typed structure.
 	WorkspaceSchema JSONRawString `json:"workspace_schema,omitempty" gorm:"type:json"`
+
+	// SharedDisks is a JSON array of shared disk mounts requested by the plugin.
+	// Each entry has a disk name and target mount path. The kernel auto-creates
+	// the disk directory and bind-mounts it into the plugin container.
+	SharedDisks JSONRawString `json:"shared_disks,omitempty" gorm:"type:json"`
 
 	// ConfigSchema is a JSON string mapping env var names to ConfigSchemaField objects.
 	// Example:
@@ -157,6 +161,35 @@ func (p *Plugin) SetWorkspaceSchema(ws *WorkspaceSchemaData) error {
 	}
 	p.WorkspaceSchema = JSONRawString(data)
 	return nil
+}
+
+// SharedDiskEntry describes a disk mount for a plugin.
+type SharedDiskEntry struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`   // "shared" or "workspace"
+	Target string `json:"target"`
+}
+
+// GetSharedDisks parses the stored JSON shared disks.
+func (p *Plugin) GetSharedDisks() []SharedDiskEntry {
+	if string(p.SharedDisks) == "" {
+		return nil
+	}
+	var disks []SharedDiskEntry
+	if err := json.Unmarshal([]byte(p.SharedDisks), &disks); err != nil {
+		return nil
+	}
+	return disks
+}
+
+// SetSharedDisks serializes the shared disks to JSON for storage.
+func (p *Plugin) SetSharedDisks(disks []SharedDiskEntry) {
+	if len(disks) == 0 {
+		p.SharedDisks = JSONRawString("")
+		return
+	}
+	data, _ := json.Marshal(disks)
+	p.SharedDisks = JSONRawString(data)
 }
 
 // GetCapabilities returns the capabilities as a string slice.

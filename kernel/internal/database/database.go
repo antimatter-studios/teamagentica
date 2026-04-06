@@ -1,10 +1,8 @@
 package database
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"log"
-	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -143,8 +141,8 @@ var systemPlugins = []systemPlugin{
 	},
 }
 
-// seedSystemPlugins ensures all system plugins exist in the DB, are enabled,
-// and have valid service tokens. Runs idempotently on every boot.
+// seedSystemPlugins ensures all system plugins exist in the DB and are enabled.
+// Runs idempotently on every boot.
 func seedSystemPlugins(db *gorm.DB) {
 	for _, sp := range systemPlugins {
 		var existing models.Plugin
@@ -159,10 +157,6 @@ func seedSystemPlugins(db *gorm.DB) {
 				updates["image"] = sp.Image
 			}
 			db.Model(&existing).Updates(updates)
-
-			if existing.ServiceToken == "" {
-				ensureServiceToken(db, sp.ID)
-			}
 			continue
 		}
 
@@ -184,46 +178,12 @@ func seedSystemPlugins(db *gorm.DB) {
 			continue
 		}
 
-		ensureServiceToken(db, sp.ID)
 		log.Printf("database: system plugin %s seeded", sp.ID)
 	}
 }
 
-// ensureServiceToken creates a service token for a plugin if it doesn't have one.
-func ensureServiceToken(db *gorm.DB, pluginID string) {
-	expiry := 10 * 365 * 24 * time.Hour
-	token, err := auth.GenerateServiceToken(pluginID, []string{"plugins:search"}, expiry)
-	if err != nil {
-		log.Printf("database: failed to generate service token for %s: %v", pluginID, err)
-		return
-	}
-
-	hash := sha256.Sum256([]byte(token))
-	tokenHash := fmt.Sprintf("%x", hash)
-	capsJSON := `["plugins:search"]`
-
-	// Create token record if not exists.
-	var existing models.ServiceToken
-	if db.Where("name = ? AND revoked = ?", pluginID, false).First(&existing).Error != nil {
-		st := models.ServiceToken{
-			Name:         pluginID,
-			TokenHash:    tokenHash,
-			Capabilities: capsJSON,
-			IssuedBy:     0,
-			ExpiresAt:    time.Now().Add(expiry),
-		}
-		if err := db.Create(&st).Error; err != nil {
-			log.Printf("database: failed to create service token for %s: %v", pluginID, err)
-			return
-		}
-	}
-
-	// Store token on plugin record.
-	db.Model(&models.Plugin{}).Where("id = ?", pluginID).Update("service_token", token)
-}
-
 // loadCachedJWTSecret loads a cached copy of the JWT secret from the configs
-// table so the kernel can validate service tokens at boot. The authoritative
+// table so the kernel can validate user JWTs at boot. The authoritative
 // secret lives in the user-manager plugin; the kernel refreshes its cache
 // after the plugin starts (see fetchJWTSecretFromPlugin in jwt_bootstrap.go).
 func loadCachedJWTSecret(db *gorm.DB) {

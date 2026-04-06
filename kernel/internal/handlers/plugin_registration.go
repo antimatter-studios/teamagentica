@@ -345,7 +345,7 @@ func (h *PluginHandler) ReportEvent(c *gin.Context) {
 
 // handleAddressedEvent guarantees at-least-once delivery to a specific plugin.
 // UpdatePricing handles POST /api/plugins/pricing — allows plugins to push
-// price updates to the kernel via service-token auth.
+// price updates to the kernel via mTLS auth.
 func (h *PluginHandler) UpdatePricing(c *gin.Context) {
 	var req struct {
 		Prices []struct {

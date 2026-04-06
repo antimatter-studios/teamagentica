@@ -123,14 +123,6 @@ func main() {
 		authGroup.POST("/refresh", loginLimiter.Middleware(), authProxy)
 		authGroup.POST("/logout", middleware.AuthRequired(), authProxy)
 	}
-	serviceTokenGroup := r.Group("/api/auth")
-	serviceTokenGroup.Use(middleware.AuthRequired())
-	{
-		serviceTokenGroup.POST("/service-token", authProxy)
-		serviceTokenGroup.GET("/service-tokens", authProxy)
-		serviceTokenGroup.DELETE("/service-token/:id", authProxy)
-	}
-
 	auditProxy := pluginHandler.SystemPluginProxy("system-user-manager", "/api/audit")
 	auditGroup := r.Group("/api/audit")
 	auditGroup.Use(middleware.AuthRequired())
@@ -293,7 +285,7 @@ func main() {
 	}
 
 	// Boot orchestrator: start all enabled plugins in background.
-	orch := orchestrator.NewOrchestrator(dockerRT, cfg, pluginHandler.Events)
+	orch := orchestrator.NewOrchestrator(dockerRT, cfg, pluginHandler.Events, clientTLS)
 	monitor.SetRestarter(orch)
 	monitor.SetBroadcaster(func(eventType string, detail map[string]interface{}) {
 		pluginHandler.BroadcastLifecycleEventPublic(eventType, detail)

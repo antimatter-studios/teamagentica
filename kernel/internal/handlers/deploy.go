@@ -71,7 +71,7 @@ func (h *PluginHandler) DeployCandidate(c *gin.Context) {
 	candidatePlugin := plugin
 	candidatePlugin.Image = candidateImage
 
-	containerID, err := h.runtime.StartCandidatePlugin(ctx, &candidatePlugin, env)
+	containerID, err := h.runtime.StartCandidatePlugin(ctx, &candidatePlugin, env, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start candidate: " + err.Error()})
 		return
@@ -226,10 +226,11 @@ func (h *PluginHandler) RollbackCandidate(c *gin.Context) {
 	env := map[string]string{
 		"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
 		"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+		"PLUGIN_ID":                plugin.ID,
 	}
 
 	plugin.Image = plugin.PreviousImage
-	containerID, err := h.runtime.StartPlugin(ctx, &plugin, env)
+	containerID, err := h.runtime.StartPlugin(ctx, &plugin, env, nil)
 	if err != nil {
 		h.db().Model(&plugin).Updates(map[string]interface{}{"container_id": "", "status": "error"})
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "rollback failed: " + err.Error()})

@@ -200,11 +200,33 @@ func ensureBindDir(mountType, hostSource, dataDir string) {
 	}
 }
 
+// selfHostedRegistry is the Docker-network address of the container registry plugin.
+// Container names are deterministic: "teamagentica-plugin-{id}".
+const selfHostedRegistry = "teamagentica-plugin-infra-container-registry:5000"
+
 // PullImage pulls a Docker image if it doesn't exist locally.
+// For teamagentica-* images, it tries the self-hosted container registry first,
+// falling back to the local daemon / Docker Hub.
 func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 	// Check if image exists locally first.
 	if _, _, err := d.client.ImageInspectWithRaw(ctx, imageRef); err == nil {
 		return nil
+	}
+
+	// For teamagentica images, try pulling from the self-hosted registry first.
+	if strings.HasPrefix(imageRef, "teamagentica-") {
+		registryRef := selfHostedRegistry + "/" + imageRef
+		reader, err := d.client.ImagePull(ctx, registryRef, image.PullOptions{})
+		if err == nil {
+			_, _ = io.Copy(io.Discard, reader)
+			reader.Close()
+			// Re-tag to the expected local name so ContainerCreate finds it.
+			if err := d.client.ImageTag(ctx, registryRef, imageRef); err == nil {
+				log.Printf("pulled %s from self-hosted registry", imageRef)
+				return nil
+			}
+		}
+		log.Printf("self-hosted registry pull failed for %s, falling back to default: %v", imageRef, err)
 	}
 
 	reader, err := d.client.ImagePull(ctx, imageRef, image.PullOptions{})
@@ -218,7 +240,8 @@ func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 }
 
 // StartPlugin creates and starts a container for the given plugin.
-func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, env map[string]string) (string, error) {
+// diskPaths maps disk names to host-side paths (resolved by the orchestrator via storage-disk API).
+func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, env map[string]string, diskPaths map[string]string) (string, error) {
 	containerName := "teamagentica-plugin-" + plugin.ID
 
 	// Remove any stale container with the same name (crashed, orphaned, etc.).
@@ -327,6 +350,26 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		log.Printf("mounting %d extra mount(s) for plugin %s", len(d.rtCfg.PluginMounts), plugin.ID)
 	}
 
+	// Shared disk mounts declared in plugin.yaml.
+	// Paths are resolved by the orchestrator via storage-disk's API — the kernel
+	// translates the storage-disk internal path to a host-side bind mount.
+	for _, sd := range plugin.GetSharedDisks() {
+		if sd.Name == "" || sd.Target == "" {
+			continue
+		}
+		hostPath, ok := diskPaths[sd.Name]
+		if !ok {
+			log.Printf("WARNING: no resolved path for shared disk %s in plugin %s — skipping mount", sd.Name, plugin.ID)
+			continue
+		}
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: hostPath,
+			Target: sd.Target,
+		})
+		log.Printf("mounting shared disk %s into plugin %s at %s (host=%s)", sd.Name, plugin.ID, sd.Target, hostPath)
+	}
+
 	// Plugins with build:docker capability get access to the Docker socket.
 	if hasCapabilityPrefix(plugin.GetCapabilities(), "build:docker") {
 		mounts = append(mounts, mount.Mount{
@@ -363,14 +406,14 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 // StartCandidatePlugin starts a candidate container alongside the primary.
 // Uses the same logic as StartPlugin but with a "-candidate" container name suffix
 // so both containers can coexist on the same network.
-func (d *DockerRuntime) StartCandidatePlugin(ctx context.Context, plugin *models.Plugin, env map[string]string) (string, error) {
+func (d *DockerRuntime) StartCandidatePlugin(ctx context.Context, plugin *models.Plugin, env map[string]string, diskPaths map[string]string) (string, error) {
 	// Temporarily override the ID to get a different container name,
 	// then restore it. The container name becomes "teamagentica-plugin-{id}-candidate".
 	origID := plugin.ID
 	plugin.ID = origID + "-candidate"
 	defer func() { plugin.ID = origID }()
 
-	return d.StartPlugin(ctx, plugin, env)
+	return d.StartPlugin(ctx, plugin, env, diskPaths)
 }
 
 // StopPlugin stops and removes a container but keeps its data volume.
@@ -397,7 +440,7 @@ func (d *DockerRuntime) StopPlugin(ctx context.Context, containerID string) erro
 // StartManagedContainer creates and starts a container on behalf of a plugin.
 // Unlike StartPlugin, managed containers have no mTLS or plugin SDK env vars —
 // just volume mounts and docker-proxy labels for subdomain routing.
-func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string) (string, error) {
+func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string, diskMounts []ResolvedDiskMount) (string, error) {
 	containerName := "teamagentica-mc-" + mc.ID
 
 	// Pull image if not available locally.
@@ -443,32 +486,21 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		cfg.User = mc.DockerUser
 	}
 
-	// Template vars for managed container config resolution.
-	vars := d.templateVars("", "")
-
-	// Primary disk mount: storage-disk's disks/{name} → /workspace.
+	// Disk mounts: pre-resolved host paths from storage-disk API.
 	var mounts []mount.Mount
-	if mc.DiskName != "" {
-		vars["DISK_NAME"] = mc.DiskName
-		src := runtimecfg.Resolve(d.rtCfg.ManagedDiskMount.Source, vars)
-		sub := runtimecfg.Resolve(d.rtCfg.ManagedDiskMount.Subpath, vars)
-		ensureBindDir(d.rtCfg.ManagedDiskMount.Type, src, d.dataDir)
-		mounts = append(mounts, resolveMount(d.rtCfg.ManagedDiskMount, src, "/workspace", sub))
+	for _, dm := range diskMounts {
+		m := mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   dm.HostPath,
+			Target:   dm.Target,
+			ReadOnly: dm.ReadOnly,
+		}
+		mounts = append(mounts, m)
+		log.Printf("managed container %s: mounting disk %s at %s", mc.ID, dm.HostPath, dm.Target)
 	}
 
-	// Extra mounts: additional disks requested by the plugin.
-	for _, em := range mc.GetExtraMounts() {
-		if em.DiskName == "" || em.Target == "" {
-			continue
-		}
-		vars["DISK_NAME"] = em.DiskName
-		src := runtimecfg.Resolve(d.rtCfg.ManagedExtraMount.Source, vars)
-		sub := runtimecfg.Resolve(d.rtCfg.ManagedExtraMount.Subpath, vars)
-		ensureBindDir(d.rtCfg.ManagedExtraMount.Type, src, d.dataDir)
-		m := resolveMount(d.rtCfg.ManagedExtraMount, src, em.Target, sub)
-		m.ReadOnly = em.ReadOnly
-		mounts = append(mounts, m)
-	}
+	// Template vars for plugin source resolution.
+	vars := d.templateVars("", "")
 
 	// Plugin source mounting for managed containers.
 	if mc.PluginSource != "" && d.rtCfg.ManagedPluginSource.Enabled {
@@ -507,7 +539,7 @@ func (d *DockerRuntime) StartManagedContainer(ctx context.Context, mc *models.Ma
 		return "", fmt.Errorf("start managed container %s: %w", containerName, err)
 	}
 
-	log.Printf("started managed container %s (image=%s, disk=%s, subdomain=%s, plugin_source=%s)", mc.ID, mc.Image, mc.DiskName, mc.Subdomain, mc.PluginSource)
+	log.Printf("started managed container %s (image=%s, disks=%d, subdomain=%s, plugin_source=%s)", mc.ID, mc.Image, len(diskMounts), mc.Subdomain, mc.PluginSource)
 	return resp.ID, nil
 }
 
