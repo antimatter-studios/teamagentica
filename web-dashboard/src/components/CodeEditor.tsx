@@ -181,9 +181,18 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
       setStartingIds((prev) => new Set(prev).add(ws.id));
       try {
         await apiClient.workspaces.startWorkspace(ws.id);
+        // Poll until the workspace is running (container may need a moment to boot).
+        for (let i = 0; i < 30; i++) {
+          const list = await apiClient.workspaces.list();
+          const updated = list.find((w: Workspace) => w.id === ws.id);
+          if (updated?.status === "running") break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
         await fetchAll();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to start workspace");
+        setStartingIds((prev) => { const next = new Set(prev); next.delete(ws.id); return next; });
+        return;
       } finally {
         setStartingIds((prev) => {
           const next = new Set(prev);
@@ -319,12 +328,6 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
             </button>
           )}
           <div className="ws-tab-spacer" />
-          <div
-            className={`ws-tab${showDisksPanel ? " ws-tab-active" : ""}`}
-            onClick={() => setShowDisksPanel(!showDisksPanel)}
-          >
-            <span className="ws-tab-label">Disks</span>
-          </div>
         </div>
 
         {error && activeTab === LIST_TAB && (
@@ -342,6 +345,12 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
               onClick={() => setShowCreate(!showCreate)}
             >
               + New Workspace
+            </button>
+            <button
+              className="ws-btn ws-btn-create"
+              onClick={() => setShowDisksPanel(!showDisksPanel)}
+            >
+              Shared Disk Management
             </button>
           </div>
 
