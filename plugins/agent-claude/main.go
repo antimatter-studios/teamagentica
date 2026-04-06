@@ -104,7 +104,7 @@ func main() {
 	if backend == "cli" {
 		log.Println("[cli] initialising Claude CLI backend")
 		workdir := dataPath + "/claude-workspace"
-		claudeDir := dataPath + "/claude-home"
+		claudeDir := configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude")
 		dirOK := true
 		for _, dir := range []string{workdir, claudeDir} {
 			if err := os.MkdirAll(dir, 0755); err != nil {
@@ -166,26 +166,27 @@ func main() {
 		h.ApplyConfig(p.Config)
 	})
 
-	// MCP server integration: CLI subprocess connects to the plugin's own
-	// /mcp-proxy route on localhost, which forwards to infra-mcp-server via SDK mTLS.
+	// MCP server integration: CLI subprocess connects directly to infra-mcp-server
+	// via mTLS. Direct connection allows the mcp-go server to push tools/list_changed
+	// notifications to Claude CLI when tools are added or removed.
 	//
 	// Two modes — enable or disable — each leaves the system fully consistent:
 	//   Enable:  peer cache set + mcpPluginID set + config file written
 	//   Disable: peer cache cleared + mcpPluginID cleared + config file removed
 	if backend == "cli" {
-		claudeDir := dataPath + "/claude-home"
-		proxyURL := fmt.Sprintf("https://localhost:%d/mcp-proxy", defaultPort)
+		claudeDir := configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude")
 		const mcpPlugin = "infra-mcp-server"
 
 		enableMCP := func(host string, port int) {
 			sdkClient.SetPeer(mcpPlugin, host, port)
 			h.SetMCPPluginID(mcpPlugin)
-			if err := claudecli.WriteMCPConfig(claudeDir, proxyURL); err != nil {
+			directURL := fmt.Sprintf("https://%s:%d/mcp", host, port)
+			if err := claudecli.WriteMCPConfig(claudeDir, directURL); err != nil {
 				log.Printf("[mcp] enable: failed to write config: %v", err)
 				return
 			}
 			h.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
-			log.Printf("[mcp] enabled: peer=%s:%d proxy=%s", host, port, proxyURL)
+			log.Printf("[mcp] enabled: direct=%s", directURL)
 		}
 
 		disableMCP := func() {
@@ -238,6 +239,13 @@ func main() {
 		sdkClient.Events().On("mcp_server:disabled", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 			disableMCP()
 		}))
+
+		// When MCP tools change, cycle the CLI process pool so new processes
+		// pick up the updated tool list on their next initialize handshake.
+		events.OnMCPToolsChanged(sdkClient, func() {
+			log.Printf("[mcp] tools changed — cycling CLI process pool")
+			h.CyclePool()
+		})
 	}
 
 	h.SetSDK(sdkClient)

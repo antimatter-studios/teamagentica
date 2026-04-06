@@ -97,6 +97,16 @@ func (c *Client) Shutdown() {
 	}
 }
 
+// CyclePool kills all pooled processes so the next request picks up
+// fresh config (e.g. updated MCP tools). No-op if pool not yet created.
+func (c *Client) CyclePool() {
+	c.poolMu.Lock()
+	defer c.poolMu.Unlock()
+	if c.pool != nil {
+		c.pool.Cycle()
+	}
+}
+
 // ensurePool lazily creates the process pool on first use.
 func (c *Client) ensurePool(cfg processConfig) *Pool {
 	c.poolMu.Lock()

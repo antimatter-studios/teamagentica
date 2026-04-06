@@ -195,6 +195,38 @@ func (p *Pool) Shutdown() {
 	log.Printf("[pool] shutdown complete")
 }
 
+// Cycle kills all hot and active processes so that the next Acquire
+// cold-starts with fresh config (e.g. updated MCP tools). Session
+// mappings are preserved so conversations resume with full context.
+func (p *Pool) Cycle() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return
+	}
+
+	// Kill all active processes.
+	killed := 0
+	for id, entry := range p.active {
+		entry.proc.kill()
+		delete(p.active, id)
+		killed++
+	}
+
+	// Kill all hot processes.
+	for _, proc := range p.hot {
+		proc.kill()
+		killed++
+	}
+	p.hot = nil
+
+	log.Printf("[pool] cycle complete: killed %d processes, %d sessions preserved", killed, len(p.sessions))
+
+	// Re-warm the hot pool with fresh processes.
+	go p.warmUp()
+}
+
 // Stats returns current pool statistics for debugging.
 func (p *Pool) Stats() (active, hot, sessions int) {
 	p.mu.Lock()

@@ -2,12 +2,16 @@ id: agent-claude
 name: "Claude Agent"
 description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
 group: agents
-version: "1.0.71"
+version: "1.0.75"
 image: "teamagentica-agent-claude:latest"
 author: teamagentica
 tags: [chat, ai, agent, claude, anthropic]
 capabilities: ["agent:openai", "agent:chat", "agent:completion"]
-dependencies: ["cost:tracking"]
+dependencies: ["cost:tracking", "storage:disk"]
+shared_disks:
+  - name: agent-claude
+    type: shared
+    target: /home/coder/.claude
 config_schema:
   CLAUDE_BACKEND:
     type: select

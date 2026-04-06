@@ -67,6 +67,13 @@ func (h *Handler) SetClaudeCLI(client *claudecli.Client) {
 	h.claudeCLI = client
 }
 
+// CyclePool cycles the CLI process pool so new processes pick up fresh config.
+func (h *Handler) CyclePool() {
+	if h.claudeCLI != nil {
+		h.claudeCLI.CyclePool()
+	}
+}
+
 // SetMCPConfig sets the path to the MCP config file.
 func (h *Handler) SetMCPConfig(path string) {
 	h.mu.Lock()
