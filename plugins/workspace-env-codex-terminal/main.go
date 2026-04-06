@@ -86,13 +86,8 @@ func main() {
 			Icon:        ws["icon"].(string),
 			EnvDefaults: ws["env_defaults"].(map[string]string),
 		}
-		if mounts, ok := ws["shared_mounts"].([]map[string]interface{}); ok {
-			for _, m := range mounts {
-				payload.SharedMounts = append(payload.SharedMounts, events.WorkspaceExtraMount{
-					DiskName: m["disk_name"].(string),
-					Target:   m["target"].(string),
-				})
-			}
+		if disks, ok := ws["disks"].([]events.WorkspaceDiskSpec); ok {
+			payload.Disks = disks
 		}
 		b, _ := json.Marshal(payload)
 		sdkClient.Events().Publish("workspace:environment:register", string(b))
@@ -134,8 +129,9 @@ func getWorkspaceSchema(approvalMode string) map[string]interface{} {
 		"image":        "teamagentica-devbox:latest",
 		"port":         7681,
 		"docker_user":  "",
-		"shared_mounts": []map[string]interface{}{
-			{"disk_name": "codex-shared", "target": "/home/coder/.codex"},
+		"disks": []events.WorkspaceDiskSpec{
+			{Type: "workspace", Target: "/workspace"},
+			{Type: "shared", Name: "codex-shared", Target: "/home/coder/.codex"},
 		},
 		"env_defaults": map[string]string{
 			"DEVBOX_APP":          "codex",

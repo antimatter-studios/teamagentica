@@ -85,9 +85,10 @@ func main() {
 			Port:        8080,
 			Icon:        `<svg viewBox="0 0 24 24" fill="none"><path d="M17.5 0L9.5 8 5 4.5 2 6v12l3 1.5L9.5 16l8 8 4.5-2V2L17.5 0zM5 14.5v-5l3 2.5-3 2.5zm9.5 2L9.5 12l5-4.5v9z" fill="#007ACC"/></svg>`,
 			DockerUser:  "coder",
-			SharedMounts: []events.WorkspaceExtraMount{
-				{DiskName: "code-server-shared/extensions", Target: "/mnt/shared-extensions"},
-				{DiskName: "claude-shared", Target: "/home/coder/.claude"},
+			Disks: []events.WorkspaceDiskSpec{
+				{Type: "workspace", Target: "/workspace"},
+				{Type: "shared", Name: "code-server-shared/extensions", Target: "/mnt/shared-extensions"},
+				{Type: "shared", Name: "claude-shared", Target: "/home/coder/.claude"},
 			},
 			EnvDefaults: map[string]string{
 				"DEFAULT_WORKSPACE": "/workspace",

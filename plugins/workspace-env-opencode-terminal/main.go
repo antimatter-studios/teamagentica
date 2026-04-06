@@ -84,8 +84,9 @@ func main() {
 			Image:       "teamagentica-devbox:latest",
 			Port:        7681,
 			Icon:        `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" fill="#6366F1"/><path d="M9 8l-4 4 4 4M15 8l4 4-4 4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-			SharedMounts: []events.WorkspaceExtraMount{
-				{DiskName: "opencode-shared", Target: "/home/coder/.opencode"},
+			Disks: []events.WorkspaceDiskSpec{
+				{Type: "workspace", Target: "/workspace"},
+				{Type: "shared", Name: "opencode-shared", Target: "/home/coder/.opencode"},
 			},
 			EnvDefaults: map[string]string{
 				"DEVBOX_APP":        "opencode",
