@@ -360,8 +360,13 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	}
 
 	var req struct {
-		Name      *string `json:"name"`
-		Subdomain *string `json:"subdomain"`
+		Name       *string                `json:"name"`
+		Subdomain  *string                `json:"subdomain"`
+		Image      *string                `json:"image"`
+		Env        map[string]string      `json:"env"`
+		Cmd        []string               `json:"cmd"`
+		DiskMounts []models.DiskMount     `json:"disk_mounts"`
+		DockerUser *string                `json:"docker_user"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -382,6 +387,25 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 			return
 		}
 		updates["subdomain"] = *req.Subdomain
+	}
+
+	if req.Image != nil {
+		updates["image"] = *req.Image
+	}
+	if req.Env != nil {
+		mc.SetEnv(req.Env)
+		updates["env"] = mc.Env
+	}
+	if req.Cmd != nil {
+		mc.SetCmd(req.Cmd)
+		updates["cmd"] = mc.Cmd
+	}
+	if req.DiskMounts != nil {
+		mc.SetDiskMounts(req.DiskMounts)
+		updates["disk_mounts"] = mc.DiskMounts
+	}
+	if req.DockerUser != nil {
+		updates["docker_user"] = *req.DockerUser
 	}
 
 	if len(updates) == 0 {

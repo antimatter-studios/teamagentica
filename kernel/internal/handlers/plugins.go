@@ -1280,8 +1280,12 @@ func (h *PluginHandler) resolveDiskPaths(ctx context.Context, plugin *models.Plu
 		return nil
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d", storageDisk.Host, storageDisk.HTTPPort)
-	client := &http.Client{Timeout: 10 * time.Second}
+	scheme := "http"
+	if h.clientTLS != nil {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s:%d", scheme, storageDisk.Host, storageDisk.HTTPPort)
+	client := &http.Client{Timeout: 10 * time.Second, Transport: h.transport}
 	result := map[string]string{}
 
 	for _, sd := range disks {
