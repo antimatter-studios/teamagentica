@@ -43,8 +43,13 @@ type CreateManagedContainerRequest struct {
 
 // UpdateManagedContainerRequest is the body for patching a managed container.
 type UpdateManagedContainerRequest struct {
-	Name      *string `json:"name,omitempty"`
-	Subdomain *string `json:"subdomain,omitempty"`
+	Name       *string           `json:"name,omitempty"`
+	Subdomain  *string           `json:"subdomain,omitempty"`
+	Image      *string           `json:"image,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Cmd        []string          `json:"cmd,omitempty"`
+	DiskMounts []DiskMount       `json:"disk_mounts,omitempty"`
+	DockerUser *string           `json:"docker_user,omitempty"`
 }
 
 // CreateManagedContainer asks the kernel to launch a managed container.
