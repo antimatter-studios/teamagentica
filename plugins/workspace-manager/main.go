@@ -106,6 +106,12 @@ func main() {
 	sdkClient.Events().Publish("workspace:manager:ready", `{"manager_plugin_id":"workspace-manager"}`)
 	log.Println("emitted workspace:manager:ready")
 
+	// Reconcile sidecar aliases once the alias registry is available —
+	// ensures aliases exist for workspaces with attached agents after kernel restarts.
+	sdkClient.OnPluginAvailable("alias:manage", func(_ pluginsdk.PluginInfo) {
+		h.ReconcileSidecars(context.Background())
+	})
+
 	// Push tools to MCP server when it becomes available.
 	sdkClient.OnPluginAvailable("infra:mcp-server", func(p pluginsdk.PluginInfo) {
 		if err := sdkClient.RegisterToolsWithMCP(p.ID, h.ToolDefs()); err != nil {

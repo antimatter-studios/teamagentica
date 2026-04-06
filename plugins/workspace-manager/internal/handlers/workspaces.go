@@ -560,8 +560,42 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 		env[k] = v
 	}
 
+	// Build disk mounts from the env schema. For each schema disk, reuse the
+	// existing mount if present, otherwise resolve via storage-disk API.
+	// This ensures new disks added to the environment spec are picked up on restart.
+	var diskMounts []pluginsdk.DiskMount
+	for _, spec := range ws.Disks {
+		// Check if this disk is already mounted (match by target path).
+		found := false
+		for _, dm := range current.DiskMounts {
+			if dm.Target == spec.Target {
+				diskMounts = append(diskMounts, dm)
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		// New schema disk not in current mounts — resolve it.
+		if spec.Type == "workspace" {
+			continue // workspace disks are never added on rebuild
+		}
+		diskID, _, err := h.ensureDisk(ctx, spec.Name, spec.Type)
+		if err != nil {
+			log.Printf("rebuildWorkspace: failed to resolve new disk %s: %v", spec.Name, err)
+			continue
+		}
+		diskMounts = append(diskMounts, pluginsdk.DiskMount{
+			DiskID:   diskID,
+			DiskType: spec.Type,
+			Target:   spec.Target,
+			ReadOnly: spec.ReadOnly,
+		})
+		log.Printf("rebuildWorkspace: added new schema disk %s → %s", spec.Name, spec.Target)
+	}
+
 	// Load per-workspace options: env overrides + extra shared disks.
-	diskMounts := current.DiskMounts
 	if opts, err := h.db.GetOptions(id); err == nil {
 		if opts.EnvOverrides != "" {
 			var overrides map[string]string
@@ -600,53 +634,44 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 		cmd = append(append([]string{}, cmd...), ws.ExtraCmdArgs...)
 	}
 
-	// Stop and delete old container.
+	// Stop existing Docker container.
 	h.sdk.StopManagedContainer(id)
-	h.sdk.DeleteManagedContainer(id)
 
-	// Recreate with same subdomain + env schema disks + extra shared disks.
-	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
-		Name:       current.Name,
-		Image:      ws.Image,
-		Port:       ws.Port,
-		Subdomain:  current.Subdomain,
-		DiskMounts: diskMounts,
+	// Update MC record in-place with current env schema + options.
+	// The MC ID stays stable — only the Docker container is recreated.
+	_, err = h.sdk.UpdateManagedContainer(id, pluginsdk.UpdateManagedContainerRequest{
+		Image:      &ws.Image,
 		Env:        env,
 		Cmd:        cmd,
-		DockerUser: ws.DockerUser,
+		DiskMounts: diskMounts,
+		DockerUser: &ws.DockerUser,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to recreate workspace: %w", err)
+		return nil, fmt.Errorf("failed to update workspace config: %w", err)
 	}
 
-	// Update workspace record with new container ID.
-	h.db.Delete(id)
-	h.db.Put(&storage.WorkspaceRecord{
-		ContainerID:   mc.ID,
-		EnvironmentID: rec.EnvironmentID,
-	})
+	// Start a new Docker container with updated config.
+	mc, err := h.sdk.StartManagedContainer(id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start workspace: %w", err)
+	}
 
-	// Migrate options to new container ID and re-attach sidecar if needed.
+	// Re-attach sidecar if workspace has an agent configured.
 	if opts, err := h.db.GetOptions(id); err == nil {
-		opts.ContainerID = mc.ID
-
-		// Re-attach agent sidecar if workspace has an agent configured.
 		if opts.AgentPlugin != "" {
 			// Detach old sidecar first (cleans up stale alias/persona/plugin).
 			if opts.SidecarID != "" {
 				h.detachSidecar(ctx, current.Subdomain, opts.SidecarID)
 				opts.SidecarID = ""
 			}
-			sidecarID, err := h.attachSidecar(ctx, mc.ID, current.Subdomain, opts.AgentPlugin, opts.AgentModel, diskMounts)
+			sidecarID, err := h.attachSidecar(ctx, id, current.Subdomain, opts.AgentPlugin, opts.AgentModel, diskMounts)
 			if err != nil {
 				log.Printf("rebuildWorkspace: failed to re-attach sidecar: %v", err)
 			} else {
 				opts.SidecarID = sidecarID
 			}
+			h.db.PutOptions(opts)
 		}
-
-		h.db.PutOptions(opts)
-		h.db.DeleteOptions(id)
 	}
 
 	result := &workspaceInfo{

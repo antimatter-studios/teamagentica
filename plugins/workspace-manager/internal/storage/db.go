@@ -85,6 +85,20 @@ func (d *DB) GetByContainerID(containerID string) (*WorkspaceRecord, error) {
 	return &rec, nil
 }
 
+// ListAllRecords returns all active (non-deleted) workspace records.
+func (d *DB) ListAllRecords() ([]WorkspaceRecord, error) {
+	var records []WorkspaceRecord
+	if err := d.db.Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// UpdateContainerID atomically changes a workspace record's primary key.
+func (d *DB) UpdateContainerID(oldID, newID string) error {
+	return d.db.Exec("UPDATE workspace_records SET container_id = ? WHERE container_id = ? AND deleted_at IS NULL", newID, oldID).Error
+}
+
 // Delete removes a workspace record by container ID.
 func (d *DB) Delete(containerID string) error {
 	return d.db.Delete(&WorkspaceRecord{}, "container_id = ?", containerID).Error
@@ -135,6 +149,15 @@ func (d *DB) GetOptions(containerID string) (*WorkspaceOptions, error) {
 // PutOptions creates or updates workspace options.
 func (d *DB) PutOptions(opts *WorkspaceOptions) error {
 	return d.db.Save(opts).Error
+}
+
+// ListAllOptions returns all workspace options records.
+func (d *DB) ListAllOptions() ([]WorkspaceOptions, error) {
+	var opts []WorkspaceOptions
+	if err := d.db.Find(&opts).Error; err != nil {
+		return nil, err
+	}
+	return opts, nil
 }
 
 // DeleteOptions removes workspace options by container ID.

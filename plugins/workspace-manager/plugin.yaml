@@ -2,7 +2,7 @@ id: workspace-manager
 name: "Workspace Manager"
 description: "Orchestrates workspace environments — discovers workspace plugins, manages container lifecycle, and creates isolated disks"
 group: workspace
-version: "1.0.46"
+version: "1.0.60"
 image: "teamagentica-workspace-manager:latest"
 author: teamagentica
 tags: [infrastructure]
