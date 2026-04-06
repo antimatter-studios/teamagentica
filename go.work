@@ -2,6 +2,7 @@ go 1.26.0
 
 use (
 	./kernel
+	./pkg/claudecli
 	./pkg/pluginsdk
 	./plugins/agent-claude
 	./plugins/agent-gemini
@@ -11,30 +12,29 @@ use (
 	./plugins/agent-openai
 	./plugins/agent-openrouter
 	./plugins/agent-requesty
-	./plugins/system-teamagentica-plugin-provider
 	./plugins/infra-agent-memory-gateway
 	./plugins/infra-agent-memory-lcm
 	./plugins/infra-agent-memory-mem0
 	./plugins/infra-agent-persona
-	./plugins/infra-alias-registry
 	./plugins/infra-agent-relay
+	./plugins/infra-alias-registry
 	./plugins/infra-builder
+	./plugins/infra-chat-command-server
 	./plugins/infra-container-registry
 	./plugins/infra-cost-tracking
-	./plugins/infra-task-scheduler
-	./plugins/infra-redis
-	./plugins/infra-chat-command-server
 	./plugins/infra-mcp-server
-	./plugins/workspace-manager
+	./plugins/infra-redis
+	./plugins/infra-task-scheduler
 	./plugins/messaging-chat
 	./plugins/messaging-discord
 	./plugins/messaging-telegram
 	./plugins/messaging-whatsapp
 	./plugins/network-ngrok-ingress
 	./plugins/network-webhook
-	./plugins/storage-sss3
-	./plugins/system-user-manager
 	./plugins/storage-disk
+	./plugins/storage-sss3
+	./plugins/system-teamagentica-plugin-provider
+	./plugins/system-user-manager
 	./plugins/tool-nanobanana
 	./plugins/tool-seedance
 	./plugins/tool-stability
@@ -44,5 +44,6 @@ use (
 	./plugins/workspace-env-codex-terminal
 	./plugins/workspace-env-opencode-terminal
 	./plugins/workspace-env-vscode-server
+	./plugins/workspace-manager
 	./tacli
 )

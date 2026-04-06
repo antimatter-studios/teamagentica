@@ -254,7 +254,7 @@ func (p *process) sendMessage(prompt string, streamCb func(StreamEvent)) (*ChatR
 			if event.IsError {
 				errMsg := fmt.Errorf("claude CLI error: %s", event.Result)
 				if streamCb != nil {
-					streamCb(StreamEvent{Err: errMsg})
+					streamCb(StreamEvent{Err: errMsg, ErrMsg: errMsg.Error()})
 				}
 				return nil, errMsg
 			}

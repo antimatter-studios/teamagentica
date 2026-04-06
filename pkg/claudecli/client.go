@@ -264,7 +264,8 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 
 		proc, err := pool.Acquire(convKey)
 		if err != nil {
-			ch <- StreamEvent{Err: fmt.Errorf("pool acquire: %w", err)}
+			errMsg := fmt.Errorf("pool acquire: %w", err)
+			ch <- StreamEvent{Err: errMsg, ErrMsg: errMsg.Error()}
 			return
 		}
 		acquireMs := time.Since(start).Milliseconds()
@@ -285,7 +286,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 			if !proc.alive {
 				pool.MarkDead(convKey)
 			}
-			ch <- StreamEvent{Err: err}
+			ch <- StreamEvent{Err: err, ErrMsg: err.Error()}
 			return
 		}
 
@@ -312,22 +313,24 @@ func truncate(s string, n int) string {
 }
 
 // StreamEvent represents a single event from the Claude CLI stream.
+// JSON tags enable serialization over WebSocket for remote execution.
 type StreamEvent struct {
-	Text      string
-	ToolName  string // non-empty when Claude starts using a tool (e.g. "Bash", "Edit", "Read")
-	ToolDone  string // non-empty when tool result arrives (tool name)
-	Usage     *ChatResponseUsage
-	CostUSD   float64
-	NumTurns  int
-	SessionID string
-	Model     string
-	Done      bool
-	Err       error
+	Text      string             `json:"text,omitempty"`
+	ToolName  string             `json:"tool_name,omitempty"`  // non-empty when Claude starts using a tool
+	ToolDone  string             `json:"tool_done,omitempty"`  // non-empty when tool result arrives
+	Usage     *ChatResponseUsage `json:"usage,omitempty"`
+	CostUSD   float64            `json:"cost_usd,omitempty"`
+	NumTurns  int                `json:"num_turns,omitempty"`
+	SessionID string             `json:"session_id,omitempty"`
+	Model     string             `json:"model,omitempty"`
+	Done      bool               `json:"done,omitempty"`
+	ErrMsg    string             `json:"error,omitempty"` // serializable error string for remote transport
+	Err       error              `json:"-"`               // local use only, not serialized
 }
 
 // ChatResponseUsage holds token usage for streaming responses.
 type ChatResponseUsage struct {
-	InputTokens  int
-	OutputTokens int
-	CachedTokens int
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	CachedTokens int `json:"cached_tokens"`
 }
