@@ -113,36 +113,6 @@ func (d *DB) DeleteUser(id uint) error {
 	return nil
 }
 
-// --- ServiceToken operations ---
-
-// CreateServiceToken inserts a new service token record.
-func (d *DB) CreateServiceToken(st *ServiceToken) error {
-	var existing ServiceToken
-	if d.db.Where("name = ?", st.Name).First(&existing).Error == nil {
-		return ErrAlreadyExists
-	}
-	return d.db.Create(st).Error
-}
-
-// ListServiceTokens returns all service tokens.
-func (d *DB) ListServiceTokens() ([]ServiceToken, error) {
-	var tokens []ServiceToken
-	err := d.db.Order("created_at DESC").Find(&tokens).Error
-	return tokens, err
-}
-
-// RevokeServiceToken marks a token as revoked.
-func (d *DB) RevokeServiceToken(id uint) error {
-	var token ServiceToken
-	if err := d.db.First(&token, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrNotFound
-		}
-		return err
-	}
-	return d.db.Model(&token).Update("revoked", true).Error
-}
-
 // --- RefreshToken operations ---
 
 // CreateRefreshToken inserts a new refresh token record.

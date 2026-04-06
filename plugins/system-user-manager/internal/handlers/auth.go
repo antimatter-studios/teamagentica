@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -205,95 +204,6 @@ func (h *Handler) CreateSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// --- Service Token handlers ---
-
-type createServiceTokenRequest struct {
-	Name          string   `json:"name" binding:"required"`
-	Capabilities  []string `json:"capabilities" binding:"required"`
-	ExpiresInDays int      `json:"expires_in_days"`
-}
-
-type serviceTokenResponse struct {
-	Token     string `json:"token"`
-	Name      string `json:"name"`
-	ExpiresAt string `json:"expires_at"`
-}
-
-var AllowedServiceCapabilities = map[string]bool{
-	"plugins:search": true,
-	"plugins:manage": true,
-	"users:read":     true,
-	"system:admin":   true,
-}
-
-// CreateServiceToken handles POST /auth/service-token.
-func (h *Handler) CreateServiceToken(c *gin.Context) {
-	var req createServiceTokenRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	expiresInDays := req.ExpiresInDays
-	if expiresInDays <= 0 {
-		expiresInDays = 365
-	}
-
-	for _, cap := range req.Capabilities {
-		if !AllowedServiceCapabilities[cap] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid capability: " + cap})
-			return
-		}
-	}
-
-	expiry := time.Duration(expiresInDays) * 24 * time.Hour
-	token, err := auth.GenerateServiceToken(req.Name, req.Capabilities, expiry)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
-		return
-	}
-
-	hashBytes := sha256.Sum256([]byte(token))
-	tokenHash := fmt.Sprintf("%x", hashBytes)
-
-	capsJSON, _ := json.Marshal(req.Capabilities)
-
-	userID := uint(0)
-	if uid := c.GetHeader("X-User-ID"); uid != "" {
-		fmt.Sscanf(uid, "%d", &userID)
-	}
-
-	expiresAt := time.Now().Add(expiry)
-	st := storage.ServiceToken{
-		Name:         req.Name,
-		TokenHash:    tokenHash,
-		Capabilities: string(capsJSON),
-		IssuedBy:     userID,
-		ExpiresAt:    expiresAt,
-	}
-
-	if err := h.db.CreateServiceToken(&st); err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "service token with this name already exists"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, serviceTokenResponse{
-		Token:     token,
-		Name:      req.Name,
-		ExpiresAt: expiresAt.Format(time.RFC3339),
-	})
-}
-
-// ListServiceTokens handles GET /auth/service-tokens.
-func (h *Handler) ListServiceTokens(c *gin.Context) {
-	tokens, err := h.db.ListServiceTokens()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch service tokens"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"tokens": tokens})
-}
-
 // RefreshAccessToken handles POST /auth/refresh.
 // Validates the refresh token and issues a new access token (+ new refresh token).
 func (h *Handler) RefreshAccessToken(c *gin.Context) {
@@ -350,18 +260,3 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// RevokeServiceToken handles DELETE /auth/service-token/:id.
-func (h *Handler) RevokeServiceToken(c *gin.Context) {
-	var id uint
-	if _, err := fmt.Sscanf(c.Param("id"), "%d", &id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token id"})
-		return
-	}
-
-	if err := h.db.RevokeServiceToken(id); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "service token not found"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "service token revoked"})
-}

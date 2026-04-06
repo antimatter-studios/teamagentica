@@ -1,6 +1,6 @@
 id: system-user-manager
 name: "User Manager"
-description: "User authentication, account management, service tokens, and audit logging"
+description: "User authentication, account management, and audit logging"
 group: infrastructure
 version: "0.1.18"
 image: "teamagentica-system-user-manager:latest"

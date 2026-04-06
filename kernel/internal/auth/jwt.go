@@ -57,23 +57,6 @@ func GenerateToken(user *models.User) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
-// GenerateServiceToken creates a signed JWT for a service account.
-func GenerateServiceToken(name string, capabilities []string, expiresIn time.Duration) (string, error) {
-	claims := Claims{
-		UserID:       0,
-		Email:        "service:" + name,
-		Role:         "service",
-		Capabilities: capabilities,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiresIn)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
-}
-
 // ValidateToken parses and validates the token string, returning the claims.
 func ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
