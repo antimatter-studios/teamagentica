@@ -45,7 +45,7 @@ export default function App() {
   const events = useEventStore((s) => s.auditEvents);
   const connectEvents = useEventStore((s) => s.connect);
   const disconnectEvents = useEventStore((s) => s.disconnect);
-  const inFlightCount = useChatStore((s) => Object.keys(s.inFlightTasks).length);
+  const inFlightCount = useChatStore((s) => Object.values(s.inFlightTasks).reduce((sum, tasks) => sum + tasks.length, 0));
   const totalUnread = useChatStore((s) => s.conversations.reduce((sum, c) => sum + (c.unread_count ?? 0), 0));
 
   const checkCapabilities = useCallback(() => {

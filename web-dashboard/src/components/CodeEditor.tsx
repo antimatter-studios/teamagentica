@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../api/client";
 import { apiClient } from "../api/client";
 import type { Environment, Workspace, Disk } from "@teamagentica/api-client";
+import WorkspaceSettings from "./WorkspaceSettings";
 
 const workspaceIframeSrc = (id: string) => `${API_BASE}/ws/${id}/`;
 const workspacePortProxyUrl = (id: string, port: number) => `${API_BASE}/ws/${id}/proxy/${port}/`;
@@ -39,6 +40,11 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
   const [renameValue, setRenameValue] = useState("");
   const [launchDisk, setLaunchDisk] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
+  const [settingsId, setSettingsId] = useState<string | null>(null);
+  const [showDisksPanel, setShowDisksPanel] = useState(false);
+  const [newDiskName, setNewDiskName] = useState("");
+  const [creatingDisk, setCreatingDisk] = useState(false);
+  const [confirmDeleteDisk, setConfirmDeleteDisk] = useState<string | null>(null);
 
   const [newName, setNewName] = useState("");
   const [newEnvId, setNewEnvId] = useState("");
@@ -131,17 +137,43 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
   };
 
   const handleDelete = async (id: string) => {
+    setDeletingIds((prev) => new Set(prev).add(id));
+    setConfirmDelete(null);
     try {
       await apiClient.workspaces.deleteWorkspace(id);
       closeTab(id);
-      setConfirmDelete(null);
       await fetchAll();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to delete workspace");
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
   const [startingIds, setStartingIds] = useState<Set<string>>(new Set());
+  const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+
+  const handleStop = async (id: string) => {
+    setStoppingIds((prev) => new Set(prev).add(id));
+    try {
+      await apiClient.workspaces.stopWorkspace(id);
+      closeTab(id);
+      await fetchAll();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to stop workspace");
+    } finally {
+      setStoppingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
 
   const openWorkspace = async (ws: Workspace) => {
     // Lazy-start: if the workspace is stopped, start it first.
@@ -220,7 +252,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
 
   // Build disk lookup by name for workspace enrichment.
   const diskMap = new Map(disks.map((v: Disk) => [v.name, v]));
-  const orphanDisks = disks.filter((v: Disk) => !v.has_workspace && !v.is_empty);
+  const orphanDisks = disks.filter((v: Disk) => !v.has_workspace && !v.is_empty && v.type !== "shared");
   const wsMap = new Map(workspaces.map((ws) => [ws.id, ws]));
 
   // Find environment name from workspace.
@@ -286,6 +318,13 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
               +
             </button>
           )}
+          <div className="ws-tab-spacer" />
+          <div
+            className={`ws-tab${showDisksPanel ? " ws-tab-active" : ""}`}
+            onClick={() => setShowDisksPanel(!showDisksPanel)}
+          >
+            <span className="ws-tab-label">Disks</span>
+          </div>
         </div>
 
         {error && activeTab === LIST_TAB && (
@@ -454,7 +493,9 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                           <>
                             <div className="ws-card-name-row">
                               <span className="ws-card-name">{ws.name}</span>
-                              {startingIds.has(ws.id) ? (
+                              {deletingIds.has(ws.id) ? (
+                                <span className="ws-card-status ws-card-status-deleting">Deleting...</span>
+                              ) : startingIds.has(ws.id) ? (
                                 <span className="ws-card-status ws-card-status-starting">Starting...</span>
                               ) : ws.status !== "running" ? (
                                 <span className="ws-card-status ws-card-status-stopped">Stopped</span>
@@ -479,7 +520,9 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
 
                       {/* Actions */}
                       <div className="ws-card-actions" onClick={(e) => e.stopPropagation()}>
-                        {confirmDelete === ws.id ? (
+                        {deletingIds.has(ws.id) ? (
+                          <span className="ws-card-status ws-card-status-deleting">Deleting...</span>
+                        ) : confirmDelete === ws.id ? (
                           <>
                             <span className="ws-confirm-text">Delete?</span>
                             <button
@@ -499,10 +542,20 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                           <>
                             <button
                               className="ws-btn ws-btn-open ws-btn-sm"
+                              disabled={startingIds.has(ws.id) || stoppingIds.has(ws.id)}
                               onClick={() => openWorkspace(ws)}
                             >
-                              {isOpen ? "View" : "Open"}
+                              {startingIds.has(ws.id) ? "Starting..." : isOpen ? "View" : ws.status !== "running" ? "Start" : "Open"}
                             </button>
+                            {ws.status === "running" && (
+                              <button
+                                className="ws-btn ws-btn-cancel ws-btn-sm"
+                                disabled={stoppingIds.has(ws.id)}
+                                onClick={() => handleStop(ws.id)}
+                              >
+                                {stoppingIds.has(ws.id) ? "Stopping..." : "Stop"}
+                              </button>
+                            )}
                             <button
                               className="ws-btn ws-btn-rename ws-btn-sm"
                               onClick={() => {
@@ -511,6 +564,13 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                               }}
                             >
                               Rename
+                            </button>
+                            <button
+                              className="ws-btn ws-btn-settings ws-btn-sm"
+                              onClick={() => setSettingsId(ws.id)}
+                              title="Workspace settings"
+                            >
+                              Settings
                             </button>
                             <button
                               className="ws-btn ws-btn-danger ws-btn-sm"
@@ -525,6 +585,107 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                   </div>
                 );
               })
+            )}
+
+            {/* Workspace settings sidebar */}
+            {settingsId && wsMap.get(settingsId) && (
+              <WorkspaceSettings
+                workspaceId={settingsId}
+                workspace={wsMap.get(settingsId)!}
+                environment={environments.find((e) => e.plugin_id === wsMap.get(settingsId)?.environment)}
+                onClose={() => { setSettingsId(null); fetchAll(); }}
+              />
+            )}
+
+            {/* Shared disks management sidebar */}
+            {showDisksPanel && (
+              <div className="wss-overlay">
+                <div className="wss-panel">
+                  <div className="wss-header">
+                    <h2 className="wss-title">Shared Disks</h2>
+                    <button className="wss-btn wss-btn-close" onClick={() => setShowDisksPanel(false)}>Close</button>
+                  </div>
+                  <div className="wss-content">
+                    <div className="wss-section">
+                      <p className="wss-hint">Shared disks are reusable storage that can be attached to any workspace (credentials, config, shared data).</p>
+
+                      {/* Create new shared disk */}
+                      <div className="wss-mount-add">
+                        <input
+                          className="wss-input"
+                          style={{ flex: 1 }}
+                          placeholder="Disk name (e.g. git-config)"
+                          value={newDiskName}
+                          onChange={(e) => setNewDiskName(e.target.value)}
+                          onKeyDown={async (e) => {
+                            if (e.key === "Enter" && newDiskName.trim() && !creatingDisk) {
+                              setCreatingDisk(true);
+                              try {
+                                await apiClient.workspaces.createDisk(newDiskName.trim(), "shared");
+                                setNewDiskName("");
+                                await fetchAll();
+                              } catch (err) {
+                                setError(err instanceof Error ? err.message : "Failed to create disk");
+                              }
+                              setCreatingDisk(false);
+                            }
+                          }}
+                        />
+                        <button
+                          className="wss-btn wss-btn-primary wss-btn-sm"
+                          disabled={creatingDisk || !newDiskName.trim()}
+                          onClick={async () => {
+                            setCreatingDisk(true);
+                            try {
+                              await apiClient.workspaces.createDisk(newDiskName.trim(), "shared");
+                              setNewDiskName("");
+                              await fetchAll();
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : "Failed to create disk");
+                            }
+                            setCreatingDisk(false);
+                          }}
+                        >
+                          {creatingDisk ? "Creating..." : "Create"}
+                        </button>
+                      </div>
+
+                      {/* List shared disks */}
+                      <div className="wss-mount-list">
+                        {disks.filter((d) => d.type === "shared").length === 0 ? (
+                          <div className="wss-empty-hint">No shared disks yet.</div>
+                        ) : (
+                          disks.filter((d) => d.type === "shared").map((d) => (
+                            <div key={d.id} className="wss-mount-row">
+                              <span className="wss-mount-name" style={{ flex: 1 }}>{d.name}</span>
+                              <span className="wss-disk-size">{formatSize(d.size_bytes)}</span>
+                              {confirmDeleteDisk === d.id ? (
+                                <>
+                                  <span className="wss-restart-hint">Delete?</span>
+                                  <button
+                                    className="wss-btn-icon"
+                                    onClick={() => {
+                                      apiClient.workspaces.deleteDisk(d.type, d.name)
+                                        .then(() => { setConfirmDeleteDisk(null); fetchAll(); })
+                                        .catch((err) => setError(err instanceof Error ? err.message : "Failed to delete"));
+                                    }}
+                                    title="Confirm delete"
+                                  >
+                                    Yes
+                                  </button>
+                                  <button className="wss-btn-icon" onClick={() => setConfirmDeleteDisk(null)}>No</button>
+                                </>
+                              ) : (
+                                <button className="wss-btn-icon" onClick={() => setConfirmDeleteDisk(d.id)} title="Delete disk">x</button>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 
@@ -683,7 +844,8 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
               </div>
             );
           })}
-      </div>
+
+      </div>{/* end ws-wrapper */}
     </div>
   );
 }

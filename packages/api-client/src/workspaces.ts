@@ -36,6 +36,29 @@ export interface Disk {
   extensions?: string[];
 }
 
+export interface ExtraDisk {
+  disk_id: string;
+  name: string;
+  target: string;
+  read_only?: boolean;
+}
+
+export interface WorkspaceOptions {
+  container_id: string;
+  env_overrides: string;       // JSON string: {"KEY": "value"}
+  extra_disks: string;         // JSON string: ExtraDisk[]
+  agent_plugin: string;
+  agent_model: string;
+  sidecar_id: string;
+}
+
+export interface WorkspaceOptionsUpdate {
+  env_overrides?: Record<string, string>;
+  extra_disks?: ExtraDisk[];
+  agent_plugin?: string;
+  agent_model?: string;
+}
+
 export class WorkspacesAPI {
   private http: HttpTransport;
   constructor(http: HttpTransport) { this.http = http; }
@@ -79,12 +102,28 @@ export class WorkspacesAPI {
     return this.http.post(`${ROUTE}/workspaces/${id}/stop`, {});
   }
 
+  async restartWorkspace(id: string): Promise<Workspace> {
+    return this.http.post<Workspace>(`${ROUTE}/workspaces/${id}/restart`, {});
+  }
+
+  async getWorkspaceOptions(id: string): Promise<WorkspaceOptions> {
+    return this.http.get<WorkspaceOptions>(`${ROUTE}/workspaces/${id}/options`);
+  }
+
+  async updateWorkspaceOptions(id: string, opts: WorkspaceOptionsUpdate): Promise<WorkspaceOptions> {
+    return this.http.put<WorkspaceOptions>(`${ROUTE}/workspaces/${id}/options`, opts);
+  }
+
   async listDisks(type?: string): Promise<Disk[]> {
     const q = type ? `?type=${encodeURIComponent(type)}` : "";
     const res = await this.http.get<{ disks: Disk[] }>(
       `/api/route/storage-disk/disks${q}`
     );
     return res.disks || [];
+  }
+
+  async createDisk(name: string, type: string = "shared"): Promise<void> {
+    await this.http.post(`/api/route/storage-disk/disks`, { name, type });
   }
 
   async deleteDisk(type: string, name: string): Promise<void> {

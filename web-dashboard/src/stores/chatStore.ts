@@ -33,17 +33,14 @@ interface ChatStore {
   error: string | null;
   shelvedTasks: ShelvedTask[];
 
-  /** SSE-driven progress per conversation — no REST needed for intermediate states. */
-  progressInfo: Record<number, ProgressInfo>;
+  /** SSE-driven progress per conversation — multiple tasks can be in-flight simultaneously. */
+  progressInfo: Record<number, ProgressInfo[]>;
 
-  /** Map of conversationId → in-flight task. Multiple convs can be sending simultaneously. */
-  inFlightTasks: Record<number, InFlightTask>;
+  /** Map of conversationId → in-flight tasks. Multiple tasks per conv supported. */
+  inFlightTasks: Record<number, InFlightTask[]>;
 
-  // Derived helpers (not stored, computed from inFlightTasks + activeConversationId).
-  /** Whether the *active* conversation is sending. */
-  readonly sending: boolean;
-  readonly activeTaskGroupId: string | null;
-  readonly sendStartedAt: number | null;
+  /** True only during the HTTP send call (prevents double-click). */
+  sending: boolean;
 
   loadConversations: () => Promise<void>;
   selectConversation: (id: number) => Promise<void>;
@@ -52,26 +49,18 @@ interface ChatStore {
   send: (content: string, attachmentIds?: string[]) => Promise<void>;
   refreshMessages: () => Promise<void>;
   setProgressInfo: (convId: number, info: ProgressInfo) => void;
-  clearProgressInfo: (convId: number) => void;
-  shelfTask: () => void;
+  clearProgressInfo: (convId: number, taskGroupId?: string) => void;
+  shelfTask: (taskGroupId: string) => void;
   revealShelved: (taskGroupId: string) => void;
 }
 
 let _nextTempId = -1;
 
-/** Derive sending state for the active conversation. */
-function deriveSending(inFlightTasks: Record<number, InFlightTask>, activeConversationId: number | null) {
-  if (!activeConversationId) return { sending: false, activeTaskGroupId: null as string | null, sendStartedAt: null as number | null };
-  const task = inFlightTasks[activeConversationId];
-  if (!task) return { sending: false, activeTaskGroupId: null as string | null, sendStartedAt: null as number | null };
-  return { sending: true, activeTaskGroupId: task.taskGroupId, sendStartedAt: task.startedAt };
-}
-
 // Persist in-flight and shelved tasks across browser refreshes so SSE matching survives.
 const INFLIGHT_KEY = "teamagentica_inflight_tasks";
 const SHELVED_KEY = "teamagentica_shelved_tasks";
 
-function loadPersistedInFlight(): Record<number, InFlightTask> {
+function loadPersistedInFlight(): Record<number, InFlightTask[]> {
   try {
     const raw = localStorage.getItem(INFLIGHT_KEY);
     return raw ? JSON.parse(raw) : {};
@@ -85,7 +74,7 @@ function loadPersistedShelved(): ShelvedTask[] {
   } catch { return []; }
 }
 
-function persistInFlight(tasks: Record<number, InFlightTask>) {
+function persistInFlight(tasks: Record<number, InFlightTask[]>) {
   try { localStorage.setItem(INFLIGHT_KEY, JSON.stringify(tasks)); } catch {}
 }
 
@@ -105,10 +94,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   shelvedTasks: _restoredShelved,
   progressInfo: {},
   inFlightTasks: _restoredInFlight,
-  // Derived — initial values, updated via deriveSending() on every relevant set().
   sending: false,
-  activeTaskGroupId: null,
-  sendStartedAt: null,
 
   loadConversations: async () => {
     try {
@@ -121,8 +107,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   selectConversation: async (id: number) => {
-    const { inFlightTasks } = get();
-    set({ loading: true, error: null, activeConversationId: id, messages: [], ...deriveSending(inFlightTasks, id) });
+    set({ loading: true, error: null, activeConversationId: id, messages: [] });
     try {
       const data = await apiClient.chat.getConversation(id);
       // Guard: only apply if this conversation is still active (user may have clicked another).
@@ -153,10 +138,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       activeConversationId: null,
       messages: [],
       error: null,
-      // No active conv → not sending.
-      sending: false,
-      activeTaskGroupId: null,
-      sendStartedAt: null,
     });
   },
 
@@ -165,9 +146,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       await apiClient.chat.deleteConversation(id);
       const { activeConversationId, inFlightTasks } = get();
       if (activeConversationId === id) {
-        // Also remove any in-flight task for this conversation.
         const { [id]: _, ...rest } = inFlightTasks;
-        set({ activeConversationId: null, messages: [], inFlightTasks: rest, sending: false, activeTaskGroupId: null, sendStartedAt: null });
+        set({ activeConversationId: null, messages: [], inFlightTasks: rest });
       }
       get().loadConversations();
     } catch (e: unknown) {
@@ -176,67 +156,71 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   setProgressInfo: (convId: number, info: ProgressInfo) => {
-    set((state) => ({
-      progressInfo: { ...state.progressInfo, [convId]: info },
-    }));
+    set((state) => {
+      const existing = state.progressInfo[convId] || [];
+      const idx = existing.findIndex((p) => p.taskGroupId === info.taskGroupId);
+      const updated = idx >= 0
+        ? existing.map((p, i) => (i === idx ? info : p))
+        : [...existing, info];
+      return { progressInfo: { ...state.progressInfo, [convId]: updated } };
+    });
   },
 
-  clearProgressInfo: (convId: number) => {
+  clearProgressInfo: (convId: number, taskGroupId?: string) => {
     set((state) => {
-      const { [convId]: _, ...rest } = state.progressInfo;
-      return { progressInfo: rest };
+      if (!taskGroupId) {
+        const { [convId]: _, ...rest } = state.progressInfo;
+        return { progressInfo: rest };
+      }
+      const existing = state.progressInfo[convId] || [];
+      const filtered = existing.filter((p) => p.taskGroupId !== taskGroupId);
+      if (filtered.length === 0) {
+        const { [convId]: _, ...rest } = state.progressInfo;
+        return { progressInfo: rest };
+      }
+      return { progressInfo: { ...state.progressInfo, [convId]: filtered } };
     });
   },
 
   refreshMessages: async () => {
-    const { activeConversationId, inFlightTasks } = get();
+    const { activeConversationId } = get();
     if (!activeConversationId) return;
-    const inFlight = inFlightTasks[activeConversationId];
     try {
       const data = await apiClient.chat.getConversation(activeConversationId);
       const msgs = data.messages || [];
-      const updates: Partial<ChatStore> = { messages: msgs };
-
-      // If we're waiting for a response and an assistant message appeared, stop.
-      if (inFlight) {
-        const lastMsg = msgs[msgs.length - 1];
-        if (lastMsg && lastMsg.role === "assistant") {
-          const { [activeConversationId]: _, ...rest } = inFlightTasks;
-          updates.inFlightTasks = rest;
-        }
-      }
-
-      set(updates as ChatStore);
-      // Also refresh the sidebar conversation list to keep unread badges current.
+      set({ messages: msgs });
       get().loadConversations();
     } catch {
       // silent — polling failure shouldn't disrupt UX
     }
   },
 
-  shelfTask: () => {
+  shelfTask: (taskGroupId: string) => {
     const { activeConversationId, inFlightTasks } = get();
     if (!activeConversationId) return;
-    const inFlight = inFlightTasks[activeConversationId];
+    const tasks = inFlightTasks[activeConversationId] || [];
+    const inFlight = tasks.find((t) => t.taskGroupId === taskGroupId);
     if (!inFlight) return;
 
-    const task: ShelvedTask = {
+    const shelved: ShelvedTask = {
       taskGroupId: inFlight.taskGroupId,
       message: "Processing...",
       startedAt: inFlight.startedAt,
       status: "processing",
     };
 
-    const { [activeConversationId]: _, ...rest } = inFlightTasks;
+    const remaining = tasks.filter((t) => t.taskGroupId !== taskGroupId);
     set((state) => ({
-      shelvedTasks: [...state.shelvedTasks, task],
-      inFlightTasks: rest,
-      sending: false,
-      activeTaskGroupId: null,
-      sendStartedAt: null,
+      shelvedTasks: [...state.shelvedTasks, shelved],
+      inFlightTasks: {
+        ...state.inFlightTasks,
+        ...(remaining.length > 0
+          ? { [activeConversationId]: remaining }
+          : (() => { const { [activeConversationId]: _, ...rest } = state.inFlightTasks; return rest; })()),
+      },
     }));
 
-    // Remove progress messages from the visible chat since the task is shelved.
+    get().clearProgressInfo(activeConversationId, taskGroupId);
     get().refreshMessages();
   },
 
@@ -251,7 +235,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   send: async (content: string, attachmentIds?: string[]) => {
     const { activeConversationId, messages } = get();
 
-    set({ sending: true, error: null, sendStartedAt: Date.now() });
+    set({ sending: true, error: null });
 
     try {
       // Create conversation lazily if needed.
@@ -283,27 +267,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       // Register the in-flight task and show instant progress bubble.
       set((state) => {
-        const newInFlight = { ...state.inFlightTasks };
-        const newProgress = { ...state.progressInfo };
-        if (taskGroupId) {
-          newInFlight[convId!] = { taskGroupId, startedAt: now, conversationId: convId! };
-          // Synthetic progress — shown instantly before the first SSE event arrives.
-          newProgress[convId!] = {
-            status: "thinking",
-            message: "Sending to agent...",
-            taskGroupId,
-            updatedAt: now,
-          };
-        }
+        const existing = state.inFlightTasks[convId!] || [];
+        const existingProgress = state.progressInfo[convId!] || [];
         return {
+          sending: false,
           messages: [
             ...state.messages.filter((m) => m.id !== tempUserMsg.id),
             resp.user_message,
           ],
-          inFlightTasks: newInFlight,
-          progressInfo: newProgress,
-          activeTaskGroupId: taskGroupId,
-          sendStartedAt: now,
+          ...(taskGroupId ? {
+            inFlightTasks: {
+              ...state.inFlightTasks,
+              [convId!]: [...existing, { taskGroupId, startedAt: now, conversationId: convId! }],
+            },
+            progressInfo: {
+              ...state.progressInfo,
+              [convId!]: [...existingProgress, {
+                status: "thinking",
+                message: "Sending to agent...",
+                taskGroupId,
+                updatedAt: now,
+              }],
+            },
+          } : {}),
         };
       });
 
@@ -312,8 +298,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch (e: unknown) {
       set({
         sending: false,
-        activeTaskGroupId: null,
-        sendStartedAt: null,
         error: e instanceof Error ? e.message : "Failed to send message",
       });
     }
@@ -348,21 +332,27 @@ function startBackgroundPoll() {
     // the completed event was likely missed. Clear it and refresh.
     const now = Date.now();
     const inFlight = state.inFlightTasks;
-    for (const [convIdStr, task] of Object.entries(inFlight)) {
-      if (now - task.startedAt > STALE_TASK_MS) {
-        const convId = Number(convIdStr);
-        console.log("[chat-poll] reaping stale task", task.taskGroupId, "for conv", convId);
-        state.clearProgressInfo(convId);
-        const { [convId]: _, ...rest } = inFlight;
-        useChatStore.setState({
-          inFlightTasks: rest,
-          ...(state.activeConversationId === convId
-            ? { sending: false, activeTaskGroupId: null, sendStartedAt: null }
-            : {}),
-        });
-        state.refreshMessages();
+    let needsRefresh = false;
+    for (const [convIdStr, tasks] of Object.entries(inFlight)) {
+      const convId = Number(convIdStr);
+      const stale = tasks.filter((t) => now - t.startedAt > STALE_TASK_MS);
+      for (const t of stale) {
+        console.log("[chat-poll] reaping stale task", t.taskGroupId, "for conv", convId);
+        state.clearProgressInfo(convId, t.taskGroupId);
+        needsRefresh = true;
+      }
+      if (stale.length > 0) {
+        const remaining = tasks.filter((t) => now - t.startedAt <= STALE_TASK_MS);
+        const currentInFlight = useChatStore.getState().inFlightTasks;
+        if (remaining.length > 0) {
+          useChatStore.setState({ inFlightTasks: { ...currentInFlight, [convId]: remaining } });
+        } else {
+          const { [convId]: _, ...rest } = currentInFlight;
+          useChatStore.setState({ inFlightTasks: rest });
+        }
       }
     }
+    if (needsRefresh) state.refreshMessages();
   }, POLL_INTERVAL_MS);
 }
 
@@ -383,8 +373,10 @@ useEventStore.subscribe((state, prevState) => {
 
   // Build set of task group IDs we care about.
   const watchedIds = new Map<string, number>();
-  for (const [convIdStr, task] of Object.entries(inFlightTasks)) {
-    watchedIds.set(task.taskGroupId, Number(convIdStr));
+  for (const [convIdStr, tasks] of Object.entries(inFlightTasks)) {
+    for (const task of tasks) {
+      watchedIds.set(task.taskGroupId, Number(convIdStr));
+    }
   }
   const shelvedIds = new Set<string>();
   for (const t of shelved) {
@@ -414,16 +406,19 @@ useEventStore.subscribe((state, prevState) => {
         const currentState = useChatStore.getState();
 
         if (isTerminal) {
-          // Terminal: clear progress + in-flight task, fetch final message.
+          // Terminal: clear progress + in-flight task for this specific taskGroupId.
           console.log("[chat-sub] MATCH conv", convId, "terminal:", detail.status);
-          currentState.clearProgressInfo(convId);
-          const { [convId]: _, ...rest } = currentState.inFlightTasks;
-          useChatStore.setState({
-            inFlightTasks: rest,
-            ...(currentState.activeConversationId === convId
-              ? { sending: false, activeTaskGroupId: null, sendStartedAt: null }
-              : {}),
-          });
+          currentState.clearProgressInfo(convId, tgId);
+          const tasks = currentState.inFlightTasks[convId] || [];
+          const remaining = tasks.filter((t) => t.taskGroupId !== tgId);
+          if (remaining.length > 0) {
+            useChatStore.setState({
+              inFlightTasks: { ...currentState.inFlightTasks, [convId]: remaining },
+            });
+          } else {
+            const { [convId]: _, ...rest } = currentState.inFlightTasks;
+            useChatStore.setState({ inFlightTasks: rest });
+          }
           if (currentState.activeConversationId === convId && !refreshedConvs.has(convId)) {
             currentState.refreshMessages();
             refreshedConvs.add(convId);

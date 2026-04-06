@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useChatStore, type ProgressInfo } from "../stores/chatStore";
+import { useChatStore } from "../stores/chatStore";
 import { apiClient } from "../api/client";
 import type { Attachment } from "@teamagentica/api-client";
 import ConfirmDialog from "./ConfirmDialog";
@@ -52,7 +52,7 @@ interface ChatProps {
 }
 
 export default function Chat({ activePage, subpath, onConversationChange }: ChatProps) {
-  const { conversations, activeConversationId, messages, sending, loading, error, sendStartedAt, shelvedTasks, progressInfo } = useChatStore(
+  const { conversations, activeConversationId, messages, sending, loading, error, shelvedTasks, progressInfo, inFlightTasks } = useChatStore(
     useShallow((s) => ({
       conversations: s.conversations,
       activeConversationId: s.activeConversationId,
@@ -60,14 +60,15 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
       sending: s.sending,
       loading: s.loading,
       error: s.error,
-      sendStartedAt: s.sendStartedAt,
       shelvedTasks: s.shelvedTasks,
       progressInfo: s.progressInfo,
+      inFlightTasks: s.inFlightTasks,
     }))
   );
 
-  // SSE-driven progress for the active conversation (if any).
-  const activeProgress: ProgressInfo | null = activeConversationId ? progressInfo[activeConversationId] ?? null : null;
+  // SSE-driven progress for the active conversation — multiple bubbles supported.
+  const activeProgressList: ProgressInfo[] = activeConversationId ? progressInfo[activeConversationId] ?? [] : [];
+  const activeInFlightList = activeConversationId ? inFlightTasks[activeConversationId] ?? [] : [];
   const loadConversations = useChatStore((s) => s.loadConversations);
   const selectConversation = useChatStore((s) => s.selectConversation);
   const newConversation = useChatStore((s) => s.newConversation);
@@ -425,23 +426,21 @@ export default function Chat({ activePage, subpath, onConversationChange }: Chat
               ) : null}
             </div>
           ))}
-          {(() => {
-            const dbProgress = messages.filter((m) => m.role === "progress").at(-1);
-            const progressMsg = activeProgress?.message ?? dbProgress?.content;
-            if (!progressMsg) return null;
+          {activeProgressList.map((progress) => {
+            const inFlight = activeInFlightList.find((t) => t.taskGroupId === progress.taskGroupId);
             return (
-              <div className="chat-msg chat-msg-progress">
+              <div key={progress.taskGroupId} className="chat-msg chat-msg-progress">
                 <div className="chat-msg-progress-content">
-                  {progressMsg}
-                  {activeProgress?.taskGroupId && <span className="chat-msg-task-group"> [task = {activeProgress.taskGroupId}]</span>}
-                  {sendStartedAt && <ElapsedTimer startedAt={sendStartedAt} />}
-                  <button className="chat-shelf-btn" onClick={shelfTask} title="Move to shelf">
+                  {progress.message}
+                  <span className="chat-msg-task-group"> [task = {progress.taskGroupId}]</span>
+                  {inFlight && <ElapsedTimer startedAt={inFlight.startedAt} />}
+                  <button className="chat-shelf-btn" onClick={() => shelfTask(progress.taskGroupId)} title="Move to shelf">
                     {"\u{1F4E6}"}
                   </button>
                 </div>
               </div>
             );
-          })()}
+          })}
           <div ref={messagesEndRef} />
         </div>
 
