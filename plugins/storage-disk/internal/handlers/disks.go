@@ -182,7 +182,14 @@ func (h *Handler) CreateDisk(c *gin.Context) {
 		log.Printf("[disks] created disk %q (type=%s)", req.Name, req.Type)
 	}
 
-	c.JSON(http.StatusCreated, d)
+	c.JSON(http.StatusCreated, gin.H{
+		"id":         d.ID,
+		"name":       d.Name,
+		"type":       d.Type,
+		"labels":     d.Labels,
+		"created_at": d.CreatedAt,
+		"path":       dataDir,
+	})
 }
 
 // ListDisks handles GET /disks.

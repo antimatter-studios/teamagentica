@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	mcpserver "github.com/antimatter-studios/teamagentica/plugins/infra-mcp-server/internal/mcp"
 )
 
@@ -85,6 +86,9 @@ func (h *Handler) RegisterTools(c *gin.Context) {
 	// Invalidate cache and refresh mcp-go registry.
 	mcpserver.InvalidateCache()
 	h.mcpSrv.RefreshTools()
+
+	// Notify subscribers that the MCP tool list has changed.
+	events.PublishMCPToolsChanged(h.sdk)
 
 	log.Printf("mcp-server: %s registered %d tools via push", req.PluginID, len(req.Tools))
 	c.JSON(http.StatusOK, gin.H{"registered": len(req.Tools)})
