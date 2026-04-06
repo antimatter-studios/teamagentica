@@ -16,3 +16,9 @@ if [ ! -f "$HOME/.claude/.claude.json" ]; then
         echo "Restored Claude config from backup: $backup"
     fi
 fi
+
+# Start agent sidecar exec server if available
+if [ -x /opt/agent-sidecar/claude-exec-server ]; then
+    /opt/agent-sidecar/claude-exec-server &
+    echo "[entrypoint] started agent sidecar exec server"
+fi

@@ -7,7 +7,7 @@
 FROM gcr.io/kaniko-project/executor:latest AS kaniko
 
 # --- tacli builder (TeamAgentica CLI) ---
-FROM golang:1.24-bookworm AS tacli-builder
+FROM golang:1.25-bookworm AS tacli-builder
 WORKDIR /build
 COPY tacli/ tacli/
 RUN cd tacli && CGO_ENABLED=0 go build -ldflags="-s -w" -o /tacli .
