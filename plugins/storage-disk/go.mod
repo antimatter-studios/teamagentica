@@ -6,6 +6,7 @@ require (
 	github.com/antimatter-studios/teamagentica/pkg/pluginsdk v1.1.0
 	github.com/gin-gonic/gin v1.12.0
 	golang.org/x/sys v0.42.0
+	gorm.io/gorm v1.31.1
 )
 
 require (
@@ -46,7 +47,6 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/sqlite v1.6.0 // indirect
-	gorm.io/gorm v1.31.1 // indirect
 )
 
 replace github.com/antimatter-studios/teamagentica/pkg/pluginsdk => ../../pkg/pluginsdk
