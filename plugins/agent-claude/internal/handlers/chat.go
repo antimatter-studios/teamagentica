@@ -11,7 +11,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/anthropic"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/claudecli"
+	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/usage"
 )
 
@@ -30,6 +30,8 @@ type Handler struct {
 	mcpConfig     string // path to MCP config file, if available
 	mcpPluginID   string // plugin ID of infra-mcp-server for proxy routing
 	workspaceDir  string // base directory for workspace mounts
+	execMode      string // "local" (default) or "remote"
+	execWSURL     string // WebSocket URL for remote exec (e.g. ws://teamagentica-mc-<id>:9100/exec)
 }
 
 // HandlerConfig holds the parameters for constructing a Handler.
@@ -41,6 +43,8 @@ type HandlerConfig struct {
 	DataPath            string
 	WorkspaceDir        string
 	DefaultSystemPrompt string
+	ExecMode            string // "local" or "remote"
+	ExecWSURL           string // WebSocket URL for remote execution
 }
 
 // NewHandler creates a new Handler from the given config.
@@ -54,6 +58,8 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		defaultPrompt: cfg.DefaultSystemPrompt,
 		usage:         usage.NewTracker(cfg.DataPath),
 		workspaceDir:  cfg.WorkspaceDir,
+		execMode:      cfg.ExecMode,
+		execWSURL:     cfg.ExecWSURL,
 	}
 }
 

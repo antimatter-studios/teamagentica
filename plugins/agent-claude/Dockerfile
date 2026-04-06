@@ -16,6 +16,7 @@ COPY --from=claude-installer /usr/local/lib/node_modules/@anthropic-ai/claude-co
 COPY --from=claude-installer /usr/local/bin/claude /usr/local/bin/claude
 
 WORKDIR /build
+COPY pkg/claudecli/ pkg/claudecli/
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/agent-claude/ plugins/agent-claude/
 WORKDIR /build/plugins/agent-claude
@@ -33,20 +34,23 @@ ENV GOPRIVATE=github.com/antimatter-studios/*
 ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
+COPY pkg/claudecli/ pkg/claudecli/
 COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/agent-claude/ plugins/agent-claude/
 WORKDIR /build/plugins/agent-claude
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-claude .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /claude-exec-server ./cmd/exec-server
 
 # ── Prod stage ──
 FROM node:22-alpine AS prod
 
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates bash \
     && adduser -D -u 10001 teamagentica
 
 COPY --from=claude-installer /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
 COPY --from=claude-installer /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=builder /agent-claude /usr/local/bin/agent-claude
+COPY --from=builder /claude-exec-server /usr/local/bin/claude-exec-server
 RUN mkdir -p /data/claude-workspace && chown -R teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica

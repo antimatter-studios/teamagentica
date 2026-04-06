@@ -14,7 +14,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/claudecli"
+	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/handlers"
 )
 
@@ -62,6 +62,8 @@ func main() {
 	dataPath := configOrDefault(pluginConfig, "CLAUDE_DATA_PATH", "/data")
 	cliBinary := configOrDefault(pluginConfig, "CLAUDE_CLI_BINARY", "/usr/local/bin/claude")
 	workspaceDir := configOrDefault(pluginConfig, "WORKSPACE_DIR", "/workspaces")
+	execMode := configOrDefault(pluginConfig, "CLAUDE_EXEC_MODE", "local")
+	execWSURL := pluginConfig["CLAUDE_EXEC_WS_URL"]
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 
 	cliTimeout := 600
@@ -98,10 +100,16 @@ func main() {
 		DataPath:            dataPath,
 		WorkspaceDir:        workspaceDir,
 		DefaultSystemPrompt: defaultSystemPrompt,
+		ExecMode:            execMode,
+		ExecWSURL:           execWSURL,
 	})
 
-	// Initialise the CLI backend if configured.
-	if backend == "cli" {
+	if execMode == "remote" {
+		log.Printf("[remote] exec mode enabled: %s", execWSURL)
+	}
+
+	// Initialise the CLI backend if configured (skip in remote mode — CLI runs in workspace).
+	if backend == "cli" && execMode != "remote" {
 		log.Println("[cli] initialising Claude CLI backend")
 		workdir := dataPath + "/claude-workspace"
 		claudeDir := configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude")
@@ -246,6 +254,16 @@ func main() {
 			log.Printf("[mcp] tools changed — cycling CLI process pool")
 			h.CyclePool()
 		})
+	}
+
+	// Copy sidecar binary to shared disk so workspace containers can run it.
+	if src, err := os.ReadFile("/usr/local/bin/claude-exec-server"); err == nil {
+		dst := "/sidecar-bin/claude-exec-server"
+		if err := os.WriteFile(dst, src, 0755); err != nil {
+			log.Printf("WARNING: failed to write sidecar binary: %v", err)
+		} else {
+			log.Printf("[sidecar] wrote exec-server binary to %s", dst)
+		}
 	}
 
 	h.SetSDK(sdkClient)

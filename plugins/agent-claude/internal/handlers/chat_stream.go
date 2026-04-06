@@ -8,7 +8,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/anthropic"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/claudecli"
+	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/usage"
 )
 
@@ -25,6 +25,11 @@ type claudeDoneEvent struct {
 
 // ChatStream implements pluginsdk.AgentProvider.
 func (h *Handler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRequest) <-chan pluginsdk.AgentStreamEvent {
+	// Remote mode: proxy to workspace container's exec server.
+	if h.execMode == "remote" && h.execWSURL != "" {
+		return h.chatStreamRemote(ctx, req)
+	}
+
 	ch := make(chan pluginsdk.AgentStreamEvent, 32)
 
 	go func() {
