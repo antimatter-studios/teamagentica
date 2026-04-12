@@ -71,31 +71,7 @@ func Open(dataPath string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DB{db: conn}
-	d.migrateAgentRenames()
-	return d, nil
-}
-
-// migrateAgentRenames updates stale agent-claude references to agent-anthropic.
-func (d *DB) migrateAgentRenames() {
-	renames := map[string]string{
-		"agent-claude": "agent-anthropic",
-		"agent-gemini": "agent-google",
-		"agent-kimi":   "agent-moonshot",
-	}
-	for oldName, newName := range renames {
-		// Update agent_plugin field.
-		d.db.Model(&WorkspaceOptions{}).Where("agent_plugin = ?", oldName).Update("agent_plugin", newName)
-
-		// Update sidecar_id: ws-{subdomain}-agent-claude → ws-{subdomain}-agent-anthropic
-		// Use REPLACE since sidecar_id contains the plugin name as a suffix.
-		d.db.Exec("UPDATE workspace_options SET sidecar_id = REPLACE(sidecar_id, ?, ?) WHERE sidecar_id LIKE ?",
-			oldName, newName, "%"+oldName+"%")
-
-		// Update disk references in the disks JSON field.
-		d.db.Exec("UPDATE workspace_options SET disks = REPLACE(disks, ?, ?) WHERE disks LIKE ?",
-			oldName, newName, "%"+oldName+"%")
-	}
+	return &DB{db: conn}, nil
 }
 
 // Put creates or updates a workspace record.
