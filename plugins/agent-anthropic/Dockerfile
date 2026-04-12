@@ -18,8 +18,8 @@ COPY --from=claude-installer /usr/local/bin/claude /usr/local/bin/claude
 WORKDIR /build
 COPY pkg/claudecli/ pkg/claudecli/
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-claude/ plugins/agent-claude/
-WORKDIR /build/plugins/agent-claude
+COPY plugins/agent-anthropic/ plugins/agent-anthropic/
+WORKDIR /build/plugins/agent-anthropic
 
 RUN go mod download
 
@@ -36,9 +36,9 @@ RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/claudecli/ pkg/claudecli/
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-claude/ plugins/agent-claude/
-WORKDIR /build/plugins/agent-claude
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-claude .
+COPY plugins/agent-anthropic/ plugins/agent-anthropic/
+WORKDIR /build/plugins/agent-anthropic
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-anthropic .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /claude-exec-server ./cmd/exec-server
 
 # ── Prod stage ──
@@ -49,12 +49,12 @@ RUN apk add --no-cache ca-certificates bash \
 
 COPY --from=claude-installer /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
 COPY --from=claude-installer /usr/local/bin/claude /usr/local/bin/claude
-COPY --from=builder /agent-claude /usr/local/bin/agent-claude
+COPY --from=builder /agent-anthropic /usr/local/bin/agent-anthropic
 COPY --from=builder /claude-exec-server /usr/local/bin/claude-exec-server
 RUN mkdir -p /data/claude-workspace && chown -R teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/agent-claude/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/agent-anthropic/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 EXPOSE 8082
-CMD ["agent-claude"]
+CMD ["agent-anthropic"]

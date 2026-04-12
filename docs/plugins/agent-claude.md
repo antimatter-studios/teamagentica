@@ -1,4 +1,4 @@
-# agent-claude
+# agent-anthropic
 
 > Anthropic Claude agent with tool use, MCP integration, and CLI/API key backends.
 
@@ -62,5 +62,5 @@ When `is_coordinator` is true, the agent builds a system prompt that includes av
 
 ## Related
 
-- [agent-openai](agent-openai.md), [agent-gemini](agent-gemini.md) — Other agent plugins
+- [agent-openai](agent-openai.md), [agent-google](agent-google.md) — Other agent plugins
 - [Plugin SDK](../plugin-sdk.md) — Tool discovery and alias integration

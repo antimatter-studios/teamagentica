@@ -1,4 +1,4 @@
-module github.com/antimatter-studios/teamagentica/plugins/agent-claude
+module github.com/antimatter-studios/teamagentica/plugins/agent-anthropic
 
 go 1.25.0
 

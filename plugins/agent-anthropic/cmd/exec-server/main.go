@@ -1,6 +1,6 @@
 // Standalone Claude exec server binary.
 // Delivered to workspace containers via shared disk and started by the devbox entrypoint.
-// Exposes a WebSocket endpoint on :9100/exec for agent-claude sidecar connections.
+// Exposes a WebSocket endpoint on :9100/exec for agent-anthropic sidecar connections.
 package main
 
 import (

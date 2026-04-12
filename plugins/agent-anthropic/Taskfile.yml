@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: agent-claude
+  BINARY_NAME: agent-anthropic
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-agent-claude:dev
+  DEV_IMAGE: teamagentica-agent-anthropic:dev
 
 tasks:
   default:

@@ -13,9 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-claude/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/provider"
 )
 
 //go:embed system-prompt.md
@@ -90,18 +92,25 @@ func main() {
 		}
 	}
 
-	router := gin.Default()
-
+	// Create the plugin-specific handler (auth, MCP proxy, usage, models, config).
 	h := handlers.NewHandler(handlers.HandlerConfig{
 		Backend:             backend,
 		APIKey:              apiKey,
 		Model:               model,
 		Debug:               debug,
 		DataPath:            dataPath,
-		WorkspaceDir:        workspaceDir,
 		DefaultSystemPrompt: defaultSystemPrompt,
-		ExecMode:            execMode,
-		ExecWSURL:           execWSURL,
+	})
+
+	// Create the agentkit adapter.
+	adapter := provider.NewAdapter(provider.AdapterConfig{
+		Model:         model,
+		Debug:         debug,
+		DefaultPrompt: defaultSystemPrompt,
+		WorkspaceDir:  workspaceDir,
+		ExecMode:      execMode,
+		ExecWSURL:     execWSURL,
+		Tracker:       h.Tracker(),
 	})
 
 	if execMode == "remote" {
@@ -135,11 +144,14 @@ func main() {
 				cliClient.SetSkipPermissions(true)
 				log.Println("[cli] skip-permissions enabled — all tools auto-approved")
 			}
+
+			// Attach CLI client to both the adapter and handler (handler needs it for auth).
+			adapter.SetClaudeCLI(cliClient)
 			h.SetClaudeCLI(cliClient)
 
 			// Set MCP config path if it exists.
 			if mcpPath := claudecli.MCPConfigPath(claudeDir); mcpPath != "" {
-				h.SetMCPConfig(mcpPath)
+				adapter.SetMCPConfig(mcpPath)
 			}
 
 			if cliClient.IsAvailable() {
@@ -150,10 +162,22 @@ func main() {
 		}
 	}
 
-	// Register routes.
-	router.GET("/health", h.Health)
-	pluginsdk.RegisterAgentChat(router, h)
-	router.GET("/mcp", h.DiscoveredTools)
+	router := gin.Default()
+
+	// Wire event emission from the adapter to the SDK.
+	h.SetSDK(sdkClient)
+	adapter.SetEmitEvent(func(eventType, detail string) {
+		sdkClient.PublishEvent(eventType, detail)
+	})
+
+	// Register core agent routes via agentkit (/chat, /health, /mcp).
+	agentkit.RegisterAgentChat(router, sdkClient, adapter, defaultSystemPrompt,
+		agentkit.WithDefaultModel(model),
+		agentkit.WithMaxTokens(8192),
+		agentkit.WithDebug(debug),
+	)
+
+	// Plugin-specific routes (not handled by agentkit).
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
@@ -172,15 +196,12 @@ func main() {
 	// Apply config updates in-place without restarting the container.
 	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		h.ApplyConfig(p.Config)
+		adapter.ApplyConfig(p.Config)
 	})
 
 	// MCP server integration: CLI subprocess connects directly to infra-mcp-server
 	// via mTLS. Direct connection allows the mcp-go server to push tools/list_changed
 	// notifications to Claude CLI when tools are added or removed.
-	//
-	// Two modes — enable or disable — each leaves the system fully consistent:
-	//   Enable:  peer cache set + mcpPluginID set + config file written
-	//   Disable: peer cache cleared + mcpPluginID cleared + config file removed
 	if backend == "cli" {
 		claudeDir := configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude")
 		const mcpPlugin = "infra-mcp-server"
@@ -193,14 +214,14 @@ func main() {
 				log.Printf("[mcp] enable: failed to write config: %v", err)
 				return
 			}
-			h.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
+			adapter.SetMCPConfig(claudecli.MCPConfigPath(claudeDir))
 			log.Printf("[mcp] enabled: direct=%s", directURL)
 		}
 
 		disableMCP := func() {
 			sdkClient.InvalidatePeer(mcpPlugin)
 			h.SetMCPPluginID("")
-			h.SetMCPConfig("")
+			adapter.SetMCPConfig("")
 			if err := claudecli.RemoveMCPConfig(claudeDir); err != nil {
 				log.Printf("[mcp] disable: failed to remove config: %v", err)
 			}
@@ -252,21 +273,25 @@ func main() {
 		// pick up the updated tool list on their next initialize handshake.
 		events.OnMCPToolsChanged(sdkClient, func() {
 			log.Printf("[mcp] tools changed — cycling CLI process pool")
-			h.CyclePool()
+			adapter.CyclePool()
 		})
 	}
 
 	// Copy sidecar binary to shared disk so workspace containers can run it.
-	if src, err := os.ReadFile("/usr/local/bin/claude-exec-server"); err == nil {
-		dst := "/sidecar-bin/claude-exec-server"
-		if err := os.WriteFile(dst, src, 0755); err != nil {
-			log.Printf("WARNING: failed to write sidecar binary: %v", err)
-		} else {
-			log.Printf("[sidecar] wrote exec-server binary to %s", dst)
+	if _, err := os.Stat("/sidecar-bin"); err == nil {
+		if src, err := os.ReadFile("/usr/local/bin/claude-exec-server"); err == nil {
+			dst := "/sidecar-bin/claude-exec-server"
+			tmp := dst + ".tmp"
+			if err := os.WriteFile(tmp, src, 0755); err != nil {
+				log.Printf("WARNING: failed to write sidecar binary temp: %v", err)
+			} else if err := os.Rename(tmp, dst); err != nil {
+				log.Printf("WARNING: failed to rename sidecar binary: %v", err)
+				os.Remove(tmp)
+			} else {
+				log.Printf("[sidecar] wrote exec-server binary to %s", dst)
+			}
 		}
 	}
-
-	h.SetSDK(sdkClient)
 
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)

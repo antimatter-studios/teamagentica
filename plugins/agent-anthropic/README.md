@@ -1,4 +1,4 @@
-# agent-claude
+# agent-anthropic
 
 AI agent powered by Anthropic Claude models with CLI and API key backends, workspace support, MCP integration, and SSE streaming.
 
