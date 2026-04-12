@@ -46,7 +46,6 @@ func Init(path string) {
 	}
 
 	loadCachedJWTSecret(DB)
-	seedDefaultProvider(DB)
 	seedSystemPlugins(DB)
 
 	log.Println("database initialized at", dbPath)
@@ -69,46 +68,6 @@ func Reinit() error {
 	}
 	log.Println("database reinitialized after restore")
 	return nil
-}
-
-// seedDefaultProvider idempotently creates the default marketplace provider
-// record, deriving the URL from the system-teamagentica-plugin-provider system plugin definition.
-func seedDefaultProvider(db *gorm.DB) {
-	var sp *systemPlugin
-	for i := range systemPlugins {
-		if systemPlugins[i].ID == "system-teamagentica-plugin-provider" {
-			sp = &systemPlugins[i]
-			break
-		}
-	}
-	if sp == nil {
-		log.Println("database: no system-teamagentica-plugin-provider in systemPlugins, skipping default provider seed")
-		return
-	}
-
-	providerURL := fmt.Sprintf("https://teamagentica-plugin-%s:%d", sp.ID, sp.HTTPPort)
-
-	var existing models.Provider
-	if db.First(&existing, "name = ?", sp.Name).Error == nil {
-		if existing.URL != providerURL {
-			db.Model(&existing).Update("url", providerURL)
-			log.Printf("database: updated default provider url to %s", providerURL)
-		}
-		return
-	}
-
-	provider := models.Provider{
-		Name:    sp.Name,
-		URL:     providerURL,
-		System:  true,
-		Enabled: true,
-	}
-	if err := db.Create(&provider).Error; err != nil {
-		log.Printf("database: failed to seed default provider: %v", err)
-		return
-	}
-
-	log.Printf("database: default provider seeded (url=%s)", providerURL)
 }
 
 // systemPlugin defines a plugin that must always exist in the database.

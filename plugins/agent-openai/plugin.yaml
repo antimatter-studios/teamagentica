@@ -2,7 +2,7 @@ id: agent-openai
 name: "OpenAI Agent"
 description: "AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities"
 group: agents
-version: "1.0.69"
+version: "1.0.70"
 image: "teamagentica-agent-openai:latest"
 author: teamagentica
 tags: [chat, ai, agent, codex]
@@ -18,6 +18,7 @@ config_schema:
     order: 1
   OPENAI_AUTH:
     type: oauth
+    oauth_method: device_code
     label: "Login with OpenAI"
     help_text: "Authenticate with your OpenAI account to use Codex models"
     visible_when:
@@ -66,8 +67,80 @@ default_pricing:
     cached_per_1m: 0.275
     currency: USD
   - provider: openai
+    model: gpt-5-nano
+    input_per_1m: 0.05
+    output_per_1m: 0.40
+    cached_per_1m: 0.005
+    currency: USD
+  - provider: openai
+    model: gpt-5-mini
+    input_per_1m: 0.25
+    output_per_1m: 2.00
+    cached_per_1m: 0.025
+    currency: USD
+  - provider: openai
+    model: gpt-5-codex
+    input_per_1m: 1.25
+    output_per_1m: 10.00
+    cached_per_1m: 0.125
+    currency: USD
+  - provider: openai
+    model: gpt-5.1
+    input_per_1m: 0.625
+    output_per_1m: 5.00
+    cached_per_1m: 0.125
+    currency: USD
+  - provider: openai
     model: gpt-5.1-codex
     input_per_1m: 1.25
     output_per_1m: 10.00
-    cached_per_1m: 0.625
+    cached_per_1m: 0.125
+    currency: USD
+  - provider: openai
+    model: gpt-5.1-codex-max
+    input_per_1m: 1.25
+    output_per_1m: 10.00
+    cached_per_1m: 0.125
+    currency: USD
+  - provider: openai
+    model: gpt-5.1-codex-mini
+    input_per_1m: 0.25
+    output_per_1m: 2.00
+    cached_per_1m: 0.025
+    currency: USD
+  - provider: openai
+    model: gpt-5.2
+    input_per_1m: 0.875
+    output_per_1m: 7.00
+    cached_per_1m: 0.175
+    currency: USD
+  - provider: openai
+    model: gpt-5.2-codex
+    input_per_1m: 1.75
+    output_per_1m: 14.00
+    cached_per_1m: 0.175
+    currency: USD
+  - provider: openai
+    model: gpt-5.3-codex
+    input_per_1m: 1.75
+    output_per_1m: 14.00
+    cached_per_1m: 0.175
+    currency: USD
+  - provider: openai
+    model: gpt-5.4
+    input_per_1m: 2.50
+    output_per_1m: 15.00
+    cached_per_1m: 0.25
+    currency: USD
+  - provider: openai
+    model: gpt-5.4-mini
+    input_per_1m: 0.75
+    output_per_1m: 4.50
+    cached_per_1m: 0.075
+    currency: USD
+  - provider: openai
+    model: gpt-5.4-nano
+    input_per_1m: 0.20
+    output_per_1m: 1.25
+    cached_per_1m: 0.02
     currency: USD

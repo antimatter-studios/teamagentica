@@ -70,5 +70,5 @@ When `is_coordinator` is true, the agent builds a system prompt that includes av
 
 ## Related
 
-- [agent-claude](agent-claude.md), [agent-openai](agent-openai.md), [agent-gemini](agent-gemini.md) — Other agent plugins
+- [agent-anthropic](agent-anthropic.md), [agent-openai](agent-openai.md), [agent-google](agent-google.md) — Other agent plugins
 - [Plugin SDK](../plugin-sdk.md) — Tool discovery and alias integration

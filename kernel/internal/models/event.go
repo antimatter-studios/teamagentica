@@ -10,16 +10,3 @@ type EventSubscription struct {
 	CallbackPath string `gorm:"not null"`
 	CreatedAt    time.Time
 }
-
-// Event represents an addressed event awaiting successful delivery.
-// GORM table: "events"
-type Event struct {
-	ID             uint      `gorm:"primaryKey"`
-	EventType      string    `gorm:"index;not null"`
-	SourcePluginID string    `gorm:"not null"`
-	TargetPluginID string    `gorm:"index;not null"`
-	CallbackPath   string    `gorm:"not null"`
-	Payload        string    `gorm:"type:text;not null"`
-	Attempts       int       `gorm:"default:0"`
-	CreatedAt      time.Time
-}

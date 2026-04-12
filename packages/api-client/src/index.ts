@@ -12,7 +12,7 @@ import { TasksAPI } from "./tasks.js";
 import { AgentRegistryAPI } from "./agents.js";
 import { UsersAPI } from "./users.js";
 import { SchedulerAPI } from "./scheduler.js";
-import { PersonaAPI } from "./personas.js";
+import { AgentAPI } from "./agent-registry.js";
 import { MemoryAPI } from "./memory.js";
 
 export class TeamAgenticaClient {
@@ -30,7 +30,7 @@ export class TeamAgenticaClient {
   readonly agents: AgentRegistryAPI;
   readonly users: UsersAPI;
   readonly scheduler: SchedulerAPI;
-  readonly personas: PersonaAPI;
+  readonly agentRegistry: AgentAPI;
   readonly memory: MemoryAPI;
 
   constructor(config: ClientConfig) {
@@ -48,7 +48,7 @@ export class TeamAgenticaClient {
     this.agents = new AgentRegistryAPI(this.http);
     this.users = new UsersAPI(this.http);
     this.scheduler = new SchedulerAPI(this.http);
-    this.personas = new PersonaAPI(this.http);
+    this.agentRegistry = new AgentAPI(this.http);
     this.memory = new MemoryAPI(this.http);
   }
 
@@ -94,7 +94,7 @@ export { AliasesAPI } from "./aliases.js";
 
 export { EventsAPI } from "./events.js";
 
-export type { Environment, Workspace, Disk, ExtraDisk, WorkspaceOptions, WorkspaceOptionsUpdate } from "./workspaces.js";
+export type { Environment, Workspace, Disk, WorkspaceDisk, WorkspaceOptions, WorkspaceOptionsUpdate } from "./workspaces.js";
 export { WorkspacesAPI } from "./workspaces.js";
 
 export type {
@@ -122,8 +122,8 @@ export { UsersAPI } from "./users.js";
 export type { ScheduledEvent, EventLogEntry, CreateEventRequest, UpdateEventRequest } from "./scheduler.js";
 export { SchedulerAPI } from "./scheduler.js";
 
-export type { Persona, PersonaRole, CreatePersonaRequest, UpdatePersonaRequest, CreateRoleRequest, UpdateRoleRequest } from "./personas.js";
-export { PersonaAPI } from "./personas.js";
+export type { AgentEntry, CreateAgentEntryRequest, UpdateAgentEntryRequest } from "./agent-registry.js";
+export { AgentAPI } from "./agent-registry.js";
 
 export type { Memory, MemoryEntity, LCMConversation, LCMMessage } from "./memory.js";
 export { MemoryAPI } from "./memory.js";

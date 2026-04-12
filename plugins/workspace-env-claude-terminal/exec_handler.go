@@ -30,7 +30,7 @@ type userMessage struct {
 	ConversationID string `json:"conversation_id"`
 }
 
-// ExecServer exposes the claudecli.Client over WebSocket so an agent-claude
+// ExecServer exposes the claudecli.Client over WebSocket so an agent-anthropic
 // sidecar can proxy Claude CLI execution into this workspace container.
 type ExecServer struct {
 	client *claudecli.Client

@@ -10,7 +10,7 @@ Each alias maps a name to a target plugin with optional model and system prompt.
 
 | Type | Description | Example |
 |------|-------------|---------|
-| `agent` | Full persona: provider plugin + model + system prompt | `coder` -> `agent-claude` |
+| `agent` | Full persona: provider plugin + model + system prompt | `coder` -> `agent-anthropic` |
 | `tool_agent` | AI-powered tool plugin | `nanobanana` -> `tool-nanobanana` |
 | `tool` | Service plugin | `storage` -> `storage-sss3` |
 

@@ -68,36 +68,26 @@ export interface CostExplorerUser {
   count: number;
 }
 
-export interface ExternalUserMapping {
-  id: number;
-  teamagentica_user_id: number;
-  external_id: string;
-  source: string;
-  label: string;
-  created_at: string;
-  updated_at: string;
-}
-
 export class CostsAPI {
   private http: HttpTransport;
   constructor(http: HttpTransport) { this.http = http; }
 
   async fetchPricing(): Promise<ModelPrice[]> {
-    return this.http.get<ModelPrice[]>("/api/pricing");
+    return this.http.get<ModelPrice[]>("/api/route/infra-cost-tracking/pricing");
   }
 
   async fetchCurrentPricing(): Promise<ModelPrice[]> {
-    return this.http.get<ModelPrice[]>("/api/pricing/current");
+    return this.http.get<ModelPrice[]>("/api/route/infra-cost-tracking/pricing/current");
   }
 
   async savePricing(
     price: Omit<ModelPrice, "id" | "effective_from" | "effective_to" | "created_at">
   ): Promise<ModelPrice> {
-    return this.http.post<ModelPrice>("/api/pricing", price);
+    return this.http.post<ModelPrice>("/api/route/infra-cost-tracking/pricing", price);
   }
 
   async deletePricing(id: number): Promise<void> {
-    return this.http.delete(`/api/pricing/${id}`);
+    return this.http.delete(`/api/route/infra-cost-tracking/pricing/${id}`);
   }
 
   async fetchPluginUsageRecords(
@@ -121,32 +111,5 @@ export class CostsAPI {
 
   async fetchCostExplorerUsers(): Promise<{ users: CostExplorerUser[] }> {
     return this.http.get("/api/route/infra-cost-tracking/usage/users");
-  }
-
-  async fetchExternalUsers(
-    source?: string
-  ): Promise<{ mappings: ExternalUserMapping[] }> {
-    const qs = source ? `?source=${encodeURIComponent(source)}` : "";
-    return this.http.get(`/api/external-users${qs}`);
-  }
-
-  async createExternalUser(data: {
-    external_id: string;
-    source: string;
-    teamagentica_user_id: number;
-    label?: string;
-  }): Promise<ExternalUserMapping> {
-    return this.http.post("/api/external-users", data);
-  }
-
-  async updateExternalUser(
-    id: number,
-    data: { teamagentica_user_id?: number; label?: string }
-  ): Promise<ExternalUserMapping> {
-    return this.http.put(`/api/external-users/${id}`, data);
-  }
-
-  async deleteExternalUser(id: number): Promise<void> {
-    return this.http.delete(`/api/external-users/${id}`);
   }
 }

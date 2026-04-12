@@ -88,13 +88,12 @@ func (p *pluginProxy) resolveLLM() (aliasTarget, string) {
 	persona := fetchPersona(p.sdk, aliasName)
 	if persona != nil {
 		resolution.systemPrompt = persona.SystemPrompt
-		resolved, err := resolveAlias(p.sdk, persona.BackendAlias)
-		if err != nil {
-			log.Printf("[proxy] failed to resolve persona backend_alias %q: %v — falling back to cached target", persona.BackendAlias, err)
-			resolution.target = p.getTarget("llm")
+		if persona.Plugin != "" {
+			resolution.target = aliasTarget{Plugin: persona.Plugin, Model: persona.Model}
+			log.Printf("[proxy] resolved persona %q → %s/%s (prompt %d chars)", aliasName, persona.Plugin, persona.Model, len(persona.SystemPrompt))
 		} else {
-			resolution.target = resolved
-			log.Printf("[proxy] resolved persona %q → %s/%s (prompt %d chars)", aliasName, resolved.Plugin, resolved.Model, len(persona.SystemPrompt))
+			log.Printf("[proxy] persona %q has no plugin — falling back to cached target", aliasName)
+			resolution.target = p.getTarget("llm")
 		}
 	} else {
 		// Not a persona — resolve as regular alias.
@@ -262,7 +261,7 @@ func resolveAlias(sdk *pluginsdk.Client, aliasName string) (aliasTarget, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	body, err := sdk.RouteToPlugin(ctx, "infra-alias-registry", "GET", "/alias/"+aliasName, nil)
+	body, err := sdk.RouteToPlugin(ctx, "infra-agent-registry", "GET", "/alias/"+aliasName, nil)
 	if err != nil {
 		return aliasTarget{}, fmt.Errorf("fetch alias %q: %w", aliasName, err)
 	}
@@ -280,8 +279,8 @@ func resolveAlias(sdk *pluginsdk.Client, aliasName string) (aliasTarget, error) 
 
 // fetchPersona checks if aliasName matches a persona and returns it.
 // Returns nil if no persona matches.
-func fetchPersona(sdk *pluginsdk.Client, aliasName string) *pluginsdk.PersonaInfo {
-	personas, err := sdk.FetchPersonas()
+func fetchPersona(sdk *pluginsdk.Client, aliasName string) *pluginsdk.AgentInfo {
+	personas, err := sdk.FetchAgents()
 	if err != nil {
 		log.Printf("[config] failed to fetch personas: %v", err)
 		return nil
@@ -307,15 +306,12 @@ func applyConfig(sdk *pluginsdk.Client, proxy *pluginProxy, config map[string]st
 		proxy.setLLMAliasName(llmAlias)
 
 		persona := fetchPersona(sdk, llmAlias)
-		if persona != nil {
-			log.Printf("[config] persona %q detected (%d char prompt), resolving via backend_alias %q",
-				llmAlias, len(persona.SystemPrompt), persona.BackendAlias)
-			resolved, err := resolveAlias(sdk, persona.BackendAlias)
-			if err != nil {
-				log.Printf("[config] LLM alias %q not yet available: %v — will retry in background", persona.BackendAlias, err)
-			} else {
-				llm = resolved
-			}
+		if persona != nil && persona.Plugin != "" {
+			log.Printf("[config] persona %q detected (%d char prompt), plugin=%q model=%q",
+				llmAlias, len(persona.SystemPrompt), persona.Plugin, persona.Model)
+			llm = aliasTarget{Plugin: persona.Plugin, Model: persona.Model}
+		} else if persona != nil {
+			log.Printf("[config] persona %q has no plugin — will retry in background", llmAlias)
 		} else {
 			resolved, err := resolveAlias(sdk, llmAlias)
 			if err != nil {
@@ -366,11 +362,13 @@ func retryAliasResolution(sdk *pluginsdk.Client, proxy *pluginProxy, config map[
 
 		if llmAlias != "" {
 			persona := fetchPersona(sdk, llmAlias)
-			target := llmAlias
-			if persona != nil {
-				target = persona.BackendAlias
+			var resolved aliasTarget
+			var err error
+			if persona != nil && persona.Plugin != "" {
+				resolved = aliasTarget{Plugin: persona.Plugin, Model: persona.Model}
+			} else {
+				resolved, err = resolveAlias(sdk, llmAlias)
 			}
-			resolved, err := resolveAlias(sdk, target)
 			if err != nil {
 				allResolved = false
 			} else {
@@ -715,23 +713,7 @@ func fetchLLMOptions(sdk *pluginsdk.Client) []string {
 		seen[strings.ToLower(a)] = true
 	}
 
-	// Get personas — only include those whose backend_alias resolves to an agent:chat plugin.
-	personas, err := sdk.FetchPersonas()
-	if err != nil {
-		log.Printf("[config-options] failed to fetch personas: %v", err)
-		return chatAliases
-	}
-
-	options := make([]string, 0, len(chatAliases)+len(personas))
-	// Personas first — they're the interesting ones with custom prompts.
-	for _, p := range personas {
-		name := strings.ToLower(p.Alias)
-		backend := strings.ToLower(p.BackendAlias)
-		if name != "" && !seen[name] && chatSet[backend] {
-			options = append(options, p.Alias)
-			seen[name] = true
-		}
-	}
-	options = append(options, chatAliases...)
-	return options
+	// After the persona/alias merge, chatAliases already includes all personas
+	// with agent:chat capability. No separate persona lookup needed.
+	return chatAliases
 }

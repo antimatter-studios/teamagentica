@@ -120,10 +120,10 @@ Dynamic list from Gemini API (filters to models containing `"image"` that suppor
 
 - Per-request model override via `model` parameter
 - Returns both text description and generated image
-- Shares `GEMINI_API_KEY` with agent-gemini and tool-veo
+- Shares `GEMINI_API_KEY` with agent-google and tool-veo
 
 ## Related
 
 - [tool-stability](tool-stability.md) — Alternative image generator (Stability AI)
-- [agent-gemini](agent-gemini.md) — Uses same Gemini API for chat
+- [agent-google](agent-google.md) — Uses same Gemini API for chat
 - [mcp-server](infra-mcp-server.md) — Discovers this plugin's `/tools` endpoint

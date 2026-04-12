@@ -36,9 +36,10 @@ export interface Disk {
   extensions?: string[];
 }
 
-export interface ExtraDisk {
+export interface WorkspaceDisk {
   disk_id: string;
   name: string;
+  type: string;                // "workspace" or "shared"
   target: string;
   read_only?: boolean;
 }
@@ -46,7 +47,8 @@ export interface ExtraDisk {
 export interface WorkspaceOptions {
   container_id: string;
   env_overrides: string;       // JSON string: {"KEY": "value"}
-  extra_disks: string;         // JSON string: ExtraDisk[]
+  disks: string;               // JSON string: WorkspaceDisk[]
+  extra_disks: string;         // deprecated: migrated to disks
   agent_plugin: string;
   agent_model: string;
   sidecar_id: string;
@@ -54,7 +56,7 @@ export interface WorkspaceOptions {
 
 export interface WorkspaceOptionsUpdate {
   env_overrides?: Record<string, string>;
-  extra_disks?: ExtraDisk[];
+  disks?: WorkspaceDisk[];
   agent_plugin?: string;
   agent_model?: string;
 }

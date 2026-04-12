@@ -56,6 +56,18 @@ var Groups = []GroupMeta{
 	{ID: "workspace", Name: "Workspaces", Description: "Development environments and workspace management", Order: 7},
 }
 
+// Provider represents a marketplace plugin provider.
+type Provider struct {
+	ID        uint           `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name      string         `json:"name" gorm:"not null;uniqueIndex"`
+	URL       string         `json:"url" gorm:"not null"`
+	System    bool           `json:"system" gorm:"default:false"`
+	Enabled   bool           `json:"enabled" gorm:"default:true"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
 // Store wraps the catalog database.
 type Store struct {
 	db *gorm.DB
@@ -65,11 +77,75 @@ type Store struct {
 func Open(path string) (*Store, error) {
 	dir := filepath.Dir(path)
 	name := filepath.Base(path)
-	db, err := pluginsdk.OpenDatabase(dir, name, &Manifest{})
+	db, err := pluginsdk.OpenDatabase(dir, name, &Manifest{}, &Provider{})
 	if err != nil {
 		return nil, fmt.Errorf("open catalog db: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// SeedProvider idempotently creates or updates a provider by name.
+func (s *Store) SeedProvider(name, url string, system bool) error {
+	var existing Provider
+	if s.db.Where("name = ?", name).First(&existing).Error == nil {
+		if existing.URL != url {
+			return s.db.Model(&existing).Update("url", url).Error
+		}
+		return nil
+	}
+	return s.db.Create(&Provider{
+		Name:    name,
+		URL:     url,
+		System:  system,
+		Enabled: true,
+	}).Error
+}
+
+// ListProviders returns all providers.
+func (s *Store) ListProviders() ([]Provider, error) {
+	var providers []Provider
+	err := s.db.Find(&providers).Error
+	return providers, err
+}
+
+// ListEnabledProviders returns only enabled providers.
+func (s *Store) ListEnabledProviders() ([]Provider, error) {
+	var providers []Provider
+	err := s.db.Where("enabled = ?", true).Find(&providers).Error
+	return providers, err
+}
+
+// GetProvider returns a provider by ID.
+func (s *Store) GetProvider(id uint) (*Provider, error) {
+	var p Provider
+	err := s.db.First(&p, "id = ?", id).Error
+	return &p, err
+}
+
+// GetProviderByName returns a provider by name (enabled only).
+func (s *Store) GetProviderByName(name string) (*Provider, error) {
+	var p Provider
+	err := s.db.Where("name = ? AND enabled = ?", name, true).First(&p).Error
+	return &p, err
+}
+
+// CreateProvider adds a new provider.
+func (s *Store) CreateProvider(name, url string) (*Provider, error) {
+	p := Provider{Name: name, URL: url, Enabled: true}
+	err := s.db.Create(&p).Error
+	return &p, err
+}
+
+// DeleteProvider soft-deletes a non-system provider.
+func (s *Store) DeleteProvider(id uint) error {
+	var p Provider
+	if err := s.db.First(&p, "id = ?", id).Error; err != nil {
+		return fmt.Errorf("provider not found")
+	}
+	if p.System {
+		return fmt.Errorf("system providers cannot be deleted")
+	}
+	return s.db.Delete(&p).Error
 }
 
 // Upsert inserts or updates a manifest for a given plugin+version.

@@ -163,7 +163,7 @@ model:         claude-opus-4-6 # optional model override
 relay → @coder → infra-agent-persona
                       ↓ injects system_prompt
                       ↓ forwards to @claude
-                 agent-claude → Claude API → response
+                 agent-anthropic → Claude API → response
 ```
 
 ### Why Database, Not Config

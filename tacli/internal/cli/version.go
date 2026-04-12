@@ -123,7 +123,7 @@ func renderPluginGroup(r render.Renderer, group string, plugins []client.PluginS
 	}
 }
 
-// pluginGroup extracts the group from a plugin ID like "agent-claude" → "agent".
+// pluginGroup extracts the group from a plugin ID like "agent-anthropic" → "agent".
 func pluginGroup(id string) string {
 	if idx := strings.Index(id, "-"); idx > 0 {
 		return id[:idx]

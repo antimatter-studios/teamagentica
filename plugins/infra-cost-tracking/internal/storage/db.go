@@ -30,6 +30,24 @@ type UsageRecord struct {
 	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
+// ModelPrice stores per-model pricing with effective date windows.
+// When a price is updated, the old row gets EffectiveTo set and a new row is created,
+// preserving historical pricing for accurate cost calculation over time.
+type ModelPrice struct {
+	ID            uint       `json:"id" gorm:"primaryKey"`
+	Provider      string     `json:"provider" gorm:"index"`
+	Model         string     `json:"model" gorm:"index"`
+	InputPer1M    float64    `json:"input_per_1m"`
+	OutputPer1M   float64    `json:"output_per_1m"`
+	CachedPer1M   float64    `json:"cached_per_1m"`
+	PerRequest    float64    `json:"per_request"`
+	Subscription  float64    `json:"subscription"`
+	Currency      string     `json:"currency" gorm:"default:'USD'"`
+	EffectiveFrom time.Time  `json:"effective_from"`
+	EffectiveTo   *time.Time `json:"effective_to"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
 // DB wraps the GORM connection for usage storage.
 type DB struct {
 	db *gorm.DB
@@ -37,7 +55,7 @@ type DB struct {
 
 // Open creates or opens the SQLite database at dataPath/costs.db.
 func Open(dataPath string) (*DB, error) {
-	conn, err := pluginsdk.OpenDatabase(dataPath, "costs.db", &UsageRecord{})
+	conn, err := pluginsdk.OpenDatabase(dataPath, "costs.db", &UsageRecord{}, &ModelPrice{})
 	if err != nil {
 		return nil, err
 	}
@@ -138,4 +156,54 @@ func (d *DB) DistinctUsers() ([]map[string]interface{}, error) {
 		}
 	}
 	return out, nil
+}
+
+// ListPrices returns all pricing entries ordered by provider, model, effective_from DESC.
+func (d *DB) ListPrices() ([]ModelPrice, error) {
+	var prices []ModelPrice
+	err := d.db.Order("provider, model, effective_from DESC").Find(&prices).Error
+	return prices, err
+}
+
+// ListCurrentPrices returns only prices where effective_to IS NULL.
+func (d *DB) ListCurrentPrices() ([]ModelPrice, error) {
+	var prices []ModelPrice
+	err := d.db.Where("effective_to IS NULL").Order("provider, model").Find(&prices).Error
+	return prices, err
+}
+
+// SavePrice creates a new price record.
+func (d *DB) SavePrice(price *ModelPrice) error {
+	return d.db.Create(price).Error
+}
+
+// ClosePrice sets effective_to on the current price for provider+model.
+func (d *DB) ClosePrice(provider, model string, at time.Time) error {
+	return d.db.Model(&ModelPrice{}).
+		Where("provider = ? AND model = ? AND effective_to IS NULL", provider, model).
+		Update("effective_to", at).Error
+}
+
+// DeletePrice removes a pricing entry by ID.
+func (d *DB) DeletePrice(id uint) error {
+	return d.db.Delete(&ModelPrice{}, id).Error
+}
+
+// CountPrices returns the number of price records for a provider+model.
+func (d *DB) CountPrices(provider, model string) (int64, error) {
+	var count int64
+	err := d.db.Model(&ModelPrice{}).Where("provider = ? AND model = ?", provider, model).Count(&count).Error
+	return count, err
+}
+
+// EarliestUsageTimestamp returns the earliest usage record timestamp for a provider+model.
+func (d *DB) EarliestUsageTimestamp(provider, model string) time.Time {
+	var rec UsageRecord
+	err := d.db.Where("provider = ? AND model = ?", provider, model).
+		Order("timestamp ASC").
+		First(&rec).Error
+	if err != nil {
+		return time.Time{}
+	}
+	return rec.Timestamp
 }

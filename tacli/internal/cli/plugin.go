@@ -429,7 +429,7 @@ func pluginConfigGet(c *client.Client, pluginID string, keys []string) error {
 	return nil
 }
 
-// pluginTypeFromID extracts the type prefix from a plugin ID (e.g. "agent-claude" → "agent").
+// pluginTypeFromID extracts the type prefix from a plugin ID (e.g. "agent-anthropic" → "agent").
 func pluginTypeFromID(id string) string {
 	if i := strings.Index(id, "-"); i > 0 {
 		return id[:i]

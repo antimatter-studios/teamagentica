@@ -15,13 +15,7 @@ func init() {
 			&models.Config{},
 			&models.ServiceToken{},
 			&models.AuditLog{},
-			&models.Provider{},
-			&models.ModelPrice{},
 			&models.EventSubscription{},
-			&models.Event{},
-			&models.Alias{},
-			&models.ExternalUser{},
-			&models.EventLog{},
 			&models.ManagedContainer{},
 		)
 	})

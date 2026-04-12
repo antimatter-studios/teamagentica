@@ -1,4 +1,4 @@
-module github.com/antimatter-studios/teamagentica/plugins/infra-agent-persona
+module github.com/antimatter-studios/teamagentica/plugins/infra-agent-registry
 
 go 1.25.0
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ExtraDisk, WorkspaceOptions, Workspace, Environment, Disk } from "@teamagentica/api-client";
+import type { WorkspaceDisk, WorkspaceOptions, Workspace, Environment, Disk } from "@teamagentica/api-client";
 import { apiClient } from "../api/client";
 import type { Plugin } from "@teamagentica/api-client";
 import SaveButton from "./SaveButton";
@@ -13,6 +13,14 @@ interface Props {
   onClose: () => void;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const val = bytes / Math.pow(1024, i);
+  return `${val < 10 ? val.toFixed(1) : Math.round(val)} ${units[i]}`;
+}
+
 export default function WorkspaceSettings({ workspaceId, workspace: ws, environment: env, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
   const [restarting, setRestarting] = useState(false);
@@ -22,6 +30,7 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
 
   const [agentPlugins, setAgentPlugins] = useState<Plugin[]>([]);
   const [sharedDisks, setSharedDisks] = useState<Disk[]>([]);
+  const [diskDetails, setDiskDetails] = useState<Map<string, Disk>>(new Map());
 
   useEffect(() => {
     setOptionsLoading(true);
@@ -35,11 +44,20 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
       setAgentPlugins(plugins.filter((p) => p.capabilities?.includes("agent:chat") && p.enabled));
     }).catch(() => {});
     apiClient.workspaces.listDisks("shared").then(setSharedDisks).catch(() => {});
+    // Fetch all disk details for size/metadata display.
+    Promise.all([
+      apiClient.workspaces.listDisks("workspace"),
+      apiClient.workspaces.listDisks("shared"),
+    ]).then(([wDisks, sDisks]) => {
+      const map = new Map<string, Disk>();
+      for (const d of [...wDisks, ...sDisks]) map.set(d.id, d);
+      setDiskDetails(map);
+    }).catch(() => {});
   }, []);
 
   // Local form state.
   const [envOverrides, setEnvOverrides] = useState<Record<string, string>>({});
-  const [extraDisks, setExtraDisks] = useState<ExtraDisk[]>([]);
+  const [disks, setDisks] = useState<WorkspaceDisk[]>([]);
   const [agentPlugin, setAgentPlugin] = useState("");
   const [agentModel, setAgentModel] = useState("");
 
@@ -51,9 +69,16 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
       setEnvOverrides(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {});
     } catch { setEnvOverrides({}); }
     try {
-      const parsed = options.extra_disks ? JSON.parse(options.extra_disks) : [];
-      setExtraDisks(Array.isArray(parsed) ? parsed : []);
-    } catch { setExtraDisks([]); }
+      // Prefer unified disks field, fall back to deprecated extra_disks.
+      const raw = options.disks || options.extra_disks;
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) {
+        // Ensure legacy extra_disks entries get a type.
+        setDisks(parsed.map((d: WorkspaceDisk) => ({ ...d, type: d.type || "shared" })));
+      } else {
+        setDisks([]);
+      }
+    } catch { setDisks([]); }
     setAgentPlugin(options.agent_plugin || "");
     setAgentModel(options.agent_model || "");
   }, [options]);
@@ -77,38 +102,42 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
     });
   };
 
-  // Extra disk helpers.
+  // Disk helpers.
   const [newDiskId, setNewDiskId] = useState("");
   const [newDiskTarget, setNewDiskTarget] = useState("");
   const [newDiskRO, setNewDiskRO] = useState(false);
 
-  const addExtraDisk = () => {
+  const addDisk = () => {
     if (!newDiskId || !newDiskTarget.trim()) return;
     const disk = sharedDisks.find((d) => d.id === newDiskId);
-    setExtraDisks((prev) => [
+    setDisks((prev) => [
       ...prev,
-      { disk_id: newDiskId, name: disk?.name || newDiskId, target: newDiskTarget.trim(), read_only: newDiskRO },
+      { disk_id: newDiskId, name: disk?.name || newDiskId, type: "shared", target: newDiskTarget.trim(), read_only: newDiskRO },
     ]);
     setNewDiskId("");
     setNewDiskTarget("");
     setNewDiskRO(false);
   };
 
-  const removeExtraDisk = (idx: number) => {
-    setExtraDisks((prev) => prev.filter((_, i) => i !== idx));
+  const removeDisk = (idx: number) => {
+    setDisks((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  // Split disks by type for display.
+  const workspaceDisks = disks.filter((d) => d.type === "workspace");
+  const sharedMountedDisks = disks.filter((d) => d.type === "shared");
+
   // Disks already attached — filter from dropdown.
-  const attachedDiskIds = new Set(extraDisks.map((d) => d.disk_id));
+  const attachedDiskIds = new Set(disks.map((d) => d.disk_id));
   const availableDisks = sharedDisks.filter((d) => !attachedDiskIds.has(d.id));
 
   const handleSave = useCallback(() => {
     // Auto-add pending form entries before saving.
-    let disksToSave = extraDisks;
+    let disksToSave = disks;
     if (newDiskId && newDiskTarget.trim()) {
       const disk = sharedDisks.find((d) => d.id === newDiskId);
-      disksToSave = [...disksToSave, { disk_id: newDiskId, name: disk?.name || newDiskId, target: newDiskTarget.trim(), read_only: newDiskRO }];
-      setExtraDisks(disksToSave);
+      disksToSave = [...disksToSave, { disk_id: newDiskId, name: disk?.name || newDiskId, type: "shared", target: newDiskTarget.trim(), read_only: newDiskRO }];
+      setDisks(disksToSave);
       setNewDiskId("");
       setNewDiskTarget("");
       setNewDiskRO(false);
@@ -123,14 +152,14 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
 
     apiClient.workspaces.updateWorkspaceOptions(workspaceId, {
       env_overrides: envToSave,
-      extra_disks: disksToSave,
+      disks: disksToSave,
       agent_plugin: agentPlugin,
       agent_model: agentModel,
     }).then((updated) => {
       setOptions(updated);
       setOptionsDirty(true);
     }).catch(() => {});
-  }, [workspaceId, envOverrides, extraDisks, agentPlugin, agentModel, newDiskId, newDiskTarget, newDiskRO, sharedDisks, newEnvKey, newEnvVal]);
+  }, [workspaceId, envOverrides, disks, agentPlugin, agentModel, newDiskId, newDiskTarget, newDiskRO, sharedDisks, newEnvKey, newEnvVal]);
 
   const handleRestart = useCallback(async () => {
     setRestarting(true);
@@ -205,6 +234,23 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
                       <span className="wss-value wss-mono">{options.sidecar_id}</span>
                     </div>
                   )}
+                  <hr className="wss-divider" />
+                  <label className="wss-label">Disks</label>
+                  {disks.length > 0 ? disks.map((d, i) => {
+                    const detail = diskDetails.get(d.disk_id);
+                    return (
+                      <div key={`overview-disk-${i}`} className="wss-disk-card">
+                        <span className="wss-disk-type-badge">{d.type}</span>
+                        <span className="wss-mono">{d.name}</span>
+                        <span className="wss-mount-arrow">&rarr;</span>
+                        <span className="wss-mono">{d.target}</span>
+                        {d.read_only && <span className="wss-mount-ro active">RO</span>}
+                        {detail && <span className="wss-disk-size">{formatBytes(detail.size_bytes)}</span>}
+                      </div>
+                    );
+                  }) : (
+                    <div className="wss-empty-hint">No disks configured</div>
+                  )}
                 </div>
               )}
 
@@ -254,21 +300,33 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
               {/* Disks Tab */}
               {tab === "disks" && (
                 <div className="wss-section">
-                  <p className="wss-hint">Attach shared disks to this workspace. Use $HOME in paths — it resolves per environment. Changes take effect on restart.</p>
+                  <p className="wss-hint">Manage disks attached to this workspace. Changes take effect on restart.</p>
                   <div className="wss-mount-list">
-                    {extraDisks.map((d, i) => (
-                      <div key={`disk-${i}-${d.disk_id}`} className="wss-mount-row">
+                    {workspaceDisks.map((d, i) => (
+                      <div key={`wdisk-${i}-${d.disk_id}`} className="wss-mount-row">
+                        <span className="wss-disk-type-badge">workspace</span>
                         <span className="wss-mount-name">{d.name}</span>
                         <span className="wss-mount-arrow">&rarr;</span>
                         <span className="wss-mono wss-mount-path">{d.target}</span>
-                        <span className={`wss-mount-ro${d.read_only ? " active" : ""}`}>
-                          {d.read_only ? "RO" : "RW"}
-                        </span>
-                        <button className="wss-btn-icon" onClick={() => removeExtraDisk(i)} title="Remove">x</button>
                       </div>
                     ))}
-                    {extraDisks.length === 0 && (
-                      <div className="wss-empty-hint">No extra disks attached.</div>
+                    {sharedMountedDisks.map((d) => {
+                      const globalIdx = disks.indexOf(d);
+                      return (
+                        <div key={`sdisk-${globalIdx}-${d.disk_id}`} className="wss-mount-row">
+                          <span className="wss-disk-type-badge">shared</span>
+                          <span className="wss-mount-name">{d.name}</span>
+                          <span className="wss-mount-arrow">&rarr;</span>
+                          <span className="wss-mono wss-mount-path">{d.target}</span>
+                          <span className={`wss-mount-ro${d.read_only ? " active" : ""}`}>
+                            {d.read_only ? "RO" : "RW"}
+                          </span>
+                          <button className="wss-btn-icon" onClick={() => removeDisk(globalIdx)} title="Remove">x</button>
+                        </div>
+                      );
+                    })}
+                    {disks.length === 0 && (
+                      <div className="wss-empty-hint">No disks attached.</div>
                     )}
                   </div>
                   {availableDisks.length > 0 && (
@@ -294,7 +352,7 @@ export default function WorkspaceSettings({ workspaceId, workspace: ws, environm
                         <input type="checkbox" checked={newDiskRO} onChange={(e) => setNewDiskRO(e.target.checked)} />
                         RO
                       </label>
-                      <button className="wss-btn wss-btn-sm" onClick={addExtraDisk} disabled={!newDiskId || !newDiskTarget.trim()}>Add</button>
+                      <button className="wss-btn wss-btn-sm" onClick={addDisk} disabled={!newDiskId || !newDiskTarget.trim()}>Add</button>
                     </div>
                   )}
                   <div className="wss-save-row">

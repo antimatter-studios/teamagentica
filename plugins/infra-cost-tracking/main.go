@@ -68,6 +68,13 @@ func main() {
 	router.GET("/usage/records", h.ListRecords)
 	router.GET("/usage/users", h.UsageUsers)
 
+	// Pricing routes.
+	router.GET("/pricing", h.ListPrices)
+	router.GET("/pricing/current", h.ListCurrentPrices)
+	router.POST("/pricing", h.SavePrice)
+	router.DELETE("/pricing/:id", h.DeletePrice)
+	router.POST("/pricing/push", h.PushPrices)
+
 	h.SetSDK(sdkClient)
 
 	// Subscribe to usage:report events via the standard event bus.

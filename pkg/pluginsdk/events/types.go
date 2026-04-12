@@ -10,8 +10,9 @@ const (
 	AliasRegistryUpdate = "alias-registry:update"
 	AliasUpdate         = "alias:update"
 
-	// Persona
-	PersonaUpdate = "persona:update"
+	// Agent Registry
+	AgentUpdate = "agent:update"
+	AgentReady  = "agent:ready"
 
 	// Config
 	ConfigUpdate = "config:update"

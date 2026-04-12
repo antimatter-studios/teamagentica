@@ -22,7 +22,6 @@ type DebugEvent struct {
 }
 
 // SSEMessage wraps a typed payload for the multiplexed SSE stream.
-// Channel is "audit" for DebugEvents or "event" for EventLog entries.
 type SSEMessage struct {
 	Channel string `json:"channel"`
 	Data    any    `json:"data"`

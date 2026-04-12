@@ -181,8 +181,32 @@ func (m *Monitor) checkPlugins(ctx context.Context) {
 
 		running, err := m.runtime.HealthCheck(ctx, p.ContainerID)
 		if err != nil {
+			// Container ID is stale (container was recreated with a new ID).
+			// Try to find the actual container by its deterministic name.
+			if actualID, actualRunning, resolveErr := m.runtime.ResolveContainerID(ctx, p.ID); resolveErr == nil {
+				log.Printf("health monitor: plugin %s had stale container_id — reconciled to %s", p.ID, actualID[:12])
+				m.db().Model(p).Update("container_id", actualID)
+				p.ContainerID = actualID
+				if actualRunning && p.Host != "" {
+					m.setStatus(p, "running")
+					m.unhealthyCounts[p.ID] = 0
+				}
+				continue
+			}
+
+			// Container truly gone — escalate toward restart.
 			m.setStatus(p, "error")
 			m.unhealthyCounts[p.ID]++
+			if m.unhealthyCounts[p.ID] >= restartThreshold {
+				log.Printf("health monitor: plugin %s container gone after %d checks — auto-restart",
+					p.ID, m.unhealthyCounts[p.ID])
+				m.db().Model(p).Updates(map[string]interface{}{
+					"status":       "stopped",
+					"host":         "",
+					"container_id": "",
+				})
+				m.tryRestart(ctx, p)
+			}
 		} else if running {
 			if p.Host == "" {
 				// Container is running but hasn't registered yet — treat as stuck.

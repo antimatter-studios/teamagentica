@@ -279,7 +279,7 @@ func (s *Server) builtinServerTools() []mcpsrv.ServerTool {
 		{
 			Tool: mcplib.NewTool("send_message",
 				mcplib.WithDescription("Send a message to another AI agent plugin for processing. Use this to delegate tasks to specialized agents."),
-				mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("The plugin ID of the agent to send the message to (e.g. agent-gemini, agent-kimi)")),
+				mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("The plugin ID of the agent to send the message to (e.g. agent-google, agent-moonshot)")),
 				mcplib.WithString("message", mcplib.Required(), mcplib.Description("The message to send to the agent")),
 				mcplib.WithString("model", mcplib.Description("Optional: specific model to use on the target agent")),
 			),

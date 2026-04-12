@@ -16,7 +16,6 @@ var configFS embed.FS
 type Config struct {
 	PluginEnv           map[string]string   `yaml:"plugin_env"`
 	DataMount           DataMountConfig     `yaml:"data_mount"`
-	StorageCrossMount   MountSpec           `yaml:"storage_cross_mount"`
 	PluginMounts        []MountSpec         `yaml:"plugin_mounts"`
 	SharedDiskMount     MountSpec           `yaml:"shared_disk_mount"`
 	ManagedPluginSource ManagedSourceConfig `yaml:"managed_plugin_source"`

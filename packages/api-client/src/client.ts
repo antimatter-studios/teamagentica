@@ -97,7 +97,9 @@ export class HttpTransport {
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.error || body.message || `HTTP ${res.status}`);
+      const detail = body.error || body.message || res.statusText;
+      const path = new URL(res.url).pathname;
+      throw new Error(`${detail} (${res.status} ${path})`);
     }
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
@@ -124,7 +126,7 @@ export class HttpTransport {
       const refreshed = await this.tryRefresh();
       if (refreshed) {
         const retryRes = await doReq();
-        if (!retryRes.ok) throw new Error(`HTTP ${retryRes.status}`);
+        if (!retryRes.ok) throw new Error(`HTTP ${retryRes.status} ${path}`);
         return retryRes.text();
       }
       this.config.onUnauthorized?.();
@@ -132,7 +134,9 @@ export class HttpTransport {
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.error || body.message || `HTTP ${res.status}`);
+      const detail = body.error || body.message || res.statusText;
+      const path = new URL(res.url).pathname;
+      throw new Error(`${detail} (${res.status} ${path})`);
     }
     return res.text();
   }
@@ -192,7 +196,7 @@ export class HttpTransport {
       headers: { "Content-Type": contentType, ...this.authHeaders() },
       body,
     });
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    if (!res.ok) throw new Error(`Upload failed (${res.status} ${path})`);
   }
 
   async getRaw(path: string): Promise<Response> {
@@ -201,7 +205,7 @@ export class HttpTransport {
       headers: this.authHeaders(),
       cache: "no-store",
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${path}`);
     return res;
   }
 
@@ -210,7 +214,7 @@ export class HttpTransport {
       method: "DELETE",
       headers: this.authHeaders(),
     });
-    if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+    if (!res.ok) throw new Error(`Delete failed (${res.status} ${path})`);
   }
 
   async postFormData<T>(path: string, formData: FormData): Promise<T> {
@@ -221,7 +225,8 @@ export class HttpTransport {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.error || `HTTP ${res.status}`);
+      const detail = body.error || res.statusText;
+      throw new Error(`${detail} (${res.status} ${path})`);
     }
     return res.json() as Promise<T>;
   }

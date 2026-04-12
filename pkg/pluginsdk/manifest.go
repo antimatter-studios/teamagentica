@@ -23,7 +23,8 @@ type Manifest struct {
 	Dependencies   []string                     `yaml:"dependencies"`
 	ConfigSchema   map[string]ConfigSchemaField `yaml:"config_schema"`
 	DefaultPricing []PricingEntry               `yaml:"default_pricing"`
-	SharedDisks    []SharedDisk                 `yaml:"shared_disks"`
+	SharedDisks     []SharedDisk                 `yaml:"shared_disks"`
+	RequestedScopes []string                     `yaml:"requested_scopes"`
 }
 
 // SharedDisk declares a named disk that should be mounted into the plugin container.
@@ -64,7 +65,7 @@ func LoadManifest() Manifest {
 
 	// Allow the kernel to override the plugin ID via PLUGIN_ID env var.
 	// This is essential for sidecar containers that reuse an existing plugin
-	// image but must register with a unique ID (e.g. ws-83a2e259-agent-claude).
+	// image but must register with a unique ID (e.g. ws-83a2e259-agent-anthropic).
 	if override := os.Getenv("PLUGIN_ID"); override != "" && override != m.ID {
 		log.Printf("pluginsdk: PLUGIN_ID override: %s → %s", m.ID, override)
 		m.ID = override
@@ -138,6 +139,7 @@ type ConfigSchemaField struct {
 	Dynamic     bool              `json:"dynamic,omitempty" yaml:"dynamic,omitempty"`
 	HelpText    string            `json:"help_text,omitempty" yaml:"help_text,omitempty"`
 	VisibleWhen *VisibleWhen      `json:"visible_when,omitempty" yaml:"visible_when,omitempty"`
+	OAuthMethod string            `json:"oauth_method,omitempty" yaml:"oauth_method,omitempty"`
 	Order       int               `json:"order,omitempty" yaml:"order,omitempty"`
 }
 

@@ -14,46 +14,45 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-// PersonaInfo is a lightweight persona descriptor for system prompt preview.
-type PersonaInfo struct {
+// AgentInfo is a lightweight persona descriptor for system prompt preview.
+type AgentInfo struct {
 	Alias        string `json:"alias"`
+	Type         string `json:"type"`
+	Plugin       string `json:"plugin"`
 	SystemPrompt string `json:"system_prompt"`
 	Model        string `json:"model"`
-	BackendAlias string `json:"backend_alias"`
-	Role         string `json:"role"`
 	IsDefault    *bool  `json:"is_default"`
 }
 
-// FetchPersonas retrieves all personas from the persona plugin via the kernel proxy.
-func (c *Client) FetchPersonas() ([]PersonaInfo, error) {
+// FetchAgents retrieves all agents from the persona plugin via the kernel proxy.
+func (c *Client) FetchAgents() ([]AgentInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	data, err := c.RouteToPlugin(ctx, "infra-agent-persona", "GET", "/personas", nil)
+	data, err := c.RouteToPlugin(ctx, "infra-agent-registry", "GET", "/agents", nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetch personas: %w", err)
+		return nil, fmt.Errorf("fetch agents: %w", err)
 	}
 
 	var result struct {
-		Personas []PersonaInfo `json:"personas"`
+		Personas []AgentInfo `json:"agents"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		// Try unwrapping if it's a bare array.
-		var personas []PersonaInfo
-		if err2 := json.Unmarshal(data, &personas); err2 == nil {
-			return personas, nil
+		var agents []AgentInfo
+		if err2 := json.Unmarshal(data, &agents); err2 == nil {
+			return agents, nil
 		}
-		return nil, fmt.Errorf("decode personas: %w", err)
+		return nil, fmt.Errorf("decode agents: %w", err)
 	}
 	return result.Personas, nil
 }
 
-// AliasPromptPreview describes one alias→persona mapping with the rendered prompt.
+// AliasPromptPreview describes one persona with the rendered prompt.
 type AliasPromptPreview struct {
 	Alias          string `json:"alias"`
-	PersonaAlias   string `json:"persona_alias"`
+	AgentAlias   string `json:"agent_alias"`
 	Model          string `json:"model"`
-	Role           string `json:"role,omitempty"`
 	IsDefault      bool   `json:"is_default"`
 	RenderedPrompt string `json:"rendered_prompt"`
 }
@@ -64,7 +63,7 @@ func (c *Client) fetchAliasesWithTypes() ([]alias.AliasInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	data, err := c.RouteToPlugin(ctx, "infra-alias-registry", "GET", "/aliases", nil)
+	data, err := c.RouteToPlugin(ctx, "infra-agent-registry", "GET", "/aliases", nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch aliases: %w", err)
 	}
@@ -111,13 +110,13 @@ func (c *Client) fetchAliasesWithTypes() ([]alias.AliasInfo, error) {
 // SystemPromptPreview returns the rendered system prompts for every
 // persona that routes to this plugin via an alias.
 func (c *Client) SystemPromptPreview(pluginID, defaultPrompt string) ([]AliasPromptPreview, error) {
-	// Fetch aliases and personas in parallel.
+	// Fetch aliases and agents in parallel.
 	type aliasResult struct {
 		infos []alias.AliasInfo
 		err   error
 	}
 	type personaResult struct {
-		personas []PersonaInfo
+		agents []AgentInfo
 		err      error
 	}
 
@@ -129,8 +128,8 @@ func (c *Client) SystemPromptPreview(pluginID, defaultPrompt string) ([]AliasPro
 		aliasC <- aliasResult{infos, err}
 	}()
 	go func() {
-		personas, err := c.FetchPersonas()
-		personaC <- personaResult{personas, err}
+		agents, err := c.FetchAgents()
+		personaC <- personaResult{agents, err}
 	}()
 
 	ar := <-aliasC
@@ -139,7 +138,7 @@ func (c *Client) SystemPromptPreview(pluginID, defaultPrompt string) ([]AliasPro
 	}
 	pr := <-personaC
 	if pr.err != nil {
-		return nil, fmt.Errorf("personas: %w", pr.err)
+		return nil, fmt.Errorf("agents: %w", pr.err)
 	}
 
 	// Build alias map for template rendering.
@@ -148,23 +147,10 @@ func (c *Client) SystemPromptPreview(pluginID, defaultPrompt string) ([]AliasPro
 	// Discover tools for template context.
 	tools := discoverToolsForPreview(c)
 
-	// Find aliases pointing to this plugin.
-	myAliases := make(map[string]alias.AliasInfo) // alias name → info
-	for _, info := range ar.infos {
-		target := strings.TrimSpace(info.Target)
-		pid := target
-		if idx := strings.Index(pid, ":"); idx > 0 {
-			pid = pid[:idx]
-		}
-		if pid == pluginID {
-			myAliases[strings.ToLower(info.Name)] = info
-		}
-	}
-	// Match personas to aliases.
+	// Match agents that route to this plugin.
 	var previews []AliasPromptPreview
-	for _, persona := range pr.personas {
-		ba := strings.ToLower(strings.TrimSpace(persona.BackendAlias))
-		if _, ok := myAliases[ba]; !ok {
+	for _, persona := range pr.agents {
+		if persona.Plugin != pluginID {
 			continue
 		}
 
@@ -173,25 +159,15 @@ func (c *Client) SystemPromptPreview(pluginID, defaultPrompt string) ([]AliasPro
 		if promptTemplate == "" {
 			promptTemplate = defaultPrompt
 		}
-		rendered := renderPromptTemplate(ba, promptTemplate, aliasMap, tools)
+		personaAlias := strings.ToLower(strings.TrimSpace(persona.Alias))
+		rendered := renderPromptTemplate(personaAlias, promptTemplate, aliasMap, tools)
 
 		isDefault := persona.IsDefault != nil && *persona.IsDefault
-		model := persona.Model
-		if model == "" {
-			// Use model from alias target if persona doesn't override.
-			if info, ok := myAliases[ba]; ok {
-				target := strings.TrimSpace(info.Target)
-				if idx := strings.Index(target, ":"); idx > 0 {
-					model = target[idx+1:]
-				}
-			}
-		}
 
 		previews = append(previews, AliasPromptPreview{
-			Alias:          ba,
-			PersonaAlias:   persona.Alias,
-			Model:          model,
-			Role:           persona.Role,
+			Alias:          personaAlias,
+			AgentAlias:   persona.Alias,
+			Model:          persona.Model,
 			IsDefault:      isDefault,
 			RenderedPrompt: rendered,
 		})

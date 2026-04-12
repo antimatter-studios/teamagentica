@@ -13,10 +13,10 @@ type AliasEntry struct {
 	Model    string `json:"model,omitempty"`
 }
 
-// PersonaUpdatePayload is emitted when a persona changes.
-type PersonaUpdatePayload struct {
-	PersonaID string `json:"persona_id,omitempty"`
-	Alias     string `json:"alias,omitempty"`
+// AgentUpdatePayload is emitted when an agent changes.
+type AgentUpdatePayload struct {
+	AgentID string `json:"agent_id,omitempty"`
+	Alias   string `json:"alias,omitempty"`
 }
 
 // ConfigUpdatePayload is emitted when plugin config changes.

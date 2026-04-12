@@ -256,7 +256,7 @@ func resolveAlias(sdk *pluginsdk.Client, aliasName string) (aliasTarget, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	body, err := sdk.RouteToPlugin(ctx, "infra-alias-registry", "GET", "/alias/"+aliasName, nil)
+	body, err := sdk.RouteToPlugin(ctx, "infra-agent-registry", "GET", "/alias/"+aliasName, nil)
 	if err != nil {
 		return aliasTarget{}, fmt.Errorf("fetch alias %q: %w", aliasName, err)
 	}
@@ -325,24 +325,9 @@ func fetchLLMOptions(sdk *pluginsdk.Client) []string {
 		}
 	}
 
-	// Get personas whose backend_alias is an agent:chat alias.
-	personas, err := sdk.FetchPersonas()
-	if err != nil {
-		log.Printf("[config-options] failed to fetch personas: %v", err)
-		return chatAliases
-	}
-
-	options := make([]string, 0, len(chatAliases)+len(personas))
-	for _, p := range personas {
-		name := strings.ToLower(p.Alias)
-		backend := strings.ToLower(p.BackendAlias)
-		if name != "" && !seen[name] && chatSet[backend] {
-			options = append(options, p.Alias)
-			seen[name] = true
-		}
-	}
-	options = append(options, chatAliases...)
-	return options
+	// After the persona/alias merge, chatAliases already includes all personas
+	// with agent:chat capability. No separate persona lookup needed.
+	return chatAliases
 }
 
 // fetchLCMStats pings the LCM server for schema display.

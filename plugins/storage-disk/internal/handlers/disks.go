@@ -19,7 +19,7 @@ type Disk struct {
 	ID        string            `json:"id"`
 	Name      string            `json:"name"`
 	Type      string            `json:"type"`       // "shared" or "workspace"
-	Labels    map[string]string `json:"labels"`     // e.g. {"service": "claude", "plugin": "agent-claude"}
+	Labels    map[string]string `json:"labels"`     // e.g. {"service": "claude", "plugin": "agent-anthropic"}
 	CreatedAt time.Time         `json:"created_at"`
 }
 

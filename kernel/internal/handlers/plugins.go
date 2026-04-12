@@ -408,9 +408,6 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 	// Remove config entries.
 	h.db().Where("owner_id = ?", id).Delete(&models.Config{})
 
-	// Remove aliases owned by this plugin.
-	h.db().Where("plugin_id = ?", id).Delete(&models.Alias{})
-
 	// Remove plugin record (data volume is kept).
 	if result := h.db().Delete(&plugin); result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete plugin"})
@@ -1184,9 +1181,9 @@ func (h *PluginHandler) GetPluginSchema(c *gin.Context) {
 	}
 
 	if plugin.Status != "running" || plugin.Host == "" {
-		msg := "plugin not running"
+		msg := fmt.Sprintf("plugin %q not running", id)
 		if plugin.Status == "running" && plugin.Host == "" {
-			msg = "plugin is starting — container is up but not yet registered with kernel"
+			msg = fmt.Sprintf("plugin %q is starting — container is up but not yet registered with kernel", id)
 		}
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": msg})
 		return
@@ -1214,7 +1211,7 @@ func (h *PluginHandler) GetPluginSchemaSection(c *gin.Context) {
 	}
 
 	if plugin.Status != "running" || plugin.Host == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin not running"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("plugin %q not running", id)})
 		return
 	}
 

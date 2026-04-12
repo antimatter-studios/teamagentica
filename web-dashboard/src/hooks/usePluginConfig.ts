@@ -16,6 +16,7 @@ export interface OAuthFieldState {
   loading: boolean;
   deviceCode: OAuthDeviceCode | null;
   polling: boolean;
+  submitting?: boolean;
   error?: string;
 }
 
@@ -114,35 +115,77 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
       [fieldKey]: { ...prev[fieldKey], error: undefined },
     }));
 
+    const schema = parseConfigSchema(plugin);
+    const oauthMethod = schema[fieldKey]?.oauth_method || "device_code";
+
     try {
       const dcr = await apiClient.plugins.startOAuthFlow(plugin.id);
       setOauthStates((prev) => ({
         ...prev,
-        [fieldKey]: { ...prev[fieldKey], deviceCode: dcr, polling: true },
+        [fieldKey]: { ...prev[fieldKey], deviceCode: dcr, polling: oauthMethod === "device_code" },
       }));
 
-      pollTimersRef.current[fieldKey] = setInterval(async () => {
-        try {
-          const res = await apiClient.plugins.pollOAuthFlow(plugin.id);
-          if (res.authenticated) {
-            clearInterval(pollTimersRef.current[fieldKey]);
-            delete pollTimersRef.current[fieldKey];
-            const status = await apiClient.plugins.getOAuthStatus(plugin.id);
-            setOauthStates((prev) => ({
-              ...prev,
-              [fieldKey]: { status, loading: false, deviceCode: null, polling: false },
-            }));
+      // Only auto-poll for device_code flow; redirect_code waits for user to paste code.
+      if (oauthMethod === "device_code") {
+        pollTimersRef.current[fieldKey] = setInterval(async () => {
+          try {
+            const res = await apiClient.plugins.pollOAuthFlow(plugin.id);
+            if (res.authenticated) {
+              clearInterval(pollTimersRef.current[fieldKey]);
+              delete pollTimersRef.current[fieldKey];
+              const status = await apiClient.plugins.getOAuthStatus(plugin.id);
+              setOauthStates((prev) => ({
+                ...prev,
+                [fieldKey]: { status, loading: false, deviceCode: null, polling: false },
+              }));
+            }
+          } catch {
+            // Keep polling — transient errors expected.
           }
-        } catch {
-          // Keep polling — transient errors expected.
-        }
-      }, 5 * 1000);
+        }, 5 * 1000);
+      }
     } catch (err) {
       setOauthStates((prev) => ({
         ...prev,
         [fieldKey]: {
           ...prev[fieldKey],
           error: err instanceof Error ? err.message : "Failed to start login",
+        },
+      }));
+    }
+  }
+
+  async function handleOAuthSubmitCode(fieldKey: string, code: string) {
+    setOauthStates((prev) => ({
+      ...prev,
+      [fieldKey]: { ...prev[fieldKey], submitting: true, error: undefined },
+    }));
+
+    try {
+      const res = await apiClient.plugins.submitOAuthCode(plugin.id, code);
+      if (res.authenticated) {
+        const status = await apiClient.plugins.getOAuthStatus(plugin.id);
+        setOauthStates((prev) => ({
+          ...prev,
+          [fieldKey]: { status, loading: false, deviceCode: null, polling: false, submitting: false },
+        }));
+      } else {
+        setOauthStates((prev) => ({
+          ...prev,
+          [fieldKey]: {
+            ...prev[fieldKey],
+            submitting: false,
+            error: res.error || "Authentication failed",
+          },
+        }));
+      }
+    } catch (err) {
+      setOauthStates((prev) => ({
+        ...prev,
+        [fieldKey]: {
+          ...prev[fieldKey],
+          submitting: false,
+          error: err instanceof Error ? err.message : "Failed to submit code",
         },
       }));
     }
@@ -359,5 +402,6 @@ export function usePluginConfig(plugin: Plugin, onSaved: () => void) {
     handleSave,
     handleOAuthLogin,
     handleOAuthLogout,
+    handleOAuthSubmitCode,
   };
 }

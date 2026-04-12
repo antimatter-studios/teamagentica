@@ -53,7 +53,7 @@ func (h *Handler) attachSidecar(ctx context.Context, containerID, subdomain, age
 	// 2. Workspace's primary disk (type=workspace) so the agent can access files
 	var sharedDisks []pluginsdk.SharedDiskOverride
 
-	// Agent's shared disks (e.g. agent-claude → /home/coder/.claude for CLI auth).
+	// Agent's shared disks (e.g. agent-anthropic → /home/coder/.claude for CLI auth).
 	if rawDisks, ok := basePlugin["shared_disks"]; ok {
 		if diskList, ok := rawDisks.([]interface{}); ok {
 			for _, d := range diskList {
@@ -78,20 +78,21 @@ func (h *Handler) attachSidecar(ctx context.Context, containerID, subdomain, age
 	}
 
 	// Workspace's primary disk only (type=workspace) — gives agent access to project files.
-	// Resolve disk ID → disk name via storage-disk so we use the human-readable name,
-	// not the UUID (which would cause resolveDiskPaths to create a spurious disk).
+	// Extract disk name and type from the SourcePath (e.g. "/data/storage-root/workspace/ws-abc").
 	for _, dm := range workspaceDiskMounts {
-		if dm.DiskType == "workspace" {
-			diskName := dm.DiskID // fallback to ID
-			if data, err := h.sdk.RouteToPlugin(ctx, "storage-disk", "GET", "/disks/by-id/"+dm.DiskID, nil); err == nil {
-				var info struct{ Name string `json:"name"` }
-				if json.Unmarshal(data, &info) == nil && info.Name != "" {
-					diskName = info.Name
-				}
-			}
+		if dm.SourcePath == "" {
+			continue
+		}
+		// Path format: /data/storage-root/{type}/{name}
+		parts := strings.Split(strings.TrimPrefix(dm.SourcePath, "/data/storage-root/"), "/")
+		if len(parts) < 2 {
+			continue
+		}
+		diskType, diskName := parts[0], parts[1]
+		if diskType == "workspace" {
 			sharedDisks = append(sharedDisks, pluginsdk.SharedDiskOverride{
 				Name:   diskName,
-				Type:   dm.DiskType,
+				Type:   diskType,
 				Target: dm.Target,
 			})
 			break
@@ -138,14 +139,9 @@ func (h *Handler) detachSidecar(ctx context.Context, subdomain, sidecarID string
 
 	aliasName := sidecarID // alias = sidecarID = ws-{id}-{agent-plugin}
 
-	// Delete persona.
-	if _, err := h.sdk.RouteToPlugin(ctx, "infra-agent-persona", "DELETE", "/personas/"+aliasName, nil); err != nil {
+	// Delete persona (which is also the alias now).
+	if _, err := h.sdk.RouteToPlugin(ctx, "infra-agent-registry", "DELETE", "/agents/"+aliasName, nil); err != nil {
 		log.Printf("sidecar: failed to delete persona %s: %v", aliasName, err)
-	}
-
-	// Delete alias.
-	if _, err := h.sdk.RouteToPlugin(ctx, "infra-alias-registry", "DELETE", "/aliases/"+aliasName, nil); err != nil {
-		log.Printf("sidecar: failed to delete alias %s: %v", aliasName, err)
 	}
 
 	// Disable and delete the sidecar plugin.
@@ -159,36 +155,21 @@ func (h *Handler) detachSidecar(ctx context.Context, subdomain, sidecarID string
 	log.Printf("sidecar: detached %s (alias=%s)", sidecarID, aliasName)
 }
 
-// ensureAliasAndPersona creates the alias and persona for a sidecar.
-// If they already exist (409), deletes and re-creates to ensure correct config.
+// ensureAliasAndPersona creates the persona (which is also the alias) for a sidecar.
+// If it already exists (409), deletes and re-creates to ensure correct config.
 func (h *Handler) ensureAliasAndPersona(ctx context.Context, subdomain, sidecarID, agentModel string) {
 	aliasName := sidecarID
-	aliasPayload, _ := json.Marshal(map[string]string{
-		"name":   aliasName,
-		"type":   "agent",
-		"plugin": sidecarID,
-		"model":  agentModel,
-	})
-	if _, err := h.sdk.RouteToPlugin(ctx, "infra-alias-registry", "POST", "/aliases", bytes.NewReader(aliasPayload)); err != nil {
-		if strings.Contains(err.Error(), "409") {
-			// Already exists — delete and re-create to update config.
-			h.sdk.RouteToPlugin(ctx, "infra-alias-registry", "DELETE", "/aliases/"+aliasName, nil)
-			h.sdk.RouteToPlugin(ctx, "infra-alias-registry", "POST", "/aliases", bytes.NewReader(aliasPayload))
-		} else {
-			log.Printf("sidecar: failed to ensure alias %s: %v", aliasName, err)
-		}
-	}
-
 	personaPayload, _ := json.Marshal(map[string]interface{}{
 		"alias":         aliasName,
-		"system_prompt": fmt.Sprintf("You are an AI assistant for workspace %s. You have access to the workspace files.", subdomain),
-		"backend_alias": aliasName,
+		"type":          "agent",
+		"plugin":        sidecarID,
 		"model":         agentModel,
+		"system_prompt": fmt.Sprintf("You are an AI assistant for workspace %s. You have access to the workspace files.", subdomain),
 	})
-	if _, err := h.sdk.RouteToPlugin(ctx, "infra-agent-persona", "POST", "/personas", bytes.NewReader(personaPayload)); err != nil {
+	if _, err := h.sdk.RouteToPlugin(ctx, "infra-agent-registry", "POST", "/agents", bytes.NewReader(personaPayload)); err != nil {
 		if strings.Contains(err.Error(), "409") {
-			h.sdk.RouteToPlugin(ctx, "infra-agent-persona", "DELETE", "/personas/"+aliasName, nil)
-			h.sdk.RouteToPlugin(ctx, "infra-agent-persona", "POST", "/personas", bytes.NewReader(personaPayload))
+			h.sdk.RouteToPlugin(ctx, "infra-agent-registry", "DELETE", "/agents/"+aliasName, nil)
+			h.sdk.RouteToPlugin(ctx, "infra-agent-registry", "POST", "/agents", bytes.NewReader(personaPayload))
 		} else {
 			log.Printf("sidecar: failed to ensure persona %s: %v", aliasName, err)
 		}
@@ -236,25 +217,24 @@ func (h *Handler) ReconcileSidecars(ctx context.Context) {
 		log.Printf("sidecar: reconciled %d workspace aliases", count)
 	}
 
-	// Clean up stale workspace aliases that no longer have an active sidecar.
-	if aliasData, err := h.sdk.RouteToPlugin(ctx, "infra-alias-registry", "GET", "/aliases", nil); err == nil {
+	// Clean up stale workspace personas that no longer have an active sidecar.
+	if personaData, err := h.sdk.RouteToPlugin(ctx, "infra-agent-registry", "GET", "/agents", nil); err == nil {
 		var resp struct {
-			Aliases []struct {
-				Name string `json:"name"`
-			} `json:"aliases"`
+			Personas []struct {
+				Alias string `json:"alias"`
+			} `json:"agents"`
 		}
-		if json.Unmarshal(aliasData, &resp) == nil {
-			for _, a := range resp.Aliases {
-				if !strings.HasPrefix(a.Name, "ws-") {
+		if json.Unmarshal(personaData, &resp) == nil {
+			for _, p := range resp.Personas {
+				if !strings.HasPrefix(p.Alias, "ws-") {
 					continue
 				}
-				if activeSidecars[a.Name] {
+				if activeSidecars[p.Alias] {
 					continue
 				}
-				// Stale workspace alias — clean up.
-				h.sdk.RouteToPlugin(ctx, "infra-alias-registry", "DELETE", "/aliases/"+a.Name, nil)
-				h.sdk.RouteToPlugin(ctx, "infra-agent-persona", "DELETE", "/personas/"+a.Name, nil)
-				log.Printf("sidecar: cleaned up stale alias %s", a.Name)
+				// Stale workspace persona — clean up.
+				h.sdk.RouteToPlugin(ctx, "infra-agent-registry", "DELETE", "/agents/"+p.Alias, nil)
+				log.Printf("sidecar: cleaned up stale persona %s", p.Alias)
 			}
 		}
 	}

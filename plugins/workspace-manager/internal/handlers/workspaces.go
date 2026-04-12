@@ -44,6 +44,74 @@ func NewHandler(baseDomain string, debug bool, db *storage.DB) *Handler {
 
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+	go h.backfillWorkspaceRecords()
+}
+
+// backfillWorkspaceRecords populates Subdomain and DiskName for existing records
+// that were created before these columns existed.
+func (h *Handler) backfillWorkspaceRecords() {
+	records, err := h.db.ListAllRecords()
+	if err != nil {
+		log.Printf("backfill: failed to list records: %v", err)
+		return
+	}
+
+	// Find records that need backfill.
+	var needsBackfill []storage.WorkspaceRecord
+	for _, rec := range records {
+		if rec.Subdomain == "" || rec.DiskName == "" {
+			needsBackfill = append(needsBackfill, rec)
+		}
+	}
+	if len(needsBackfill) == 0 {
+		return
+	}
+
+	containers, err := h.sdk.ListManagedContainers()
+	if err != nil {
+		log.Printf("backfill: failed to list containers: %v", err)
+		return
+	}
+
+	containerMap := make(map[string]*pluginsdk.ManagedContainerInfo, len(containers))
+	for i := range containers {
+		containerMap[containers[i].ID] = &containers[i]
+	}
+
+	for _, rec := range needsBackfill {
+		mc, ok := containerMap[rec.ContainerID]
+		if !ok {
+			continue
+		}
+		updated := false
+
+		if rec.Subdomain == "" && mc.Subdomain != "" {
+			rec.Subdomain = mc.Subdomain
+			updated = true
+		}
+
+		if rec.DiskName == "" {
+			for _, dm := range mc.DiskMounts {
+				// Extract disk name from SourcePath: /data/storage-root/workspace/{name}
+				if dm.SourcePath != "" && strings.Contains(dm.SourcePath, "/workspace/") {
+					parts := strings.Split(strings.TrimPrefix(dm.SourcePath, "/data/storage-root/"), "/")
+					if len(parts) >= 2 {
+						rec.DiskName = parts[1]
+						updated = true
+					}
+					break
+				}
+			}
+		}
+
+		if updated {
+			if err := h.db.Put(&rec); err != nil {
+				log.Printf("backfill: failed to update record %s: %v", rec.ContainerID, err)
+			} else {
+				log.Printf("backfill: updated workspace %s (subdomain=%s, disk_name=%s)", rec.ContainerID, rec.Subdomain, rec.DiskName)
+			}
+		}
+	}
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -80,25 +148,14 @@ func (h *Handler) ensureDisk(ctx context.Context, name, diskType string) (diskID
 	return result.ID, result.Path, nil
 }
 
-// resolveWorkspaceDiskPath finds the workspace-type disk in DiskMounts and resolves
-// its host path for git operations. Returns the cross-mounted path accessible from
-// this container (storage-root is cross-mounted from storage-disk).
+// resolveWorkspaceDiskPath finds the workspace-type disk in DiskMounts and returns
+// the cross-mounted path accessible from this container.
+// SourcePath is e.g. "/data/storage-root/workspace/ws-abc123-slug";
+// workspace-manager has /storage-root cross-mounted, so strip "/data".
 func (h *Handler) resolveWorkspaceDiskPath(ctx context.Context, diskMounts []pluginsdk.DiskMount) (string, error) {
 	for _, dm := range diskMounts {
-		if dm.DiskType == "workspace" && dm.DiskID != "" {
-			data, err := h.sdk.RouteToPlugin(ctx, "storage-disk", "GET", fmt.Sprintf("/disks/by-id/%s", dm.DiskID), nil)
-			if err != nil {
-				return "", fmt.Errorf("resolve disk %s: %w", dm.DiskID, err)
-			}
-			var result struct {
-				Path string `json:"path"`
-			}
-			if err := json.Unmarshal(data, &result); err != nil {
-				return "", fmt.Errorf("decode disk response: %w", err)
-			}
-			// storage-disk returns e.g. "/data/storage-root/workspace/ws-abc123-slug"
-			// workspace-manager has /storage-root cross-mounted, so strip "/data"
-			return strings.Replace(result.Path, "/data/", "/", 1), nil
+		if dm.SourcePath != "" && strings.Contains(dm.SourcePath, "/workspace/") {
+			return strings.Replace(dm.SourcePath, "/data/", "/", 1), nil
 		}
 	}
 	return "", fmt.Errorf("no workspace disk found in mounts")
@@ -156,6 +213,7 @@ type workspaceInfo struct {
 	Status          string `json:"status"`
 	Subdomain       string `json:"subdomain"`
 	URL             string `json:"url,omitempty"`
+	DiskName        string `json:"disk_name,omitempty"`
 }
 
 // ListWorkspaces returns all managed containers owned by this plugin.
@@ -186,6 +244,10 @@ func (h *Handler) ListWorkspaces(c *gin.Context) {
 		// Enrich with workspace-manager-level data from local DB.
 		if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
 			ws.Environment = rec.EnvironmentID
+			ws.DiskName = rec.DiskName
+			if rec.Subdomain != "" {
+				ws.Subdomain = rec.Subdomain
+			}
 			if name, ok := envNames[rec.EnvironmentID]; ok {
 				ws.EnvironmentName = name
 			} else if schema := h.fetchWorkspaceSchema(rec.EnvironmentID); schema != nil {
@@ -270,7 +332,9 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 
 	// Ensure all declared disks exist via storage-disk API, collect DiskMounts.
 	var diskMounts []pluginsdk.DiskMount
+	var wsDisks []storage.WorkspaceDisk
 	var workspaceDiskPath string
+	var workspaceDiskName string
 	for _, spec := range ws.Disks {
 		var diskName string
 		if spec.Type == "workspace" {
@@ -283,18 +347,23 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 				}
 				var existing struct {
 					ID   string `json:"id"`
+					Name string `json:"name"`
 					Path string `json:"path"`
 				}
 				json.Unmarshal(data, &existing)
 				diskMounts = append(diskMounts, pluginsdk.DiskMount{
-					DiskID:   existing.ID,
-					DiskType: "workspace",
-					Target:   spec.Target,
+					SourcePath: existing.Path,
+					Target:     spec.Target,
+				})
+				wsDisks = append(wsDisks, storage.WorkspaceDisk{
+					DiskID: existing.ID, Name: existing.Name, Type: "workspace", Target: spec.Target,
 				})
 				workspaceDiskPath = strings.Replace(existing.Path, "/data/", "/", 1)
+				workspaceDiskName = existing.Name
 				continue
 			}
 			diskName = fmt.Sprintf("ws-%s-%s", wsID, wsKey)
+			workspaceDiskName = diskName
 		} else {
 			diskName = spec.Name
 		}
@@ -305,10 +374,12 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 			return
 		}
 		diskMounts = append(diskMounts, pluginsdk.DiskMount{
-			DiskID:   diskID,
-			DiskType: spec.Type,
-			Target:   spec.Target,
-			ReadOnly: spec.ReadOnly,
+			SourcePath: diskPath,
+			Target:     spec.Target,
+			ReadOnly:   spec.ReadOnly,
+		})
+		wsDisks = append(wsDisks, storage.WorkspaceDisk{
+			DiskID: diskID, Name: diskName, Type: spec.Type, Target: spec.Target, ReadOnly: spec.ReadOnly,
 		})
 		if spec.Type == "workspace" {
 			workspaceDiskPath = strings.Replace(diskPath, "/data/", "/", 1)
@@ -373,6 +444,15 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	h.db.Put(&storage.WorkspaceRecord{
 		ContainerID:   mc.ID,
 		EnvironmentID: req.EnvironmentID,
+		Subdomain:     subdomain,
+		DiskName:      workspaceDiskName,
+	})
+
+	// Store initial disk configuration in workspace options.
+	wsDisksJSON, _ := json.Marshal(wsDisks)
+	h.db.PutOptions(&storage.WorkspaceOptions{
+		ContainerID: mc.ID,
+		Disks:       string(wsDisksJSON),
 	})
 
 	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s","environment":"%s","key":"%s"}`, mc.ID, req.EnvironmentID, wsKey))
@@ -382,6 +462,7 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		Name:      mc.Name,
 		Status:    mc.Status,
 		Subdomain: mc.Subdomain,
+		DiskName:  workspaceDiskName,
 	}
 	if mc.Subdomain != "" && h.baseDomain != "" {
 		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -411,6 +492,13 @@ func (h *Handler) GetWorkspace(c *gin.Context) {
 				Name:      mc.Name,
 				Status:    mc.Status,
 				Subdomain: mc.Subdomain,
+			}
+			if rec, err := h.db.GetByContainerID(mc.ID); err == nil {
+				ws.Environment = rec.EnvironmentID
+				ws.DiskName = rec.DiskName
+				if rec.Subdomain != "" {
+					ws.Subdomain = rec.Subdomain
+				}
 			}
 			if mc.Subdomain != "" && h.baseDomain != "" {
 				ws.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -581,21 +669,20 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 		if spec.Type == "workspace" {
 			continue // workspace disks are never added on rebuild
 		}
-		diskID, _, err := h.ensureDisk(ctx, spec.Name, spec.Type)
+		_, diskPath, err := h.ensureDisk(ctx, spec.Name, spec.Type)
 		if err != nil {
 			log.Printf("rebuildWorkspace: failed to resolve new disk %s: %v", spec.Name, err)
 			continue
 		}
 		diskMounts = append(diskMounts, pluginsdk.DiskMount{
-			DiskID:   diskID,
-			DiskType: spec.Type,
-			Target:   spec.Target,
-			ReadOnly: spec.ReadOnly,
+			SourcePath: diskPath,
+			Target:     spec.Target,
+			ReadOnly:   spec.ReadOnly,
 		})
 		log.Printf("rebuildWorkspace: added new schema disk %s → %s", spec.Name, spec.Target)
 	}
 
-	// Load per-workspace options: env overrides + extra shared disks.
+	// Load per-workspace options: env overrides + disks.
 	if opts, err := h.db.GetOptions(id); err == nil {
 		if opts.EnvOverrides != "" {
 			var overrides map[string]string
@@ -605,24 +692,54 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 				}
 			}
 		}
-		if opts.ExtraDisks != "" {
-			var extras []storage.ExtraDisk
-			if json.Unmarshal([]byte(opts.ExtraDisks), &extras) == nil {
-				for _, d := range extras {
-					// Resolve env vars like $HOME in the target path
-					// using the workspace environment's defaults.
+		if opts.Disks != "" {
+			var disks []storage.WorkspaceDisk
+			if json.Unmarshal([]byte(opts.Disks), &disks) == nil {
+				for _, d := range disks {
 					target := os.Expand(d.Target, func(key string) string {
 						if v, ok := env[key]; ok {
 							return v
 						}
 						return "$" + key
 					})
-					diskMounts = append(diskMounts, pluginsdk.DiskMount{
-						DiskID:   d.DiskID,
-						DiskType: "shared",
-						Target:   target,
-						ReadOnly: d.ReadOnly,
-					})
+					// Skip if this target is already mounted (from schema disks above).
+					alreadyMounted := false
+					for _, dm := range diskMounts {
+						if dm.Target == target {
+							alreadyMounted = true
+							break
+						}
+					}
+					if alreadyMounted {
+						continue
+					}
+					// Resolve disk → SourcePath: try by ID first, fall back to get-or-create by name.
+					var sourcePath string
+					if d.DiskID != "" {
+						data, resolveErr := h.sdk.RouteToPlugin(ctx, "storage-disk", "GET", fmt.Sprintf("/disks/by-id/%s", d.DiskID), nil)
+						if resolveErr == nil {
+							var info struct{ Path string `json:"path"` }
+							json.Unmarshal(data, &info)
+							sourcePath = info.Path
+						}
+					}
+					if sourcePath == "" && d.Name != "" {
+						// Disk missing from storage-disk — recreate it so the workspace can start.
+						log.Printf("WARNING: rebuildWorkspace: disk %q (id=%s) missing from storage-disk — recreating. This disk should not have disappeared; investigate the cause.", d.Name, d.DiskID)
+						_, diskPath, ensureErr := h.ensureDisk(ctx, d.Name, d.Type)
+						if ensureErr != nil {
+							log.Printf("rebuildWorkspace: failed to recreate disk %s: %v", d.Name, ensureErr)
+							continue
+						}
+						sourcePath = diskPath
+					}
+					if sourcePath != "" {
+						diskMounts = append(diskMounts, pluginsdk.DiskMount{
+							SourcePath: sourcePath,
+							Target:     target,
+							ReadOnly:   d.ReadOnly,
+						})
+					}
 				}
 			}
 		}
@@ -680,6 +797,10 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 		Environment: rec.EnvironmentID,
 		Status:      mc.Status,
 		Subdomain:   mc.Subdomain,
+		DiskName:    rec.DiskName,
+	}
+	if rec.Subdomain != "" {
+		result.Subdomain = rec.Subdomain
 	}
 	if mc.Subdomain != "" && h.baseDomain != "" {
 		result.URL = fmt.Sprintf("//%s.%s/", mc.Subdomain, h.baseDomain)
@@ -940,36 +1061,36 @@ func (h *Handler) UpdateWorkspaceOptions(c *gin.Context) {
 	}
 
 	var req struct {
-		EnvOverrides map[string]string     `json:"env_overrides"`
-		ExtraDisks   []storage.ExtraDisk   `json:"extra_disks"`
-		AgentPlugin  string                `json:"agent_plugin"`
-		AgentModel   string                `json:"agent_model"`
+		EnvOverrides map[string]string       `json:"env_overrides"`
+		Disks        []storage.WorkspaceDisk  `json:"disks"`
+		AgentPlugin  string                   `json:"agent_plugin"`
+		AgentModel   string                   `json:"agent_model"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Validate extra disks.
-	for _, d := range req.ExtraDisks {
+	// Validate disks.
+	for _, d := range req.Disks {
 		if d.DiskID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "extra disk must have a disk_id"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "disk must have a disk_id"})
 			return
 		}
 		if d.Target == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "extra disk must have a target path"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "disk must have a target path"})
 			return
 		}
 	}
 
 	// Serialize JSON fields.
 	envJSON, _ := json.Marshal(req.EnvOverrides)
-	disksJSON, _ := json.Marshal(req.ExtraDisks)
+	disksJSON, _ := json.Marshal(req.Disks)
 
 	opts := &storage.WorkspaceOptions{
 		ContainerID:  id,
 		EnvOverrides: string(envJSON),
-		ExtraDisks:   string(disksJSON),
+		Disks:        string(disksJSON),
 		AgentPlugin:  req.AgentPlugin,
 		AgentModel:   req.AgentModel,
 	}

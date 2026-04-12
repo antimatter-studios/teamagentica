@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import type { Plugin } from "@teamagentica/api-client";
 import {
   usePluginConfig,
@@ -132,6 +132,64 @@ function ExpandableItem({ item, idx }: { item: Record<string, unknown>; idx: num
 
 import type { SchemaSection } from "../hooks/usePluginConfig";
 
+/** device_code: show URL + verification code, auto-poll for completion. */
+function DeviceCodeFlow({ url, code, polling }: { url: string; code: string; polling: boolean }) {
+  return (
+    <div className="auth-device-code">
+      <p>Open the link below and enter the code to sign in:</p>
+      <a className="auth-verify-link" href={url} target="_blank" rel="noopener noreferrer">
+        {url}
+      </a>
+      <div className="auth-code-display">{code}</div>
+      <p className="auth-code-hint">
+        {polling ? (
+          <><span className="spinner" /> Waiting for login to complete...</>
+        ) : (
+          "Login flow expired. Click the button to try again."
+        )}
+      </p>
+    </div>
+  );
+}
+
+/** redirect_code: show URL, user copies code from provider back and pastes it here. */
+function RedirectCodeFlow({ url, submitting, onSubmit }: { url: string; submitting?: boolean; onSubmit: (code: string) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="auth-device-code">
+      <p>Open the link below to sign in, then copy the code back here:</p>
+      <a className="auth-verify-link" href={url} target="_blank" rel="noopener noreferrer">
+        {url}
+      </a>
+      <div className="auth-code-input-row">
+        <input
+          ref={inputRef}
+          type="text"
+          className="auth-code-input"
+          placeholder="Paste authorization code"
+          disabled={submitting}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && inputRef.current?.value) {
+              onSubmit(inputRef.current.value);
+            }
+          }}
+        />
+        <button
+          className="login-submit auth-submit-code-btn"
+          disabled={submitting}
+          onClick={() => {
+            if (inputRef.current?.value) {
+              onSubmit(inputRef.current.value);
+            }
+          }}
+        >
+          {submitting ? <><span className="spinner" /> SUBMITTING...</> : "SUBMIT CODE"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ReadonlyTable({ items, columns }: { items: Record<string, unknown>[]; columns: string[] }) {
   return (
     <div className="schema-table-wrap">
@@ -212,6 +270,7 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
     handleSave,
     handleOAuthLogin,
     handleOAuthLogout,
+    handleOAuthSubmitCode,
   } = usePluginConfig(plugin, onSaved);
 
   function renderField(field: ConfigField, index: number) {
@@ -222,6 +281,7 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
 
     if (fieldType === "oauth") {
       const state = oauthStates[field.key];
+      const oauthMethod = schema?.oauth_method || "device_code";
 
       return (
         <div className="auth-section" key={field.key}>
@@ -252,27 +312,19 @@ export default function PluginConfigForm({ plugin, onSaved }: Props) {
               </button>
             </div>
           ) : state.deviceCode ? (
-            <div className="auth-device-code">
-              <p>Open the link below and enter the code to sign in:</p>
-              <a
-                className="auth-verify-link"
-                href={state.deviceCode.url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {state.deviceCode.url}
-              </a>
-              <div className="auth-code-display">{state.deviceCode.code}</div>
-              <p className="auth-code-hint">
-                {state.polling ? (
-                  <>
-                    <span className="spinner" /> Waiting for login to complete...
-                  </>
-                ) : (
-                  "Login flow expired. Click the button to try again."
-                )}
-              </p>
-            </div>
+            oauthMethod === "redirect_code" ? (
+              <RedirectCodeFlow
+                url={state.deviceCode.url}
+                submitting={state.submitting}
+                onSubmit={(code) => handleOAuthSubmitCode(field.key, code)}
+              />
+            ) : (
+              <DeviceCodeFlow
+                url={state.deviceCode.url}
+                code={state.deviceCode.code}
+                polling={state.polling}
+              />
+            )
           ) : (
             <div className="auth-login-prompt">
               <button

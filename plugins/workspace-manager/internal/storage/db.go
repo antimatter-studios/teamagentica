@@ -12,6 +12,8 @@ import (
 type WorkspaceRecord struct {
 	ContainerID   string         `json:"container_id" gorm:"primaryKey"`
 	EnvironmentID string         `json:"environment_id" gorm:"not null;index"`
+	Subdomain     string         `json:"subdomain"`
+	DiskName      string         `json:"disk_name"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
@@ -37,10 +39,11 @@ type EnvironmentRecord struct {
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
-// ExtraDisk describes an additional shared disk mounted into a workspace container.
-type ExtraDisk struct {
+// WorkspaceDisk describes a disk mounted into a workspace container.
+type WorkspaceDisk struct {
 	DiskID   string `json:"disk_id"`              // stable storage-disk ID
 	Name     string `json:"name"`                 // display name
+	Type     string `json:"type"`                 // "workspace" or "shared"
 	Target   string `json:"target"`               // mount path inside the container
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
@@ -49,8 +52,8 @@ type ExtraDisk struct {
 type WorkspaceOptions struct {
 	ContainerID  string    `json:"container_id" gorm:"primaryKey"`
 	EnvOverrides string    `json:"env_overrides" gorm:"type:text"` // JSON: {"KEY": "value"}
-	ExtraDisks   string    `json:"extra_disks" gorm:"type:text"`   // JSON: []ExtraDisk
-	AgentPlugin  string    `json:"agent_plugin"`                    // e.g. "agent-claude"
+	Disks        string    `json:"disks" gorm:"type:text"`         // JSON: []WorkspaceDisk (all disks)
+	AgentPlugin  string    `json:"agent_plugin"`                    // e.g. "agent-anthropic"
 	AgentModel   string    `json:"agent_model"`                     // e.g. "claude-opus-4-6"
 	SidecarID    string    `json:"sidecar_id"`                      // plugin ID once created
 	CreatedAt    time.Time `json:"created_at"`

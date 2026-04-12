@@ -7,9 +7,8 @@ interface Props {
 
 interface AliasPreview {
   alias: string;
-  persona_alias: string;
+  agent_alias: string;
   model: string;
-  role?: string;
   is_default: boolean;
   rendered_prompt: string;
 }
@@ -72,10 +71,10 @@ export default function PluginSystemPrompt({ pluginId }: Props) {
   let promptLabel = "";
   if (isAgent && selected) {
     prompt = selected.rendered_prompt;
-    promptLabel = `Rendered system prompt for @${selected.persona_alias}${selected.model ? ` (${selected.model})` : ""}${selected.is_default ? " — default" : ""}`;
+    promptLabel = `Rendered system prompt for @${selected.agent_alias}${selected.model ? ` (${selected.model})` : ""}${selected.is_default ? " — default" : ""}`;
   } else if (isAgent && data?.default_prompt) {
     prompt = data.default_prompt;
-    promptLabel = "Default system prompt (no personas assigned to this agent).";
+    promptLabel = "Default system prompt (no agents assigned to this agent).";
   } else {
     prompt = data?.system_prompt || data?.default_prompt;
     promptLabel = "System prompt this tool plugin uses when processing requests.";
@@ -97,7 +96,7 @@ export default function PluginSystemPrompt({ pluginId }: Props) {
           <button
             className={`plugin-action-btn${selectedAlias === "__default" ? " btn-active" : ""}`}
             onClick={() => setSelectedAlias("__default")}
-            title="Raw embedded system prompt before persona template rendering"
+            title="Raw embedded system prompt before agent template rendering"
           >
             RAW TEMPLATE
           </button>
@@ -106,9 +105,9 @@ export default function PluginSystemPrompt({ pluginId }: Props) {
               key={a.alias}
               className={`plugin-action-btn${selectedAlias === a.alias ? " btn-active" : ""}`}
               onClick={() => setSelectedAlias(a.alias)}
-              title={`Persona: ${a.persona_alias}${a.role ? ` | Role: ${a.role}` : ""}${a.model ? ` | Model: ${a.model}` : ""}`}
+              title={`Agent: ${a.agent_alias}${a.model ? ` | Model: ${a.model}` : ""}`}
             >
-              @{a.persona_alias}
+              @{a.agent_alias}
               {a.is_default && " *"}
             </button>
           ))}
@@ -117,7 +116,7 @@ export default function PluginSystemPrompt({ pluginId }: Props) {
 
       <p className="pricing-hint">
         {selectedAlias === "__default"
-          ? "Raw embedded system prompt template (before persona rendering with agents/tools context)."
+          ? "Raw embedded system prompt template (before agent rendering with agents/tools context)."
           : promptLabel}
       </p>
 

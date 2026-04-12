@@ -4,10 +4,10 @@ use (
 	./kernel
 	./pkg/claudecli
 	./pkg/pluginsdk
-	./plugins/agent-claude
-	./plugins/agent-gemini
+	./plugins/agent-anthropic
+	./plugins/agent-google
 	./plugins/agent-inception
-	./plugins/agent-kimi
+	./plugins/agent-moonshot
 	./plugins/agent-ollama
 	./plugins/agent-openai
 	./plugins/agent-openrouter
@@ -15,9 +15,9 @@ use (
 	./plugins/infra-agent-memory-gateway
 	./plugins/infra-agent-memory-lcm
 	./plugins/infra-agent-memory-mem0
-	./plugins/infra-agent-persona
+	./plugins/infra-agent-registry
 	./plugins/infra-agent-relay
-	./plugins/infra-alias-registry
+	./plugins/infra-authz
 	./plugins/infra-builder
 	./plugins/infra-chat-command-server
 	./plugins/infra-container-registry

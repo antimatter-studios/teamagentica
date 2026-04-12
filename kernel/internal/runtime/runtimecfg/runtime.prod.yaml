@@ -4,10 +4,6 @@ data_mount:
   type: bind
   source: "${DATA_DIR}/${PLUGIN_ID}"
 
-storage_cross_mount:
-  type: bind
-  source: "${DATA_DIR}/storage-disk"
-
 plugin_mounts: []
 
 shared_disk_mount:

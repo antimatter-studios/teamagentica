@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -116,66 +115,27 @@ func generateContainerID() string {
 	return hex.EncodeToString(b)
 }
 
-// resolveDiskPaths resolves DiskMount entries to host-side paths via storage-disk's API.
-// Each DiskMount.DiskID is looked up with GET /disks/by-id/:id → current path,
-// then translated to a host-side bind mount path.
-func (h *PluginHandler) resolveManagedDiskPaths(ctx context.Context, mounts []models.DiskMount) ([]runtime.ResolvedDiskMount, error) {
-	if len(mounts) == 0 {
-		return nil, nil
-	}
-
-	// Find storage-disk plugin address.
-	var storageDisk models.Plugin
-	if err := h.db().First(&storageDisk, "id = ?", "storage-disk").Error; err != nil {
-		return nil, fmt.Errorf("storage-disk plugin not found: %w", err)
-	}
-	if storageDisk.Host == "" || storageDisk.HTTPPort == 0 {
-		return nil, fmt.Errorf("storage-disk plugin not ready (host=%q port=%d)", storageDisk.Host, storageDisk.HTTPPort)
-	}
-
-	scheme := "http"
-	if h.clientTLS != nil {
-		scheme = "https"
-	}
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, storageDisk.Host, storageDisk.HTTPPort)
-	client := &http.Client{Timeout: 10 * time.Second, Transport: h.transport}
-
+// translateDiskMounts converts pre-resolved DiskMount entries (with SourcePath from
+// the owning plugin) into host-side bind mount paths. No storage-disk API calls —
+// the plugin already resolved paths before sending them to the kernel.
+func (h *PluginHandler) translateDiskMounts(mounts []models.DiskMount) []runtime.ResolvedDiskMount {
 	var resolved []runtime.ResolvedDiskMount
 	for _, dm := range mounts {
-		if dm.DiskID == "" || dm.Target == "" {
+		if dm.SourcePath == "" || dm.Target == "" {
 			continue
 		}
-
-		req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/disks/by-id/%s", baseURL, dm.DiskID), nil)
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve disk %s: %w", dm.DiskID, err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("storage-disk returned %d for disk %s: %s", resp.StatusCode, dm.DiskID, string(body))
-		}
-
-		var result struct {
-			Path string `json:"path"`
-		}
-		json.NewDecoder(resp.Body).Decode(&result)
-
-		hostPath := translateDiskPath(h.cfg.DataDir, result.Path)
+		hostPath := translateDiskPath(h.cfg.DataDir, dm.SourcePath)
 		resolved = append(resolved, runtime.ResolvedDiskMount{
 			HostPath: hostPath,
 			Target:   dm.Target,
 			ReadOnly: dm.ReadOnly,
 		})
-		log.Printf("resolved disk %s → %s (target=%s)", dm.DiskID, hostPath, dm.Target)
+		log.Printf("disk mount: %s → %s (target=%s)", dm.SourcePath, hostPath, dm.Target)
 	}
-
-	return resolved, nil
+	return resolved
 }
 
-// translateDiskPath converts a storage-disk internal path (e.g. "/data/storage-root/shared/agent-claude")
+// translateDiskPath converts a storage-disk internal path (e.g. "/data/storage-root/shared/agent-anthropic")
 // to a host-side path for Docker bind mounting.
 func translateDiskPath(dataDir, storagePath string) string {
 	cleaned := strings.TrimPrefix(storagePath, "/data/")
@@ -223,13 +183,8 @@ func (h *PluginHandler) CreateManagedContainer(c *gin.Context) {
 		return
 	}
 
-	// Resolve disk paths via storage-disk API.
-	resolvedMounts, err := h.resolveManagedDiskPaths(c.Request.Context(), mc.GetDiskMounts())
-	if err != nil {
-		h.db().Delete(&mc)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to resolve disks: %v", err)})
-		return
-	}
+	// Translate storage-disk paths to host-side bind mount paths.
+	resolvedMounts := h.translateDiskMounts(mc.GetDiskMounts())
 
 	// Start the container via Docker runtime.
 	if h.runtime == nil {
@@ -345,8 +300,7 @@ func (h *PluginHandler) DeleteManagedContainer(c *gin.Context) {
 }
 
 // UpdateManagedContainer handles PATCH /api/plugins/containers/:id.
-// Allows renaming (name, subdomain) without stopping the container.
-// Disk mounts are immutable — they reference stable storage-disk IDs.
+// Allows updating container metadata without stopping it.
 func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 	pluginID, ok := extractPluginID(c)
 	if !ok {
@@ -420,7 +374,6 @@ func (h *PluginHandler) UpdateManagedContainer(c *gin.Context) {
 
 // StartManagedContainer handles POST /api/plugins/containers/:id/start.
 // Re-launches a stopped container using its stored configuration.
-// Resolves disk IDs via storage-disk API to get current host paths.
 func (h *PluginHandler) StartManagedContainer(c *gin.Context) {
 	pluginID, ok := extractPluginID(c)
 	if !ok {
@@ -443,12 +396,8 @@ func (h *PluginHandler) StartManagedContainer(c *gin.Context) {
 		return
 	}
 
-	// Resolve disk IDs to current host paths via storage-disk.
-	resolvedMounts, err := h.resolveManagedDiskPaths(c.Request.Context(), mc.GetDiskMounts())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to resolve disks: %v", err)})
-		return
-	}
+	// Translate storage-disk paths to host-side bind mount paths.
+	resolvedMounts := h.translateDiskMounts(mc.GetDiskMounts())
 
 	containerID, err := h.runtime.StartManagedContainer(c.Request.Context(), &mc, h.cfg.BaseDomain, resolvedMounts)
 	if err != nil {
@@ -638,7 +587,3 @@ func (h *PluginHandler) StopManagedContainersByPlugin(ctx context.Context, plugi
 	}
 }
 
-// ResolveDiskPaths is exported for use by the orchestrator during managed container recovery.
-func (h *PluginHandler) ResolveDiskPaths(ctx context.Context, mounts []models.DiskMount) ([]runtime.ResolvedDiskMount, error) {
-	return h.resolveManagedDiskPaths(ctx, mounts)
-}

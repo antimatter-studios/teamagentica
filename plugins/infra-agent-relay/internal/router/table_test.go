@@ -112,7 +112,7 @@ func TestSetAliases(t *testing.T) {
 	table := NewTable()
 
 	aliases := alias.NewAliasMap([]alias.AliasInfo{
-		{Name: "claude", Target: "agent-claude", Capabilities: []string{"agent"}},
+		{Name: "claude", Target: "agent-anthropic", Capabilities: []string{"agent"}},
 		{Name: "codex", Target: "agent-openai", Capabilities: []string{"agent"}},
 	})
 	table.SetAliases(aliases)
@@ -130,8 +130,8 @@ func TestSetAliases(t *testing.T) {
 	if target == nil {
 		t.Fatal("expected to resolve 'claude'")
 	}
-	if target.PluginID != "agent-claude" {
-		t.Errorf("expected plugin_id=agent-claude, got %q", target.PluginID)
+	if target.PluginID != "agent-anthropic" {
+		t.Errorf("expected plugin_id=agent-anthropic, got %q", target.PluginID)
 	}
 }
 
@@ -139,12 +139,12 @@ func TestSetAliases_Replace(t *testing.T) {
 	table := NewTable()
 
 	table.SetAliases(alias.NewAliasMap([]alias.AliasInfo{
-		{Name: "claude", Target: "agent-claude", Capabilities: []string{"agent"}},
+		{Name: "claude", Target: "agent-anthropic", Capabilities: []string{"agent"}},
 	}))
 
 	// Replace with different set.
 	table.SetAliases(alias.NewAliasMap([]alias.AliasInfo{
-		{Name: "gemini", Target: "agent-gemini", Capabilities: []string{"agent"}},
+		{Name: "gemini", Target: "agent-google", Capabilities: []string{"agent"}},
 	}))
 
 	aliases := table.Aliases()

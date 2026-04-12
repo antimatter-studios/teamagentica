@@ -13,7 +13,7 @@ Centralized usage tracking for all AI agent and tool plugins. Collects token usa
 
 | Field | Description |
 |-------|-------------|
-| `plugin_id` | Source plugin (e.g. `agent-claude`) |
+| `plugin_id` | Source plugin (e.g. `agent-anthropic`) |
 | `provider` | API provider (e.g. `anthropic`, `openai`) |
 | `model` | Model used |
 | `record_type` | `token` (default) or `request` |

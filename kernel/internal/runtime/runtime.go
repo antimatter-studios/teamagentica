@@ -23,6 +23,10 @@ type ContainerRuntime interface {
 	StopPlugin(ctx context.Context, containerID string) error
 	StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string, diskMounts []ResolvedDiskMount) (containerID string, err error)
 	HealthCheck(ctx context.Context, containerID string) (running bool, err error)
+	// ResolveContainerID looks up the actual Docker container ID for a plugin
+	// by its deterministic name (teamagentica-plugin-{pluginID}). Returns the
+	// container ID and running state, or an error if no container exists.
+	ResolveContainerID(ctx context.Context, pluginID string) (containerID string, running bool, err error)
 	ContainerLogs(ctx context.Context, containerID string, tail int) (string, error)
 	SelfContainerID() string
 	UIContainerID(ctx context.Context) (string, error)

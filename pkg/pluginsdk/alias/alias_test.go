@@ -9,7 +9,7 @@ import (
 func TestNewAliasMap(t *testing.T) {
 	m := NewAliasMap([]AliasInfo{
 		{Name: "codex", Target: "agent-openai", Capabilities: []string{"agent:chat"}},
-		{Name: "claude", Target: "agent-claude:claude-3-opus", Capabilities: []string{"agent:chat"}},
+		{Name: "claude", Target: "agent-anthropic:claude-3-opus", Capabilities: []string{"agent:chat"}},
 		{Name: "veo", Target: "tool-veo", Capabilities: []string{"agent:tool:video-gen"}},
 		{Name: "banana", Target: "tool-nanobanana", Capabilities: []string{"agent:tool:image-gen"}},
 		{Name: "", Target: "ignored"},     // empty name
@@ -43,7 +43,7 @@ func TestNewAliasMap(t *testing.T) {
 func TestParse(t *testing.T) {
 	m := NewAliasMap([]AliasInfo{
 		{Name: "codex", Target: "agent-openai", Capabilities: []string{"agent:chat"}},
-		{Name: "claude", Target: "agent-claude", Capabilities: []string{"agent:chat"}},
+		{Name: "claude", Target: "agent-anthropic", Capabilities: []string{"agent:chat"}},
 		{Name: "veo", Target: "tool-veo", Capabilities: []string{"agent:tool:video-gen"}},
 	})
 
@@ -130,7 +130,7 @@ func TestNilAliasMap(t *testing.T) {
 func TestSystemPromptBlock(t *testing.T) {
 	m := NewAliasMap([]AliasInfo{
 		{Name: "codex", Target: "agent-openai", Capabilities: []string{"agent:chat"}},
-		{Name: "claude", Target: "agent-claude:claude-3-opus", Capabilities: []string{"agent:chat"}},
+		{Name: "claude", Target: "agent-anthropic:claude-3-opus", Capabilities: []string{"agent:chat"}},
 		{Name: "veo", Target: "tool-veo", Capabilities: []string{"agent:tool:video-gen"}},
 		{Name: "banana", Target: "tool-nanobanana", Capabilities: []string{"agent:tool:image-gen"}},
 	})
@@ -151,7 +151,7 @@ func TestSystemPromptBlock(t *testing.T) {
 func TestTargetFromCapabilities(t *testing.T) {
 	m := NewAliasMap([]AliasInfo{
 		{Name: "a", Target: "agent-openai", Capabilities: []string{"agent:chat"}},
-		{Name: "b", Target: "agent-claude:sonnet", Capabilities: []string{"agent:chat"}},
+		{Name: "b", Target: "agent-anthropic:sonnet", Capabilities: []string{"agent:chat"}},
 		{Name: "c", Target: "tool-stability", Capabilities: []string{"agent:tool:image-gen"}},
 		{Name: "d", Target: "tool-veo", Capabilities: []string{"agent:tool:video-gen"}},
 		{Name: "e", Target: "custom-plugin", Capabilities: nil}, // no caps → defaults to agent
@@ -164,7 +164,7 @@ func TestTargetFromCapabilities(t *testing.T) {
 		wantModel string
 	}{
 		{"a", TargetAgent, "agent-openai", ""},
-		{"b", TargetAgent, "agent-claude", "sonnet"},
+		{"b", TargetAgent, "agent-anthropic", "sonnet"},
 		{"c", TargetImage, "tool-stability", ""},
 		{"d", TargetVideo, "tool-veo", ""},
 		{"e", TargetAgent, "custom-plugin", ""},
@@ -199,14 +199,14 @@ func TestReplace(t *testing.T) {
 
 	// Replace with completely different aliases.
 	m.Replace([]AliasInfo{
-		{Name: "claude", Target: "agent-claude", Capabilities: []string{"agent:chat"}},
+		{Name: "claude", Target: "agent-anthropic", Capabilities: []string{"agent:chat"}},
 		{Name: "veo", Target: "tool-veo", Capabilities: []string{"agent:tool:video-gen"}},
 	})
 
 	if target := m.Resolve("codex"); target != nil {
 		t.Error("codex should be gone after replace")
 	}
-	if target := m.Resolve("claude"); target == nil || target.PluginID != "agent-claude" {
+	if target := m.Resolve("claude"); target == nil || target.PluginID != "agent-anthropic" {
 		t.Errorf("Resolve(claude) after replace = %+v", target)
 	}
 	if target := m.Resolve("veo"); target == nil || target.Type != TargetVideo {
@@ -255,7 +255,7 @@ func TestReplaceConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				m.Replace([]AliasInfo{{Name: "claude", Target: "agent-claude"}})
+				m.Replace([]AliasInfo{{Name: "claude", Target: "agent-anthropic"}})
 				m.Replace([]AliasInfo{{Name: "codex", Target: "agent-openai"}})
 			}
 		}()

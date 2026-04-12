@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/antimatter-studios/teamagentica/kernel/internal/database"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/events"
 	"github.com/antimatter-studios/teamagentica/kernel/internal/models"
 )
@@ -23,7 +24,8 @@ func newMCTestHandler(t *testing.T) (*PluginHandler, *gorm.DB) {
 	if err := db.AutoMigrate(&models.ManagedContainer{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
-	return &PluginHandler{db: db, Events: events.NewHub()}, db
+	database.DB = db
+	return &PluginHandler{Events: events.NewHub()}, db
 }
 
 // --- Input tests: given request data, verify the constructed upstream request ---

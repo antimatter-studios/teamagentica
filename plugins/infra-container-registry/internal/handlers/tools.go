@@ -25,7 +25,7 @@ func (h *Handler) ToolDefs() []gin.H {
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
-					"image": gin.H{"type": "string", "description": "Image name (e.g. 'teamagentica-agent-claude')"},
+					"image": gin.H{"type": "string", "description": "Image name (e.g. 'teamagentica-agent-anthropic')"},
 				},
 				"required": []string{"image"},
 			},

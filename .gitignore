@@ -29,3 +29,5 @@ portpilot/
 dist/
 .vite
 .claude/settings.json
+.trash
+kernel/kernel

@@ -1220,7 +1220,7 @@ func formatAttributedResponse(name, response string) string {
 // handleAliasesCommand lists all configured @mention aliases.
 func (b *Bot) handleAliasesCommand(chatID int64, topicID int) {
 	if b.aliases.IsEmpty() {
-		b.sendToChat(chatID, topicID, "No aliases configured.\n\nSet the ALIASES environment variable to enable @mention routing.\nExample: ALIASES=codex=agent-openai,claude=agent-claude")
+		b.sendToChat(chatID, topicID, "No aliases configured.\n\nSet the ALIASES environment variable to enable @mention routing.\nExample: ALIASES=codex=agent-openai,claude=agent-anthropic")
 		return
 	}
 

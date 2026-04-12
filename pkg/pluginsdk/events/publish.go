@@ -40,9 +40,14 @@ func PublishAliasUpdate(p Publisher, name, pluginID, aliasType string) {
 
 // --- Persona ---
 
-// PublishPersonaUpdate signals a persona has been modified.
-func PublishPersonaUpdate(p Publisher, personaID, alias string) {
-	p.PublishEvent(PersonaUpdate, marshal(PersonaUpdatePayload{PersonaID: personaID, Alias: alias}))
+// PublishAgentUpdate signals an agent has been modified.
+func PublishAgentUpdate(p Publisher, agentID, alias string) {
+	p.PublishEvent(AgentUpdate, marshal(AgentUpdatePayload{AgentID: agentID, Alias: alias}))
+}
+
+// PublishAgentReady signals that the agent registry has initialized.
+func PublishAgentReady(p Publisher) {
+	p.PublishEvent(AgentReady, "")
 }
 
 // --- MCP Server ---

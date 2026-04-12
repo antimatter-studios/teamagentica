@@ -96,7 +96,7 @@ func TestHandleChat_ReturnsTaskGroupID(t *testing.T) {
 	rtr := setupRouter(r)
 
 	r.routes.SetAliases(alias.NewAliasMap([]alias.AliasInfo{
-		{Name: "claude", Target: "agent-claude", Capabilities: []string{"agent"}},
+		{Name: "claude", Target: "agent-anthropic", Capabilities: []string{"agent"}},
 	}))
 
 	body := `{"source_plugin":"messaging-discord","channel_id":"c1","message":"@claude what is Go?"}`
@@ -124,7 +124,7 @@ func TestHandleChat_WorkspacePriorityOverAlias(t *testing.T) {
 
 	r.routes.MapWorkspace("messaging-discord", "c1", "ws-1", "127.0.0.1:99999") // unreachable
 	r.routes.SetAliases(alias.NewAliasMap([]alias.AliasInfo{
-		{Name: "claude", Target: "agent-claude", Capabilities: []string{"agent"}},
+		{Name: "claude", Target: "agent-anthropic", Capabilities: []string{"agent"}},
 	}))
 
 	body := `{"source_plugin":"messaging-discord","channel_id":"c1","message":"@claude hello"}`

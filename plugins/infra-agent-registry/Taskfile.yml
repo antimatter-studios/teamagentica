@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: infra-agent-persona
+  BINARY_NAME: infra-agent-registry
 
 tasks:
   default:

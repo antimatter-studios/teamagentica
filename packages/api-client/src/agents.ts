@@ -1,7 +1,7 @@
 import type { HttpTransport } from "./client.js";
 import { sanitizeAlias } from "./sanitize.js";
 
-const ROUTE = "/api/route/infra-alias-registry";
+const ROUTE = "/api/route/infra-agent-registry";
 
 export type AgentType = "agent" | "tool_agent" | "tool";
 
@@ -9,7 +9,6 @@ export interface RegistryAlias {
   name: string;
   type: AgentType;
   plugin: string;
-  provider: string;
   model: string;
   system_prompt: string;
   created_at: string;
@@ -20,7 +19,6 @@ export interface CreateAliasRequest {
   name: string;
   type: AgentType;
   plugin: string;
-  provider?: string;
   model?: string;
   system_prompt?: string;
 }
@@ -29,7 +27,6 @@ export interface UpdateAliasRequest {
   name?: string;
   type?: AgentType;
   plugin?: string;
-  provider?: string;
   model?: string;
   system_prompt?: string;
 }
@@ -43,8 +40,11 @@ export class AgentRegistryAPI {
   private http: HttpTransport;
   constructor(http: HttpTransport) { this.http = http; }
 
-  async list(type?: AgentType): Promise<RegistryAlias[]> {
-    const qs = type ? `?type=${encodeURIComponent(type)}` : "";
+  async list(type?: AgentType, excludeAgents?: boolean): Promise<RegistryAlias[]> {
+    const params: string[] = [];
+    if (type) params.push(`type=${encodeURIComponent(type)}`);
+    if (excludeAgents) params.push("exclude_agents=true");
+    const qs = params.length ? `?${params.join("&")}` : "";
     const res = await this.http.get<{ aliases: RegistryAlias[] }>(`${ROUTE}/aliases${qs}`);
     return res.aliases || [];
   }

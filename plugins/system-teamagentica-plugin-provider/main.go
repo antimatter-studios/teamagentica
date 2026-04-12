@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -39,9 +41,64 @@ func main() {
 	}
 	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
 
+	// Seed the default system provider (self).
+	selfURL := fmt.Sprintf("https://teamagentica-plugin-%s:%d", manifest.ID, defaultPort)
+	if err := catalog.SeedProvider("TeamAgentica Plugin Provider", selfURL, true); err != nil {
+		log.Printf("catalog: failed to seed default provider: %v", err)
+	} else {
+		log.Printf("catalog: default provider seeded (url=%s)", selfURL)
+	}
+
 	r := gin.Default()
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// --- Provider management ---
+
+	r.GET("/providers", func(c *gin.Context) {
+		providers, err := catalog.ListProviders()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch providers"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"providers": providers})
+	})
+
+	r.POST("/providers", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name" binding:"required"`
+			URL  string `json:"url" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		p, err := catalog.CreateProvider(req.Name, req.URL)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add provider: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"provider": p})
+	})
+
+	r.DELETE("/providers/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+			return
+		}
+		if err := catalog.DeleteProvider(uint(id)); err != nil {
+			status := http.StatusInternalServerError
+			if err.Error() == "provider not found" {
+				status = http.StatusNotFound
+			} else if err.Error() == "system providers cannot be deleted" {
+				status = http.StatusForbidden
+			}
+			c.JSON(status, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "provider deleted"})
 	})
 
 	// Browse catalog — returns entries for marketplace UI.

@@ -110,7 +110,7 @@ function calculateCosts(
     const price = findEffectivePrice(allPrices, provider, rec.model, rec.ts);
     if (price && !price.subscription) {
       if (isTokenRecord(rec)) {
-        const inputCost = ((rec.input_tokens - (rec.cached_tokens || 0)) / 1_000_000) * price.input_per_1m;
+        const inputCost = (rec.input_tokens / 1_000_000) * price.input_per_1m;
         const outputCost = (rec.output_tokens / 1_000_000) * price.output_per_1m;
         const cachedCost = ((rec.cached_tokens || 0) / 1_000_000) * price.cached_per_1m;
         entry.cost += inputCost + outputCost + cachedCost;

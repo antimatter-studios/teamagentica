@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { apiClient } from "../api/client";
-import type { RegistryAlias, AgentType, Plugin, Persona, PersonaRole } from "@teamagentica/api-client";
+import type { RegistryAlias, AgentType, Plugin, AgentEntry } from "@teamagentica/api-client";
 
 const CAPABILITY_MAP: Record<string, string[]> = {
   agent: ["agent:chat"],
@@ -11,8 +11,7 @@ const CAPABILITY_MAP: Record<string, string[]> = {
 interface AgentStore {
   // Data
   aliases: RegistryAlias[];
-  personas: Persona[];
-  roles: PersonaRole[];
+  agents: AgentEntry[];
   pluginsByType: Record<AgentType, Plugin[]>;
   loading: boolean;
   error: string | null;
@@ -25,15 +24,10 @@ interface AgentStore {
   fetch: () => Promise<void>;
   fetchPlugins: () => Promise<void>;
 
-  // Persona CRUD
-  createPersona: (req: Parameters<typeof apiClient.personas.create>[0]) => Promise<Persona>;
-  updatePersona: (alias: string, req: Parameters<typeof apiClient.personas.update>[1]) => Promise<Persona>;
-  deletePersona: (alias: string) => Promise<void>;
-
-  // Role CRUD
-  createRole: (req: Parameters<typeof apiClient.personas.createRole>[0]) => Promise<PersonaRole>;
-  updateRole: (id: string, req: Parameters<typeof apiClient.personas.updateRole>[1]) => Promise<PersonaRole>;
-  deleteRole: (id: string) => Promise<void>;
+  // Agent CRUD
+  createAgent: (req: Parameters<typeof apiClient.agentRegistry.create>[0]) => Promise<AgentEntry>;
+  updateAgent: (alias: string, req: Parameters<typeof apiClient.agentRegistry.update>[1]) => Promise<AgentEntry>;
+  deleteAgent: (alias: string) => Promise<void>;
 
   // Alias CRUD (agents, tool agents, tools)
   createAlias: (req: Parameters<typeof apiClient.agents.create>[0]) => Promise<RegistryAlias>;
@@ -43,8 +37,7 @@ interface AgentStore {
 
 export const useAgentStore = create<AgentStore>((set, get) => ({
   aliases: [],
-  personas: [],
-  roles: [],
+  agents: [],
   pluginsByType: { agent: [], tool_agent: [], tool: [] },
   loading: true,
   error: null,
@@ -58,17 +51,16 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   fetch: async () => {
-    if (get().aliases.length === 0 && get().personas.length === 0) {
+    if (get().aliases.length === 0 && get().agents.length === 0) {
       set({ loading: true });
     }
     try {
       const errors: string[] = [];
-      const [aliases, personas, roles] = await Promise.all([
-        apiClient.agents.list().catch((e) => { errors.push(`aliases: ${e.message}`); return [] as RegistryAlias[]; }),
-        apiClient.personas.list().catch((e) => { errors.push(`personas: ${e.message}`); return [] as Persona[]; }),
-        apiClient.personas.listRoles().catch((e) => { errors.push(`roles: ${e.message}`); return [] as PersonaRole[]; }),
+      const [aliases, agents] = await Promise.all([
+        apiClient.agents.list(undefined, true).catch((e) => { errors.push(`aliases: ${e.message}`); return [] as RegistryAlias[]; }),
+        apiClient.agentRegistry.list().catch((e) => { errors.push(`agents: ${e.message}`); return [] as AgentEntry[]; }),
       ]);
-      set({ aliases, personas, roles, loading: false, error: errors.length ? errors.join("; ") : null });
+      set({ aliases, agents, loading: false, error: errors.length ? errors.join("; ") : null });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : "Failed to load agents" });
     }
@@ -91,35 +83,19 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set({ pluginsByType: result, error: errors.length ? [get().error, ...errors].filter(Boolean).join("; ") : get().error });
   },
 
-  // Persona CRUD
-  createPersona: async (req) => {
-    const p = await apiClient.personas.create(req);
+  // Agent CRUD
+  createAgent: async (req) => {
+    const p = await apiClient.agentRegistry.create(req);
     await get().fetch();
     return p;
   },
-  updatePersona: async (alias, req) => {
-    const p = await apiClient.personas.update(alias, req);
+  updateAgent: async (alias, req) => {
+    const p = await apiClient.agentRegistry.update(alias, req);
     await get().fetch();
     return p;
   },
-  deletePersona: async (alias) => {
-    await apiClient.personas.delete(alias);
-    await get().fetch();
-  },
-
-  // Role CRUD
-  createRole: async (req) => {
-    const r = await apiClient.personas.createRole(req);
-    await get().fetch();
-    return r;
-  },
-  updateRole: async (id, req) => {
-    const r = await apiClient.personas.updateRole(id, req);
-    await get().fetch();
-    return r;
-  },
-  deleteRole: async (id) => {
-    await apiClient.personas.deleteRole(id);
+  deleteAgent: async (alias) => {
+    await apiClient.agentRegistry.delete(alias);
     await get().fetch();
   },
 

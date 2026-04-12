@@ -31,12 +31,12 @@ func OnAliasUpdate(client *pluginsdk.Client, handler func(AliasEntry)) {
 	}))
 }
 
-// OnPersonaUpdate subscribes to persona changes with a typed payload.
-func OnPersonaUpdate(client *pluginsdk.Client, handler func(PersonaUpdatePayload)) {
-	client.Events().On(PersonaUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
-		var p PersonaUpdatePayload
+// OnAgentUpdate subscribes to agent changes with a typed payload.
+func OnAgentUpdate(client *pluginsdk.Client, handler func(AgentUpdatePayload)) {
+	client.Events().On(AgentUpdate, pluginsdk.NewNullDebouncer(func(e pluginsdk.EventCallback) {
+		var p AgentUpdatePayload
 		if err := json.Unmarshal([]byte(e.Detail), &p); err != nil {
-			log.Printf("events: failed to decode %s: %v", PersonaUpdate, err)
+			log.Printf("events: failed to decode %s: %v", AgentUpdate, err)
 			return
 		}
 		handler(p)
@@ -171,7 +171,7 @@ func DebouncedOnAliasRegistryUpdate(client *pluginsdk.Client, debouncer pluginsd
 	client.Events().On(AliasRegistryUpdate, debouncer)
 }
 
-// DebouncedOnPersonaUpdate subscribes with a timed debouncer for coalescing rapid events.
-func DebouncedOnPersonaUpdate(client *pluginsdk.Client, debouncer pluginsdk.Debouncer) {
-	client.Events().On(PersonaUpdate, debouncer)
+// DebouncedOnAgentUpdate subscribes with a timed debouncer for coalescing rapid events.
+func DebouncedOnAgentUpdate(client *pluginsdk.Client, debouncer pluginsdk.Debouncer) {
+	client.Events().On(AgentUpdate, debouncer)
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -241,6 +242,164 @@ func (h *Handler) ProcessUsageEvent(event pluginsdk.EventCallback) {
 
 	log.Printf("infra-cost-tracking: stored usage from %s provider=%s model=%s in=%d out=%d",
 		event.PluginID, report.Provider, report.Model, report.InputTokens, report.OutputTokens)
+}
+
+// --- Pricing handlers ---
+
+// ListPrices returns all pricing entries.
+// GET /pricing
+func (h *Handler) ListPrices(c *gin.Context) {
+	prices, err := h.db.ListPrices()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query prices"})
+		return
+	}
+	if prices == nil {
+		prices = []storage.ModelPrice{}
+	}
+	c.JSON(http.StatusOK, prices)
+}
+
+// ListCurrentPrices returns only the currently-effective pricing entries.
+// GET /pricing/current
+func (h *Handler) ListCurrentPrices(c *gin.Context) {
+	prices, err := h.db.ListCurrentPrices()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query prices"})
+		return
+	}
+	if prices == nil {
+		prices = []storage.ModelPrice{}
+	}
+	c.JSON(http.StatusOK, prices)
+}
+
+// savePriceRequest is the body for creating/updating a price.
+type savePriceRequest struct {
+	Provider     string  `json:"provider" binding:"required"`
+	Model        string  `json:"model" binding:"required"`
+	InputPer1M   float64 `json:"input_per_1m"`
+	OutputPer1M  float64 `json:"output_per_1m"`
+	CachedPer1M  float64 `json:"cached_per_1m"`
+	PerRequest   float64 `json:"per_request"`
+	Subscription float64 `json:"subscription"`
+	Currency     string  `json:"currency"`
+}
+
+// savePriceRecord closes any existing price window for the given provider+model
+// and creates a new one.
+func (h *Handler) savePriceRecord(provider, model string, inputPer1M, outputPer1M, cachedPer1M, perRequest, subscription float64, currency string, effectiveFrom time.Time) (*storage.ModelPrice, error) {
+	if currency == "" {
+		currency = "USD"
+	}
+
+	from := effectiveFrom
+	if from.IsZero() {
+		from = time.Now().UTC()
+	}
+
+	// Close existing window.
+	h.db.ClosePrice(provider, model, from)
+
+	// Open new window.
+	price := &storage.ModelPrice{
+		Provider:      provider,
+		Model:         model,
+		InputPer1M:    inputPer1M,
+		OutputPer1M:   outputPer1M,
+		CachedPer1M:   cachedPer1M,
+		PerRequest:    perRequest,
+		Subscription:  subscription,
+		Currency:      currency,
+		EffectiveFrom: from,
+	}
+	if err := h.db.SavePrice(price); err != nil {
+		return nil, err
+	}
+	return price, nil
+}
+
+// SavePrice creates a new pricing window. If no previous price exists for that
+// provider+model, effective_from is set to the earliest usage record timestamp
+// so the price covers all historical data.
+// POST /pricing
+func (h *Handler) SavePrice(c *gin.Context) {
+	var req savePriceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	count, err := h.db.CountPrices(req.Provider, req.Model)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check prices"})
+		return
+	}
+
+	var effectiveFrom time.Time
+	if count == 0 {
+		// No previous price — backfill to earliest usage record (local query).
+		effectiveFrom = h.db.EarliestUsageTimestamp(req.Provider, req.Model)
+	}
+
+	price, err := h.savePriceRecord(req.Provider, req.Model, req.InputPer1M, req.OutputPer1M, req.CachedPer1M, req.PerRequest, req.Subscription, req.Currency, effectiveFrom)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save price"})
+		return
+	}
+
+	c.JSON(http.StatusOK, price)
+}
+
+// DeletePrice removes a pricing entry by ID.
+// DELETE /pricing/:id
+func (h *Handler) DeletePrice(c *gin.Context) {
+	id := c.Param("id")
+
+	var idUint uint
+	if _, err := fmt.Sscanf(id, "%d", &idUint); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if err := h.db.DeletePrice(idUint); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete price"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// PushPrices accepts an array of prices from plugins.
+// POST /pricing/push
+func (h *Handler) PushPrices(c *gin.Context) {
+	var req struct {
+		Prices []struct {
+			Provider    string  `json:"provider" binding:"required"`
+			Model       string  `json:"model" binding:"required"`
+			InputPer1M  float64 `json:"input_per_1m"`
+			OutputPer1M float64 `json:"output_per_1m"`
+			CachedPer1M float64 `json:"cached_per_1m"`
+			PerRequest  float64 `json:"per_request"`
+			Currency    string  `json:"currency"`
+		} `json:"prices" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var count int
+	for _, p := range req.Prices {
+		_, err := h.savePriceRecord(p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, 0, p.Currency, time.Time{})
+		if err != nil {
+			log.Printf("pricing: failed to save %s/%s: %v", p.Provider, p.Model, err)
+			continue
+		}
+		count++
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "prices updated", "count": count})
 }
 
 // UsageUsers returns distinct user IDs with record counts.

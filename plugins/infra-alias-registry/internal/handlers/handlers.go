@@ -233,7 +233,7 @@ func (h *Handler) ToolDefs() interface{} {
 				"properties": gin.H{
 					"name":          gin.H{"type": "string", "description": "Unique alias name (e.g. coder, nanobanana, cloud)"},
 					"type":          gin.H{"type": "string", "description": "Type: agent, tool_agent, or tool"},
-					"plugin":        gin.H{"type": "string", "description": "Target plugin ID (e.g. agent-claude, tool-nanobanana, storage-sss3)"},
+					"plugin":        gin.H{"type": "string", "description": "Target plugin ID (e.g. agent-anthropic, tool-nanobanana, storage-sss3)"},
 					"provider":      gin.H{"type": "string", "description": "For agents: provider plugin ID"},
 					"model":         gin.H{"type": "string", "description": "For agents: model override"},
 					"system_prompt": gin.H{"type": "string", "description": "For agents: system prompt"},

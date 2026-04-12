@@ -1,0 +1,16 @@
+id: infra-agent-registry
+name: "Agent Registry"
+description: "Unified registry for agents and aliases — manages system prompts, model overrides, and routing"
+group: infrastructure
+version: "1.3.2"
+image: "teamagentica-infra-agent-registry:latest"
+author: teamagentica
+tags: [infrastructure, agents, aliases]
+capabilities: ["tool:agents", "tool:aliases"]
+config_schema:
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99

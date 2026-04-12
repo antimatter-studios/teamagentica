@@ -5,14 +5,13 @@ import (
 	"time"
 )
 
-// DiskMount describes a storage-disk-managed mount for a managed container.
-// Each mount references a disk by its stable storage-disk ID, so renames
-// don't break linkage.
+// DiskMount describes a pre-resolved storage mount for a managed container.
+// The owning plugin resolves disk paths via storage-disk before passing them
+// to the kernel — the kernel only translates to host-side bind mount paths.
 type DiskMount struct {
-	DiskID   string `json:"disk_id"`              // stable storage-disk ID
-	DiskType string `json:"disk_type"`            // "workspace" or "shared"
-	Target   string `json:"target"`               // mount path inside the container
-	ReadOnly bool   `json:"read_only,omitempty"`
+	SourcePath string `json:"source_path"`          // storage-disk internal path, e.g. "/data/storage-root/workspace/ws-abc"
+	Target     string `json:"target"`               // mount path inside the container
+	ReadOnly   bool   `json:"read_only,omitempty"`
 }
 
 // ManagedContainer represents a container launched by a plugin and tracked

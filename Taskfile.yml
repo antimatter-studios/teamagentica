@@ -10,18 +10,18 @@ includes:
   pluginsdk:
     taskfile: ./pkg/pluginsdk/Taskfile.yml
     dir: ./pkg/pluginsdk
-  agent-claude:
-    taskfile: ./plugins/agent-claude/Taskfile.yml
-    dir: ./plugins/agent-claude
-  agent-gemini:
-    taskfile: ./plugins/agent-gemini/Taskfile.yml
-    dir: ./plugins/agent-gemini
+  agent-anthropic:
+    taskfile: ./plugins/agent-anthropic/Taskfile.yml
+    dir: ./plugins/agent-anthropic
+  agent-google:
+    taskfile: ./plugins/agent-google/Taskfile.yml
+    dir: ./plugins/agent-google
   agent-inception:
     taskfile: ./plugins/agent-inception/Taskfile.yml
     dir: ./plugins/agent-inception
-  agent-kimi:
-    taskfile: ./plugins/agent-kimi/Taskfile.yml
-    dir: ./plugins/agent-kimi
+  agent-moonshot:
+    taskfile: ./plugins/agent-moonshot/Taskfile.yml
+    dir: ./plugins/agent-moonshot
   agent-ollama:
     taskfile: ./plugins/agent-ollama/Taskfile.yml
     dir: ./plugins/agent-ollama
@@ -46,12 +46,9 @@ includes:
   infra-agent-memory-lcm:
     taskfile: ./plugins/infra-agent-memory-lcm/Taskfile.yml
     dir: ./plugins/infra-agent-memory-lcm
-  infra-agent-persona:
-    taskfile: ./plugins/infra-agent-persona/Taskfile.yml
-    dir: ./plugins/infra-agent-persona
-  infra-alias-registry:
-    taskfile: ./plugins/infra-alias-registry/Taskfile.yml
-    dir: ./plugins/infra-alias-registry
+  infra-agent-registry:
+    taskfile: ./plugins/infra-agent-registry/Taskfile.yml
+    dir: ./plugins/infra-agent-registry
   infra-agent-relay:
     taskfile: ./plugins/infra-agent-relay/Taskfile.yml
     dir: ./plugins/infra-agent-relay
@@ -61,6 +58,9 @@ includes:
   infra-container-registry:
     taskfile: ./plugins/infra-container-registry/Taskfile.yml
     dir: ./plugins/infra-container-registry
+  infra-authz:
+    taskfile: ./plugins/infra-authz/Taskfile.yml
+    dir: ./plugins/infra-authz
   infra-cost-tracking:
     taskfile: ./plugins/infra-cost-tracking/Taskfile.yml
     dir: ./plugins/infra-cost-tracking
@@ -272,10 +272,10 @@ tasks:
   plugin:build:all:
     desc: Build all plugin Docker images (prod)
     cmds:
-      - task: agent-claude:build
-      - task: agent-gemini:build
+      - task: agent-anthropic:build
+      - task: agent-google:build
       - task: agent-inception:build
-      - task: agent-kimi:build
+      - task: agent-moonshot:build
       - task: agent-openai:build
       - task: agent-openrouter:build
       - task: agent-requesty:build
@@ -283,6 +283,7 @@ tasks:
       - task: infra-agent-relay:build
       - task: infra-builder:build
       - task: infra-container-registry:build
+      - task: infra-authz:build
       - task: infra-cost-tracking:build
       - task: infra-task-scheduler:build
       - task: infra-mcp-server:build
@@ -310,10 +311,10 @@ tasks:
   plugin:build:dev:
     desc: Build all plugin Docker images (dev)
     cmds:
-      - task: agent-claude:build:dev
-      - task: agent-gemini:build:dev
+      - task: agent-anthropic:build:dev
+      - task: agent-google:build:dev
       - task: agent-inception:build:dev
-      - task: agent-kimi:build:dev
+      - task: agent-moonshot:build:dev
       - task: agent-openai:build:dev
       - task: agent-openrouter:build:dev
       - task: agent-requesty:build:dev
@@ -321,6 +322,7 @@ tasks:
       - task: infra-agent-relay:build:dev
       - task: infra-builder:build:dev
       - task: infra-container-registry:build:dev
+      - task: infra-authz:build:dev
       - task: infra-cost-tracking:build:dev
       - task: infra-task-scheduler:build:dev
       - task: infra-mcp-server:build:dev

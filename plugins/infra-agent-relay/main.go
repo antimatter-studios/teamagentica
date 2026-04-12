@@ -30,7 +30,7 @@ import (
 
 // relay is the central message routing service.
 // Messaging plugins send messages here; the relay resolves the target agent
-// (via @mention or the default persona) and streams the response back.
+// (via @mention or the default agent) and streams the response back.
 type relay struct {
 	mu                    sync.RWMutex
 	conns                 map[string]*bridge.Client // workspaceID → TCP connection
@@ -39,7 +39,7 @@ type relay struct {
 	taskTimeoutSeconds    int
 	debug                 bool
 	tracer                *debugtrace.Recorder
-	personas              *personaCache
+	agents                *agentCache
 	memoryPluginID        string // cached plugin ID for infra-agent-memory-gateway (empty = not available)
 	memoryMu              sync.RWMutex
 	memoryCheckedAt       time.Time
@@ -56,21 +56,21 @@ type relay struct {
 	asyncWaiters map[string]*asyncWaiter
 }
 
-// personaInfo holds a cached persona definition from infra-alias-registry.
-type personaInfo struct {
+// agentInfo holds a cached agent definition from infra-agent-registry.
+type agentInfo struct {
 	Alias        string `json:"alias"`
+	Type         string `json:"type"`
+	Plugin       string `json:"plugin"`
 	SystemPrompt string `json:"system_prompt"`
-	BackendAlias string `json:"backend_alias"`
 	Model        string `json:"model"`
-	Role         string `json:"role"`
 	IsDefault    *bool  `json:"is_default"`
 }
 
-// personaCache holds all persona definitions, loaded on startup and patched
-// reactively via persona:update events. No TTL polling.
-type personaCache struct {
-	mu       sync.RWMutex
-	personas map[string]personaInfo
+// agentCache holds all agent definitions, loaded on startup and patched
+// reactively via agent:update events. No TTL polling.
+type agentCache struct {
+	mu     sync.RWMutex
+	agents map[string]agentInfo
 }
 
 func newRelay(sdk *pluginsdk.Client) *relay {
@@ -79,7 +79,7 @@ func newRelay(sdk *pluginsdk.Client) *relay {
 		routes:                router.NewTable(),
 		sdk:                   sdk,
 		taskTimeoutSeconds:    120,
-		personas:              &personaCache{},
+		agents:                &agentCache{},
 		asyncWaiters:          make(map[string]*asyncWaiter),
 	}
 }
@@ -138,15 +138,15 @@ func (r *relay) resolveAsyncWaiter(taskID string, resp *agentChatResponse) bool 
 	return false
 }
 
-// refreshPersonas fetches all personas from infra-agent-persona and replaces
+// refreshAgents fetches all agents from infra-agent-registry and replaces
 // the cache. On failure, the existing cache is preserved (never overwrite good
-// data with empty). Called once on startup and reactively from persona:update events.
-func (r *relay) refreshPersonas() {
+// data with empty). Called once on startup and reactively from agent:update events.
+func (r *relay) refreshAgents() {
 	if r.sdk == nil {
 		return
 	}
 
-	plugins, err := r.sdk.SearchPlugins("tool:personas")
+	plugins, err := r.sdk.SearchPlugins("tool:agents")
 	if err != nil || len(plugins) == 0 {
 		return
 	}
@@ -155,97 +155,89 @@ func (r *relay) refreshPersonas() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET", "/personas", nil)
+	body, err := r.sdk.RouteToPlugin(ctx, pluginID, "GET", "/agents", nil)
 	if err != nil {
-		log.Printf("relay: persona fetch from %s failed (keeping cached): %v", pluginID, err)
+		log.Printf("relay: agent fetch from %s failed (keeping cached): %v", pluginID, err)
 		return
 	}
 
 	var resp struct {
-		Personas []personaInfo `json:"personas"`
+		Agents []agentInfo `json:"agents"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		log.Printf("relay: persona parse failed (keeping cached): %v", err)
+		log.Printf("relay: agent parse failed (keeping cached): %v", err)
 		return
 	}
 
-	personas := make(map[string]personaInfo, len(resp.Personas))
-	for _, p := range resp.Personas {
-		personas[p.Alias] = p
+	agents := make(map[string]agentInfo, len(resp.Agents))
+	for _, p := range resp.Agents {
+		agents[p.Alias] = p
 	}
 
-	r.personas.mu.Lock()
-	r.personas.personas = personas
-	r.personas.mu.Unlock()
+	r.agents.mu.Lock()
+	r.agents.agents = agents
+	r.agents.mu.Unlock()
 
-	if len(personas) > 0 {
-		log.Printf("relay: loaded %d personas from %s", len(personas), pluginID)
+	if len(agents) > 0 {
+		log.Printf("relay: loaded %d agents from %s", len(agents), pluginID)
 	}
 }
 
-// fetchPersonas returns the current persona cache. The cache is populated on
-// startup and kept fresh by persona:update events — no polling.
-func (r *relay) fetchPersonas() map[string]personaInfo {
-	r.personas.mu.RLock()
-	p := r.personas.personas
-	r.personas.mu.RUnlock()
+// fetchAgents returns the current agent cache. The cache is populated on
+// startup and kept fresh by agent:update events — no polling.
+func (r *relay) fetchAgents() map[string]agentInfo {
+	r.agents.mu.RLock()
+	p := r.agents.agents
+	r.agents.mu.RUnlock()
 	if p != nil {
 		return p
 	}
-	return map[string]personaInfo{}
+	return map[string]agentInfo{}
 }
 
-// lookupPersona returns the persona for agentAlias, or nil if not found.
-// On cache miss it refreshes once from the persona plugin so newly-created
-// personas are available immediately even if the event was lost or delayed.
-func (r *relay) lookupPersona(agentAlias string) *personaInfo {
+// lookupAgent returns the agent for agentAlias, or nil if not found.
+// On cache miss it refreshes once from the agent registry so newly-created
+// agents are available immediately even if the event was lost or delayed.
+func (r *relay) lookupAgent(agentAlias string) *agentInfo {
 	if agentAlias == "" || r.sdk == nil {
 		return nil
 	}
-	personas := r.fetchPersonas()
-	if p, ok := personas[agentAlias]; ok {
+	agents := r.fetchAgents()
+	if p, ok := agents[agentAlias]; ok {
 		return &p
 	}
 	// Cache miss — refresh once and retry.
-	r.refreshPersonas()
-	personas = r.fetchPersonas()
-	if p, ok := personas[agentAlias]; ok {
+	r.refreshAgents()
+	agents = r.fetchAgents()
+	if p, ok := agents[agentAlias]; ok {
 		return &p
 	}
 	return nil
 }
 
-// resolvedTarget holds the result of persona-first, alias-fallback resolution.
+// resolvedTarget holds the result of agent-first, alias-fallback resolution.
 type resolvedTarget struct {
 	PluginID     string
 	Model        string
-	SystemPrompt string // from persona; empty for raw alias calls
+	SystemPrompt string // from agent definition; empty for raw alias calls
 	Alias        string // the name that was resolved
 }
 
-// resolvePersona looks up a name as a persona and resolves its backend alias
-// to a concrete plugin + model. Returns nil if no persona exists for the name.
-// Bare aliases without personas are not chattable — they are infrastructure-only.
-func (r *relay) resolvePersona(name string, aliases *alias.AliasMap) *resolvedTarget {
-	// 1. Try persona lookup first (has system prompt, model override, etc.).
-	if p := r.lookupPersona(name); p != nil && p.BackendAlias != "" {
-		target := aliases.Resolve(p.BackendAlias)
-		if target != nil {
-			model := p.Model
-			if model == "" {
-				model = target.Model
-			}
-			return &resolvedTarget{
-				PluginID:     target.PluginID,
-				Model:        model,
-				SystemPrompt: p.SystemPrompt,
-				Alias:        name,
-			}
+// resolveAgent looks up a name as an agent and resolves it to a concrete
+// plugin + model. Returns nil if no agent exists for the name.
+func (r *relay) resolveAgent(name string, aliases *alias.AliasMap) *resolvedTarget {
+	// 1. Try agent lookup first (has system prompt, model override, etc.).
+	if p := r.lookupAgent(name); p != nil && p.Plugin != "" {
+		return &resolvedTarget{
+			PluginID:     p.Plugin,
+			Model:        p.Model,
+			SystemPrompt: p.SystemPrompt,
+			Alias:        name,
 		}
 	}
 
-	// 2. Fall back to bare alias if it's a chattable target (agent or agent-tool).
-	// This allows tool-agents like nb2 to be addressed directly without a persona.
+	// 2. Fall back to alias map if it's a chattable target (agent or agent-tool).
+	// This allows tool-agents like nb2 to be addressed directly without an agent definition.
 	if aliases != nil {
 		if target := aliases.Resolve(name); target != nil && target.IsChatTarget() {
 			return &resolvedTarget{
@@ -471,13 +463,13 @@ func (r *relay) memoryExtractFacts(sessionID string, messages []conversationMsg)
 	}
 }
 
-// resolveDefault finds the persona marked as is_default and
+// resolveDefault finds the agent marked as is_default and
 // resolves its backend alias to a concrete plugin + model.
 func (r *relay) resolveDefault(aliases *alias.AliasMap) *resolvedTarget {
-	personas := r.fetchPersonas()
-	for _, p := range personas {
+	agents := r.fetchAgents()
+	for _, p := range agents {
 		if p.IsDefault != nil && *p.IsDefault {
-			return r.resolvePersona(p.Alias, aliases)
+			return r.resolveAgent(p.Alias, aliases)
 		}
 	}
 	return nil
@@ -567,9 +559,9 @@ func (r *relay) handleChat(c *gin.Context) {
 	// races with task registration in the messaging plugin and gets dropped.
 	if name, remainder, ok := parseAtPrefix(req.Message); ok {
 		aliases := r.routes.Aliases()
-		if resolved := r.resolvePersona(name, aliases); resolved == nil {
+		if resolved := r.resolveAgent(name, aliases); resolved == nil {
 			c.JSON(http.StatusOK, gin.H{
-				"user_message": fmt.Sprintf("@%s has no persona — create a persona to enable chat", name),
+				"user_message": fmt.Sprintf("@%s has no agent definition — create an agent to enable chat", name),
 			})
 			return
 		} else if remainder == "" {
@@ -644,14 +636,14 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 			nil, "", 0, "")
 	}
 
-	// 2. Check for @name prefix — persona direct routing.
+	// 2. Check for @name prefix — agent direct routing.
 	aliases := r.routes.Aliases()
 	if name, remainder, ok := parseAtPrefix(req.Message); ok {
-		resolved := r.resolvePersona(name, aliases)
+		resolved := r.resolveAgent(name, aliases)
 		if resolved == nil {
-			// @prefix was used but no persona exists — tell the user.
+			// @prefix was used but no agent exists — tell the user.
 			rr := &relayResponse{
-				Response:  fmt.Sprintf("@%s has no persona — create a persona to enable chat", name),
+				Response:  fmt.Sprintf("@%s has no agent definition — create an agent to enable chat", name),
 				Responder: "system",
 			}
 			r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "completed", "", rr)
@@ -737,7 +729,7 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	defaultAgent := r.resolveDefault(aliases)
 	if defaultAgent == nil {
 		r.emitProgress(req.SourcePlugin, req.ChannelID, taskGroupID, "failed",
-			"no default persona found — no persona is assigned as the default in the persona manager, use @aliases to speak to a specific persona", nil)
+			"no default agent found — no agent is assigned as the default in the agent registry, use @aliases to speak to a specific agent", nil)
 		return
 	}
 
@@ -1238,10 +1230,10 @@ func (r *relay) handleChatToAgent(c *gin.Context) {
 	}
 
 	aliases := r.routes.Aliases()
-	resolved := r.resolvePersona(req.AgentAlias, aliases)
+	resolved := r.resolveAgent(req.AgentAlias, aliases)
 	if resolved == nil {
 		c.JSON(http.StatusOK, gin.H{
-			"error": fmt.Sprintf("agent %q has no persona — create a persona to enable chat", req.AgentAlias),
+			"error": fmt.Sprintf("agent %q has no agent definition — create an agent to enable chat", req.AgentAlias),
 		})
 		return
 	}
@@ -1381,62 +1373,60 @@ func main() {
 		r.routes.SetAliases(alias.NewAliasMap(entries))
 		log.Printf("Aliases refreshed: %d entries", len(entries))
 
-		go r.refreshPersonas()
+		go r.refreshAgents()
 	}
 
 	// Patch a single alias on create/update/delete events.
-	sdkClient.Events().On("alias-registry:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+	// Agent registry emits agent:update with alias-compatible payload for
+	// both alias map patching and agent cache refresh.
+	sdkClient.Events().On("agent:update", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
 		var detail struct {
 			Action string `json:"action"`
 			Alias  struct {
-				Name     string `json:"name"`
-				Type     string `json:"type"`
-				Plugin   string `json:"plugin"`
-				Model    string `json:"model"`
+				Name   string `json:"name"`
+				Type   string `json:"type"`
+				Plugin string `json:"plugin"`
+				Model  string `json:"model"`
 			} `json:"alias"`
 		}
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
-			log.Printf("alias-registry:update parse error: %v", err)
+			// Fallback: just refresh everything.
+			go r.refreshAgents()
 			return
 		}
 
+		// Patch alias map in-place.
 		am := r.routes.Aliases()
 		if am == nil {
 			refreshAliases()
-			return
+		} else if detail.Alias.Name != "" {
+			if detail.Action == "deleted" {
+				am.Remove(detail.Alias.Name)
+				log.Printf("Alias removed: %s", detail.Alias.Name)
+			} else {
+				target := detail.Alias.Plugin
+				if detail.Alias.Model != "" {
+					target += ":" + detail.Alias.Model
+				}
+				var caps []string
+				switch detail.Alias.Type {
+				case "agent":
+					caps = []string{"agent:chat"}
+				case "tool_agent":
+					caps = []string{"agent:tool"}
+				default:
+					caps = []string{"tool:mcp"}
+				}
+				am.Set(detail.Alias.Name, alias.TargetFromInfo(target, caps))
+				log.Printf("Alias %s: %s → %s", detail.Action, detail.Alias.Name, target)
+			}
 		}
 
-		if detail.Action == "deleted" {
-			am.Remove(detail.Alias.Name)
-			log.Printf("Alias removed: %s", detail.Alias.Name)
-		} else {
-			target := detail.Alias.Plugin
-			if detail.Alias.Model != "" {
-				target += ":" + detail.Alias.Model
-			}
-			var caps []string
-			switch detail.Alias.Type {
-			case "agent":
-				caps = []string{"agent:chat"}
-			case "tool_agent":
-				caps = []string{"agent:tool"}
-			default:
-				caps = []string{"tool:mcp"}
-			}
-			am.Set(detail.Alias.Name, alias.TargetFromInfo(target, caps))
-			log.Printf("Alias %s: %s → %s", detail.Action, detail.Alias.Name, target)
-		}
-
-		go r.refreshPersonas()
+		go r.refreshAgents()
 	}))
 
-	// Refresh persona cache when the persona plugin signals a change.
-	sdkClient.Events().On("persona:update", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
-		r.refreshPersonas()
-	}))
-
-	// Re-fetch aliases when the registry signals it's ready (handles startup ordering).
-	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
+	// Re-fetch aliases when the agent registry signals it's ready (handles startup ordering).
+	sdkClient.Events().On("agent:ready", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
 		refreshAliases()
 	}))
 
@@ -1445,7 +1435,7 @@ func main() {
 	entries, err := sdkClient.FetchAliases()
 	if err != nil {
 		log.Printf("Initial alias fetch failed: %v (retrying in background)", err)
-		// Retry in background — alias-registry or other deps may not be ready yet.
+		// Retry in background — agent registry or other deps may not be ready yet.
 		go func() {
 			for attempt := 1; attempt <= 30; attempt++ {
 				time.Sleep(time.Duration(attempt*2) * time.Second)
@@ -1458,8 +1448,8 @@ func main() {
 				}
 				r.routes.SetAliases(alias.NewAliasMap(e))
 				log.Printf("Loaded %d aliases (after %d retries)", len(e), attempt)
-				// Also refresh personas since they likely failed too.
-				r.refreshPersonas()
+				// Also refresh agents since they likely failed too.
+				r.refreshAgents()
 				return
 			}
 			log.Printf("WARNING: alias fetch never succeeded — relay has no aliases")
@@ -1469,8 +1459,8 @@ func main() {
 		log.Printf("Loaded %d aliases", len(entries))
 	}
 
-	// Load personas on startup; kept fresh by persona:update events.
-	r.refreshPersonas()
+	// Load agents on startup; kept fresh by agent:update events.
+	r.refreshAgents()
 
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {

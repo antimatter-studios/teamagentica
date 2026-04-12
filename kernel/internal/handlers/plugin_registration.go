@@ -343,42 +343,41 @@ func (h *PluginHandler) ReportEvent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 
-// handleAddressedEvent guarantees at-least-once delivery to a specific plugin.
-// UpdatePricing handles POST /api/plugins/pricing — allows plugins to push
-// price updates to the kernel via mTLS auth.
+// UpdatePricing handles POST /api/plugins/pricing — forwards price updates
+// to infra-cost-tracking plugin which now owns all pricing data.
 func (h *PluginHandler) UpdatePricing(c *gin.Context) {
-	var req struct {
-		Prices []struct {
-			Provider    string  `json:"provider" binding:"required"`
-			Model       string  `json:"model" binding:"required"`
-			InputPer1M  float64 `json:"input_per_1m"`
-			OutputPer1M float64 `json:"output_per_1m"`
-			CachedPer1M float64 `json:"cached_per_1m"`
-			PerRequest  float64 `json:"per_request"`
-			Currency    string  `json:"currency"`
-		} `json:"prices" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	// Read the raw body to forward as-is.
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
 		return
 	}
 
-	var saved []models.ModelPrice
-	for _, p := range req.Prices {
-		price, err := SavePriceRecord(h.db(), p.Provider, p.Model, p.InputPer1M, p.OutputPer1M, p.CachedPer1M, p.PerRequest, 0, p.Currency, time.Time{})
-		if err != nil {
-			log.Printf("pricing: failed to save %s/%s: %v", p.Provider, p.Model, err)
-			continue
-		}
-		saved = append(saved, *price)
+	// Look up infra-cost-tracking plugin.
+	var plugin models.Plugin
+	if result := h.db().First(&plugin, "id = ? AND status = 'running'", "infra-cost-tracking"); result.Error != nil {
+		log.Printf("pricing: infra-cost-tracking not running, cannot forward prices: %v", result.Error)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "infra-cost-tracking plugin not available"})
+		return
 	}
+
+	targetURL := fmt.Sprintf("%s://%s:%d/pricing/push", h.pluginScheme(), plugin.Host, plugin.HTTPPort)
+	resp, err := h.proxyClient().Post(targetURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("pricing: failed to forward to infra-cost-tracking: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach infra-cost-tracking"})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
 
 	h.Events.Emit(events.DebugEvent{
 		Type:   "pricing",
-		Detail: fmt.Sprintf("updated %d model prices via plugin push", len(saved)),
+		Detail: "forwarded pricing push to infra-cost-tracking",
 	})
 
-	c.JSON(http.StatusOK, gin.H{"message": "prices updated", "count": len(saved)})
+	c.Data(resp.StatusCode, "application/json", respBody)
 }
 
 // WebhookIngress handles public (unauthenticated) webhook traffic from external
@@ -408,7 +407,7 @@ func (h *PluginHandler) RouteToPlugin(c *gin.Context) {
 	}
 
 	if plugin.Status != "running" || plugin.Host == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin not running"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("plugin %q not running", pluginID)})
 		return
 	}
 

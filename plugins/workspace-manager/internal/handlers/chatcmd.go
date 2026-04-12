@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -135,6 +136,7 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 
 	// Ensure all declared disks exist via storage-disk API.
 	var diskMounts []pluginsdk.DiskMount
+	var wsDisks []storage.WorkspaceDisk
 	for _, spec := range ws.Disks {
 		var diskName string
 		if spec.Type == "workspace" {
@@ -143,16 +145,18 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 			diskName = spec.Name
 		}
 
-		diskID, _, err := h.ensureDisk(ctx, diskName, spec.Type)
+		diskID, diskPath, err := h.ensureDisk(ctx, diskName, spec.Type)
 		if err != nil {
 			chatError(c, fmt.Sprintf("Failed to create disk %s: %v", diskName, err))
 			return
 		}
 		diskMounts = append(diskMounts, pluginsdk.DiskMount{
-			DiskID:   diskID,
-			DiskType: spec.Type,
-			Target:   spec.Target,
-			ReadOnly: spec.ReadOnly,
+			SourcePath: diskPath,
+			Target:     spec.Target,
+			ReadOnly:   spec.ReadOnly,
+		})
+		wsDisks = append(wsDisks, storage.WorkspaceDisk{
+			DiskID: diskID, Name: diskName, Type: spec.Type, Target: spec.Target, ReadOnly: spec.ReadOnly,
 		})
 	}
 
@@ -180,7 +184,17 @@ func (h *Handler) ChatCommandWorkspaceCreate(c *gin.Context) {
 		return
 	}
 
-	h.db.Put(&storage.WorkspaceRecord{ContainerID: mc.ID, EnvironmentID: envID})
+	h.db.Put(&storage.WorkspaceRecord{
+		ContainerID:   mc.ID,
+		EnvironmentID: envID,
+		Subdomain:     "ws-" + wsID,
+		DiskName:      fmt.Sprintf("ws-%s-%s", wsID, wsKey),
+	})
+	wsDisksJSON, _ := json.Marshal(wsDisks)
+	h.db.PutOptions(&storage.WorkspaceOptions{
+		ContainerID: mc.ID,
+		Disks:       string(wsDisksJSON),
+	})
 	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s","environment":"%s"}`, mc.ID, envID))
 
 	url := ""

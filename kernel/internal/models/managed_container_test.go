@@ -8,8 +8,8 @@ import (
 func TestManagedContainer_DiskMounts_RoundTrip(t *testing.T) {
 	mc := &ManagedContainer{}
 	mounts := []DiskMount{
-		{DiskID: "disk-1", DiskType: "workspace", Target: "/workspace"},
-		{DiskID: "disk-2", DiskType: "shared", Target: "/config", ReadOnly: true},
+		{SourcePath: "/data/storage-root/workspace/ws-abc", Target: "/workspace"},
+		{SourcePath: "/data/storage-root/shared/config", Target: "/config", ReadOnly: true},
 	}
 
 	mc.SetDiskMounts(mounts)
@@ -18,10 +18,10 @@ func TestManagedContainer_DiskMounts_RoundTrip(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 mounts, got %d", len(got))
 	}
-	if got[0].DiskID != "disk-1" || got[0].Target != "/workspace" {
+	if got[0].SourcePath != "/data/storage-root/workspace/ws-abc" || got[0].Target != "/workspace" {
 		t.Errorf("mount 0 = %+v", got[0])
 	}
-	if got[1].DiskID != "disk-2" || got[1].ReadOnly != true {
+	if got[1].SourcePath != "/data/storage-root/shared/config" || got[1].ReadOnly != true {
 		t.Errorf("mount 1 = %+v", got[1])
 	}
 }
@@ -97,7 +97,7 @@ func TestManagedContainer_Cmd_Empty(t *testing.T) {
 }
 
 func TestDiskMount_JSON(t *testing.T) {
-	dm := DiskMount{DiskID: "abc", DiskType: "shared", Target: "/mnt", ReadOnly: true}
+	dm := DiskMount{SourcePath: "/data/storage-root/shared/test", Target: "/mnt", ReadOnly: true}
 	data, err := json.Marshal(dm)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestDiskMount_JSON(t *testing.T) {
 }
 
 func TestDiskMount_JSON_OmitReadOnly(t *testing.T) {
-	dm := DiskMount{DiskID: "abc", DiskType: "workspace", Target: "/ws"}
+	dm := DiskMount{SourcePath: "/data/storage-root/workspace/ws-abc", Target: "/ws"}
 	data, err := json.Marshal(dm)
 	if err != nil {
 		t.Fatal(err)

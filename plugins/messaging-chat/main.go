@@ -119,9 +119,9 @@ func main() {
 		log.Printf("Hot-swapped %d aliases from registry (seq=%d)", len(infos), event.Seq)
 	}
 
-	// Subscribe to alias updates from infra-alias-registry.
-	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	// Subscribe to alias updates from infra-agent-persona.
+	sdkClient.Events().On("agent:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("agent:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	// Handle progress updates from the relay (thinking, running, completed, failed).
 	sdkClient.Events().On("relay:progress", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {

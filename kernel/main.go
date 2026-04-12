@@ -80,20 +80,6 @@ func main() {
 		})
 	})
 
-	// Pricing routes (admin only).
-	pricingHandler := handlers.NewPricingHandler(&http.Client{
-		Timeout:   5 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: clientTLS},
-	})
-	pricingGroup := r.Group("/api/pricing")
-	pricingGroup.Use(middleware.AuthRequired())
-	{
-		pricingGroup.GET("", pricingHandler.ListPrices)
-		pricingGroup.GET("/current", pricingHandler.ListCurrentPrices)
-		pricingGroup.POST("", pricingHandler.SavePrice)
-		pricingGroup.DELETE("/:id", pricingHandler.DeletePrice)
-	}
-
 	// Load runtime config (dev vs prod mounts, env vars, etc.).
 	rtCfg, err := runtimecfg.Load()
 	if err != nil {
@@ -277,13 +263,6 @@ func main() {
 		kernelGroup.GET("/ui/logs", pluginHandler.GetUILogs)
 	}
 
-	// Debug console SSE (admin only).
-	debugGroup := r.Group("/api/debug")
-	debugGroup.Use(middleware.AuthRequired())
-	{
-		debugGroup.GET("/event-log", handlers.DebugEventLog(database.Get()))
-	}
-
 	// Boot orchestrator: start all enabled plugins in background.
 	orch := orchestrator.NewOrchestrator(dockerRT, cfg, pluginHandler.Events, clientTLS)
 	monitor.SetRestarter(orch)
@@ -296,6 +275,7 @@ func main() {
 		if err := orch.StartEnabledPlugins(orchCtx); err != nil {
 			log.Printf("orchestrator: boot error: %v", err)
 		}
+		orch.MigrateDiskMountsToSourcePath(orchCtx)
 		orch.RecoverManagedContainers(orchCtx)
 
 		// Wait for plugins to register, then broadcast full address registry

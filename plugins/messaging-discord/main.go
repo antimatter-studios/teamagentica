@@ -184,8 +184,8 @@ func main() {
 	}
 
 	// Register event handlers (local dispatch only — no subscription yet).
-	sdkClient.Events().On("alias-registry:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
-	sdkClient.Events().On("alias-registry:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
+	sdkClient.Events().On("agent:update", pluginsdk.NewTimedDebouncer(2*time.Second, handleAliasEvent))
+	sdkClient.Events().On("agent:ready", pluginsdk.NewTimedDebouncer(1*time.Second, handleAliasEvent))
 
 	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		dbg := p.Config["PLUGIN_DEBUG"] == "true" || p.Config["PLUGIN_DEBUG"] == "1"

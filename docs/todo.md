@@ -38,8 +38,8 @@
 ## Phase 4: AI + Messaging — COMPLETE
 
 - [x] agent-openai plugin: /health + /chat (env-based config)
-- [x] agent-gemini plugin: Google Gemini support
-- [x] agent-kimi plugin: Moonshot Kimi support
+- [x] agent-google plugin: Google Gemini support
+- [x] agent-moonshot plugin: Moonshot Kimi support
 - [x] agent-openrouter plugin: OpenRouter multi-model support
 - [x] agent-requesty plugin: Requesty API support
 - [x] Discord plugin: capability-based AI agent discovery, alias routing

@@ -39,7 +39,7 @@ The Mem0 plugin already has **separate config fields** for each:
 - `MEM0_EMBEDDER_ALIAS` — for embeddings (needs an embedding model)
 
 **These can point to completely different providers.** For example:
-- LLM: Opus via agent-claude for best extraction quality
+- LLM: Opus via agent-anthropic for best extraction quality
 - Embedder: Ollama locally with `nomic-embed-text` for free, fast embeddings
 
 Or: LLM via OpenRouter, Embedder via Gemini. Any combination works.
@@ -58,21 +58,21 @@ The capability currently gates both alias dropdowns to the same plugin set, whic
 
 | Plugin | Why it qualifies |
 |--------|-----------------|
-| **agent-gemini** | Exposes both chat completions and embeddings via OpenAI-compatible proxy |
+| **agent-google** | Exposes both chat completions and embeddings via OpenAI-compatible proxy |
 | **agent-ollama** | Both endpoints natively supported |
 
 ### Provider Compatibility Checklist
 
 | Provider | Plugin | Chat Completions | Embeddings | Notes |
 |----------|--------|:---:|:---:|-------|
-| **Gemini** | agent-gemini | Yes | Yes | Both via `generativelanguage.googleapis.com/v1beta/openai`. Models: `gemini-embedding-001` for embeddings |
+| **Gemini** | agent-google | Yes | Yes | Both via `generativelanguage.googleapis.com/v1beta/openai`. Models: `gemini-embedding-001` for embeddings |
 | **Ollama** | agent-ollama | Yes | Yes | Models: `nomic-embed-text`, `mxbai-embed-large`, etc. Free, fast, runs locally |
 | **OpenAI** | agent-openai | Yes | Yes | Models: `text-embedding-3-small/large`. Not yet configured/tested in our system |
 | **OpenRouter** | agent-openrouter | Yes | **Model-dependent** | Router — has `/api/v1/embeddings` but only for embedding models (e.g., `openai/text-embedding-3-small`). Chat models won't have it |
 | **Requesty** | agent-requesty | Yes | **Model-dependent** | Router — same as OpenRouter, `api-v2.requesty.ai/v1/embeddings` available but model-dependent |
-| **Moonshot/Kimi** | agent-kimi | Yes | **No** | No embeddings endpoint in Kimi API. Chat-only |
+| **Moonshot/Kimi** | agent-moonshot | Yes | **No** | No embeddings endpoint in Kimi API. Chat-only |
 | **Inception/Mercury** | agent-inception | Yes | **No** | Chat/code/edit only. No embedding models |
-| **Claude** | agent-claude | Yes (non-OpenAI) | **No** | Anthropic API has no embeddings endpoint |
+| **Claude** | agent-anthropic | Yes (non-OpenAI) | **No** | Anthropic API has no embeddings endpoint |
 
 **Routers (OpenRouter, Requesty)**: Can't statically declare `memory:extraction` because it depends on the user's model selection. A chat model alias won't have embeddings, but an embedding model alias will.
 
@@ -92,9 +92,9 @@ This would let the LLM dropdown show all chat-capable plugins while the embedder
 
 ## The @brains Persona
 
-`@brains` was a persona created with role `"memory"` pointing to the `haiku` alias (agent-claude, claude-haiku-4-5). It carried a detailed JSON extraction prompt as its system prompt.
+`@brains` was a persona created with role `"memory"` pointing to the `haiku` alias (agent-anthropic, claude-haiku-4-5). It carried a detailed JSON extraction prompt as its system prompt.
 
-**Original confusion**: We thought @brains couldn't work because agent-claude lacks `memory:extraction`. But now we understand the LLM and embedder are independent — any chat model can do fact extraction, including Haiku via @brains.
+**Original confusion**: We thought @brains couldn't work because agent-anthropic lacks `memory:extraction`. But now we understand the LLM and embedder are independent — any chat model can do fact extraction, including Haiku via @brains.
 
 **Current status**: Orphaned — nothing calls it. The extraction prompts live in the memory plugins themselves (Mem0's `custom_fact_extraction_prompt`, LCM's summarization prompts).
 
@@ -223,6 +223,6 @@ Memory Gateway (tool:memory)
 | `plugins/infra-agent-memory-lcm/main.go` | LCM Go sidecar, MCP wrapper |
 | `plugins/infra-agent-memory-lcm/lcm-server/server.ts` | LCM TypeScript server, DAG, compaction, summarization |
 | `plugins/infra-agent-memory-gateway/main.go` | Unified memory router |
-| `plugins/agent-gemini/internal/handlers/openai_proxy.go` | Gemini OpenAI-compatible proxy |
-| `plugins/agent-gemini/plugin.yaml` | Declares `memory:extraction` capability |
+| `plugins/agent-google/internal/handlers/openai_proxy.go` | Gemini OpenAI-compatible proxy |
+| `plugins/agent-google/plugin.yaml` | Declares `memory:extraction` capability |
 | `plugins/agent-ollama/plugin.yaml` | Declares `memory:extraction` capability |

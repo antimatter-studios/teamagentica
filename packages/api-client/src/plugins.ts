@@ -11,6 +11,7 @@ export interface ConfigSchemaField {
   dynamic?: boolean;
   help_text?: string;
   visible_when?: { field: string; value: string };
+  oauth_method?: string;
   order?: number;
 }
 
@@ -180,6 +181,10 @@ export class PluginsAPI {
 
   async pollOAuthFlow(pluginId: string): Promise<OAuthPollResult> {
     return this.http.post(`/api/route/${pluginId}/auth/poll`, {});
+  }
+
+  async submitOAuthCode(pluginId: string, code: string): Promise<OAuthPollResult> {
+    return this.http.post(`/api/route/${pluginId}/auth/submit-code`, { code });
   }
 
   async oauthLogout(pluginId: string): Promise<void> {

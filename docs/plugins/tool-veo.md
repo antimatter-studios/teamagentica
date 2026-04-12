@@ -108,7 +108,7 @@ Dynamic list from Gemini API (filters to models supporting `predictLongRunning`)
 - Returns a Google Long-Running Operation with `name` field for polling
 - Video URI extracted from `response.generateVideoResponse.generatedSamples[0].video.uri`
 - Tasks stored in memory — lost on restart
-- Shares `GEMINI_API_KEY` with agent-gemini and tool-nanobanana
+- Shares `GEMINI_API_KEY` with agent-google and tool-nanobanana
 
 ## Related
 

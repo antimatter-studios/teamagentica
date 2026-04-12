@@ -6,8 +6,8 @@ describe("ENUMERATION: unauthenticated plugin/container discovery", () => {
     const commonPluginIds = [
       "system-teamagentica-plugin-provider",
       "agent-openai",
-      "agent-claude",
-      "agent-gemini",
+      "agent-anthropic",
+      "agent-google",
       "messaging-discord",
       "messaging-telegram",
       "messaging-chat",
