@@ -1,13 +1,11 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,87 +14,11 @@ func init() {
 }
 
 func newTestHandler(apiKey, model, dataPath string) *Handler {
-	return NewHandler(apiKey, model, dataPath, false, "")
-}
-
-func TestHealth(t *testing.T) {
-	h := newTestHandler("test-key", "kimi-k2-turbo-preview", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/health", nil)
-
-	h.Health(c)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	if resp["plugin"] != "agent-moonshot" {
-		t.Errorf("expected plugin=agent-moonshot, got %v", resp["plugin"])
-	}
-	if resp["status"] != "ok" {
-		t.Errorf("expected status=ok, got %v", resp["status"])
-	}
-	if resp["configured"] != true {
-		t.Errorf("expected configured=true, got %v", resp["configured"])
-	}
-	if resp["model"] != "kimi-k2-turbo-preview" {
-		t.Errorf("expected model=kimi-k2-turbo-preview, got %v", resp["model"])
-	}
-}
-
-func TestHealthNotConfigured(t *testing.T) {
-	h := newTestHandler("", "kimi-k2-turbo-preview", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/health", nil)
-
-	h.Health(c)
-
-	var resp map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if resp["configured"] != false {
-		t.Errorf("expected configured=false, got %v", resp["configured"])
-	}
-}
-
-func TestChatStreamNoAPIKey(t *testing.T) {
-	h := newTestHandler("", "kimi-k2-turbo-preview", t.TempDir())
-
-	ch := h.ChatStream(context.Background(), pluginsdk.AgentChatRequest{
-		Message: "hello",
+	return NewHandler(HandlerConfig{
+		APIKey:   apiKey,
+		Model:    model,
+		DataPath: dataPath,
 	})
-
-	var got pluginsdk.AgentStreamEvent
-	for ev := range ch {
-		got = ev
-	}
-	if got.Type != "error" {
-		t.Fatalf("expected error event, got %s", got.Type)
-	}
-}
-
-func TestChatStreamEmptyMessage(t *testing.T) {
-	h := newTestHandler("test-key", "kimi-k2-turbo-preview", t.TempDir())
-
-	ch := h.ChatStream(context.Background(), pluginsdk.AgentChatRequest{})
-
-	var got pluginsdk.AgentStreamEvent
-	for ev := range ch {
-		got = ev
-	}
-	if got.Type != "error" {
-		t.Fatalf("expected error event, got %s", got.Type)
-	}
 }
 
 func TestUsageRecordsEmpty(t *testing.T) {
@@ -151,14 +73,51 @@ func TestUsageSummaryEmpty(t *testing.T) {
 	}
 }
 
-func TestTruncateStr(t *testing.T) {
-	short := "hello"
-	if got := truncateStr(short, 10); got != "hello" {
-		t.Errorf("expected hello, got %s", got)
+func TestModelsNoAPIKey(t *testing.T) {
+	h := newTestHandler("", "kimi-k2-turbo-preview", t.TempDir())
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/models", nil)
+
+	h.Models(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	long := "abcdefghij"
-	if got := truncateStr(long, 5); got != "abcde..." {
-		t.Errorf("expected abcde..., got %s", got)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp["error"] != "No API key configured." {
+		t.Errorf("expected no-api-key error, got %v", resp["error"])
+	}
+}
+
+func TestSystemPrompt(t *testing.T) {
+	h := NewHandler(HandlerConfig{
+		APIKey:        "test",
+		Model:         "kimi-k2",
+		DataPath:      t.TempDir(),
+		DefaultPrompt: "You are Kimi.",
+	})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/system-prompt", nil)
+
+	h.SystemPrompt(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp["default_prompt"] != "You are Kimi." {
+		t.Errorf("expected prompt, got %v", resp["default_prompt"])
 	}
 }

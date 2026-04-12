@@ -10,9 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimicli"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/provider"
 )
 
 //go:embed system-prompt.md
@@ -72,10 +74,29 @@ func main() {
 		}
 	}
 
-	router := gin.Default()
-
-	h := handlers.NewHandler(apiKey, model, dataPath, debug, defaultSystemPrompt)
+	// Create the plugin-specific handler (models, usage, config options, system prompt).
+	h := handlers.NewHandler(handlers.HandlerConfig{
+		APIKey:        apiKey,
+		Model:         model,
+		Debug:         debug,
+		DataPath:      dataPath,
+		DefaultPrompt: defaultSystemPrompt,
+	})
 	h.SetSDK(sdkClient)
+
+	// Create the agentkit adapter.
+	adapter := provider.NewAdapter(provider.AdapterConfig{
+		APIKey:        apiKey,
+		Model:         model,
+		Debug:         debug,
+		DefaultPrompt: defaultSystemPrompt,
+		Tracker:       h.Tracker(),
+	})
+
+	// Wire event emission from the adapter to the SDK.
+	adapter.SetEmitEvent(func(eventType, detail string) {
+		sdkClient.PublishEvent(eventType, detail)
+	})
 
 	// Initialise CLI backend if configured.
 	if backend == "cli" {
@@ -96,9 +117,9 @@ func main() {
 		}
 
 		cliClient := kimicli.NewClient(cliBinary, workdir, kimiHome, cliTimeout, debug)
-		h.SetKimiCLI(cliClient)
+		adapter.SetKimiCLI(cliClient)
 
-		// MCP bridge: localhost HTTP proxy → infra-mcp-server via mTLS.
+		// MCP bridge: localhost HTTP proxy -> infra-mcp-server via mTLS.
 		configureMCP := func(mcpPluginID string) {
 			proxy, err := sdkClient.StartMCPBridge(mcpPluginID)
 			if err != nil {
@@ -109,8 +130,8 @@ func main() {
 			if err != nil {
 				log.Printf("[mcp] failed to write MCP config: %v", err)
 			} else {
-				h.SetMCPConfigFile(configPath)
-				log.Printf("[mcp] configured MCP proxy → %s (plugin=%s)", proxy.URL, mcpPluginID)
+				adapter.SetMCPConfigFile(configPath)
+				log.Printf("[mcp] configured MCP proxy -> %s (plugin=%s)", proxy.URL, mcpPluginID)
 			}
 		}
 
@@ -139,14 +160,21 @@ func main() {
 			if err := kimicli.RemoveMCPConfig(kimiHome); err != nil {
 				log.Printf("[mcp] failed to remove MCP config: %v", err)
 			}
-			h.SetMCPConfigFile("")
+			adapter.SetMCPConfigFile("")
 			log.Printf("[mcp] MCP server disabled, config removed")
 		}))
 	}
 
-	router.GET("/health", h.Health)
-	pluginsdk.RegisterAgentChat(router, h)
-	router.GET("/mcp", h.DiscoveredTools)
+	router := gin.Default()
+
+	// Register core agent routes via agentkit (/chat, /health, /mcp).
+	agentkit.RegisterAgentChat(router, sdkClient, adapter, defaultSystemPrompt,
+		agentkit.WithDefaultModel(model),
+		agentkit.WithMaxToolLoops(20),
+		agentkit.WithDebug(debug),
+	)
+
+	// Plugin-specific routes (not handled by agentkit).
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
@@ -156,6 +184,7 @@ func main() {
 	// Apply config updates in-place without restarting the container.
 	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		h.ApplyConfig(p.Config)
+		adapter.ApplyConfig(p.Config)
 	})
 
 	// Pricing endpoints.
