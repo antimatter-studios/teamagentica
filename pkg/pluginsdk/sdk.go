@@ -400,8 +400,8 @@ func (c *Client) OnPluginAvailable(capability string, fn func(PluginInfo)) {
 		}
 	}()
 
-	// Also listen for future registrations.
-	c.OnEvent("plugin:registered", NewNullDebouncer(func(event EventCallback) {
+	// Also listen for plugin:ready events (emitted by kernel when a plugin registers/restarts).
+	c.OnEvent("plugin:ready", NewNullDebouncer(func(event EventCallback) {
 		plugins, err := c.SearchPlugins(capability)
 		if err != nil || len(plugins) == 0 {
 			return
