@@ -73,8 +73,10 @@ type taskProgress struct {
 	TopicID    int                // forum topic thread ID (0 = general chat)
 	MessageID  int                // Telegram message ID for editMessageText
 	Cancel     context.CancelFunc // cancel typing loop
-	Streaming  bool               // true once we receive the first streaming event
-	LastEditAt time.Time          // debounce edits during streaming
+	Streaming       bool               // true once we receive the first streaming event
+	LastEditAt      time.Time          // debounce edits during streaming
+	ChunksSent      bool               // true once at least one message_chunk was delivered
+	ChunksDelivered int                // number of message_chunk messages sent
 }
 
 // New creates a new Bot instance and validates the token via GetMe().
@@ -1030,15 +1032,19 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		// Cancel typing loop.
 		tp.Cancel()
 
-		// Delete the progress message and send the final response.
+		// Delete the status bubble.
 		b.deleteTopicMessage(tp.ChatID, tp.MessageID)
 
-		response := ev.Response
-		if ev.Responder != "" {
-			response = formatAttributedResponse(ev.Responder, response)
-		}
-		if err := b.sendToChat(tp.ChatID, tp.TopicID, response); err != nil {
-			log.Printf("[progress] error sending final response: %v", err)
+		// If chunks were sent progressively, don't resend the full response.
+		// Only send the final response if no chunks were delivered.
+		if !tp.ChunksSent {
+			response := ev.Response
+			if ev.Responder != "" {
+				response = formatAttributedResponse(ev.Responder, response)
+			}
+			if err := b.sendToChat(tp.ChatID, tp.TopicID, response); err != nil {
+				log.Printf("[progress] error sending final response: %v", err)
+			}
 		}
 
 		// Send any attachments (images, videos, etc.).
@@ -1055,40 +1061,45 @@ func (b *Bot) HandleRelayProgress(detail string) {
 
 		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s chat=%d topic=%d", ev.TaskGroupID, tp.ChatID, tp.TopicID))
 
-	case "streaming":
-		// Streaming token update — edit the progress message with accumulated text.
-		// Debounce to avoid Telegram rate limits (~1 edit/sec).
-		if time.Since(tp.LastEditAt) < 800*time.Millisecond {
+	case "message_chunk":
+		// Progressive delivery — send chunk as a regular message.
+		text := ev.Message
+		if text == "" {
 			return
 		}
 
-		msg := ev.Message
-		if msg == "" {
-			return
-		}
-
-		// Truncate to Telegram's message limit (4096 chars).
-		if len(msg) > 4000 {
-			msg = msg[len(msg)-4000:]
-		}
-
-		if !tp.Streaming {
-			// First streaming event — cancel typing indicator.
+		if !tp.ChunksSent {
+			// First chunk — cancel typing indicator.
 			tp.Cancel()
-			tp.Streaming = true
+			tp.ChunksSent = true
 		}
 
-		edit := tgbotapi.NewEditMessageText(tp.ChatID, tp.MessageID, msg)
-		if _, err := b.api.Send(edit); err != nil {
-			log.Printf("[progress] streaming edit error: %v", err)
+		// Attribute the first chunk to the responder.
+		if tp.ChunksDelivered == 0 && ev.Responder != "" {
+			text = formatAttributedResponse(ev.Responder, text)
 		}
 
-		tp.LastEditAt = time.Now()
+		if err := b.sendToChat(tp.ChatID, tp.TopicID, text); err != nil {
+			log.Printf("[progress] error sending message chunk: %v", err)
+		}
+
+		tp.ChunksDelivered++
 
 		// Write back updated state.
 		b.tasksMu.Lock()
 		b.taskChats[ev.TaskGroupID] = tp
 		b.tasksMu.Unlock()
+
+	case "streaming":
+		// Legacy streaming status — ignore text content (chunks handle delivery).
+		// Just cancel typing if this is the first streaming event.
+		if !tp.Streaming {
+			tp.Cancel()
+			tp.Streaming = true
+			b.tasksMu.Lock()
+			b.taskChats[ev.TaskGroupID] = tp
+			b.tasksMu.Unlock()
+		}
 
 	case "failed":
 		tp.Cancel()

@@ -982,20 +982,33 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 	}
 
 	var fullText string
-	var lastFlush time.Time
-	flushInterval := 300 * time.Millisecond
+	var pendingChunk string
+	const chunkMaxLen = 500
+	const chunkMinLen = 50
 	var finalResp agentChatResponse
+
+	flushChunk := func() {
+		if len(pendingChunk) < chunkMinLen {
+			return
+		}
+		r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "message_chunk", pendingChunk, nil)
+		pendingChunk = ""
+	}
 
 	for ev := range stream {
 		switch d := ev.Data.(type) {
 		case pluginsdk.TokenEvent:
 			fullText += d.Content
-			if time.Since(lastFlush) >= flushInterval {
-				r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "streaming", fullText, nil)
-				lastFlush = time.Now()
+			pendingChunk += d.Content
+			if len(pendingChunk) >= chunkMaxLen {
+				flushChunk()
 			}
 
 		case pluginsdk.ToolCallEvent:
+			// Flush any pending text before showing tool activity.
+			if len(pendingChunk) >= chunkMinLen {
+				flushChunk()
+			}
 			r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "running",
 				fmt.Sprintf("@%s is using %s...", cb.Responder, d.Name), nil)
 
@@ -1015,9 +1028,10 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 		}
 	}
 
-	// Send final streaming flush if there's unsent text.
-	if fullText != "" && time.Since(lastFlush) > 0 {
-		r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "streaming", fullText, nil)
+	// Flush any remaining pending chunk (no minimum length check — send whatever is left).
+	if pendingChunk != "" {
+		r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "message_chunk", pendingChunk, nil)
+		pendingChunk = ""
 	}
 
 	// If we got a done event, use that. Otherwise construct from accumulated text.
