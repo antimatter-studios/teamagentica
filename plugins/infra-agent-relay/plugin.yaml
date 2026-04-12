@@ -2,12 +2,13 @@ id: infra-agent-relay
 name: "Agent Relay"
 description: "Routes messages between messaging plugins and agent-bridge instances running in workspace containers"
 group: infrastructure
-version: "0.3.23"
+version: "0.3.25"
 image: "teamagentica-infra-agent-relay:latest"
 author: teamagentica
 tags: [infrastructure]
 capabilities: ["infra:agent-relay", "tool:agent-delegation"]
 dependencies: ["tool:memory", "tool:aliases"]
+requested_scopes: ["relay.send", "persona.read", "memory.read"]
 config_schema:
   ORCHESTRATION_MODE:
     type: select

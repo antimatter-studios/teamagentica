@@ -8,6 +8,7 @@ author: teamagentica
 tags: [system, build, docker, infrastructure]
 capabilities: ["infra:builder"]
 dependencies: ["storage:disk"]
+requested_scopes: ["container.build", "deploy.candidate"]
 config_schema:
   PLUGIN_DEBUG:
     type: boolean

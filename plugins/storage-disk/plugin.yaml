@@ -7,6 +7,7 @@ image: "teamagentica-storage-disk:latest"
 author: teamagentica
 tags: [storage, disk, block, infrastructure, tool]
 capabilities: ["storage:api", "storage:disk", "tool:storage:api", "tool:storage:disk", "chat:commands"]
+requested_scopes: ["storage.read", "storage.write"]
 config_schema:
   STORAGE_ROOT_PATH:
     type: string
