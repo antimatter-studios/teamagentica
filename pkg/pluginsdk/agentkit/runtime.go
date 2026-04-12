@@ -2,6 +2,7 @@ package agentkit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -72,28 +73,62 @@ func RegisterAgentChat(router *gin.Engine, client *pluginsdk.Client, adapter Pro
 		})
 	})
 
-	// Discovered tools endpoint.
+	// Discovered tools endpoint — includes MCP tools + built-in workspace tools.
 	router.GET("/mcp", func(c *gin.Context) {
 		tools := DiscoverTools(client)
 		type entry struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			Endpoint    string          `json:"endpoint"`
-			Parameters  interface{}     `json:"parameters"`
-			PluginID    string          `json:"plugin_id"`
+			Name        string      `json:"name"`
+			Description string      `json:"description"`
+			Endpoint    string      `json:"endpoint,omitempty"`
+			Parameters  interface{} `json:"parameters"`
+			PluginID    string      `json:"plugin_id,omitempty"`
 		}
-		entries := make([]entry, len(tools))
-		for i, t := range tools {
-			entries[i] = entry{
+		var entries []entry
+		for _, t := range tools {
+			entries = append(entries, entry{
 				Name:        t.PrefixedName,
 				Description: t.Description,
 				Endpoint:    t.Endpoint,
 				Parameters:  t.Parameters,
 				PluginID:    t.PluginID,
+			})
+		}
+		for _, wt := range WorkspaceTools() {
+			var params interface{}
+			if wt.Parameters != nil {
+				json.Unmarshal(wt.Parameters, &params)
 			}
+			entries = append(entries, entry{
+				Name:        wt.Name,
+				Description: wt.Description,
+				Parameters:  params,
+				PluginID:    "agentkit",
+			})
 		}
 		c.JSON(200, gin.H{"tools": entries})
 	})
+
+	// Register workspace tool MCP endpoints so CLI-based agents can call them.
+	for _, toolName := range []string{"workspace__create", "workspace__exec", "workspace__list", "workspace__destroy"} {
+		name := toolName // capture
+		router.POST("/mcp/"+name, func(c *gin.Context) {
+			var args json.RawMessage
+			if err := c.ShouldBindJSON(&args); err != nil {
+				c.JSON(400, gin.H{"error": "invalid request body"})
+				return
+			}
+			result, err := h.wsHandler.Execute(c.Request.Context(), ToolCall{
+				ID:        "mcp-" + name,
+				Name:      name,
+				Arguments: args,
+			})
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			c.Data(200, "application/json", []byte(result))
+		})
+	}
 }
 
 // ChatStream implements pluginsdk.AgentProvider. It drives the full tool loop:
