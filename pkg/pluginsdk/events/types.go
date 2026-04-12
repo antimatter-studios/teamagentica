@@ -57,6 +57,4 @@ const (
 	PollStart = "poll_start"
 	PollStop  = "poll_stop"
 
-	// Plugin lifecycle
-	PluginRegistered = "plugin:registered"
 )

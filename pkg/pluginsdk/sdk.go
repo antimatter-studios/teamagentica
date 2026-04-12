@@ -384,7 +384,7 @@ func (c *Client) OnEvent(eventType string, debouncer Debouncer) {
 }
 
 // OnPluginAvailable calls fn when a plugin with the given capability is available.
-// It performs an immediate lookup and, if not found, listens for plugin:registered
+// It performs an immediate lookup and, if not found, listens for plugin:ready
 // events to catch late-starting plugins. fn is also called on re-registration
 // (e.g. after a plugin restart). Safe to call before or after Start().
 func (c *Client) OnPluginAvailable(capability string, fn func(PluginInfo)) {
