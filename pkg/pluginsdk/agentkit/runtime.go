@@ -2,7 +2,6 @@ package agentkit
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -22,10 +21,6 @@ type agentHandler struct {
 
 	// defaultPrompt is the fallback system prompt when the request doesn't provide one.
 	defaultPrompt string
-
-	// workspace tools support
-	wsClient  *WorkspaceClient
-	wsHandler *WorkspaceToolHandler
 }
 
 // RegisterAgentChat registers the standard agent routes on the given router.
@@ -51,14 +46,11 @@ func RegisterAgentChat(router *gin.Engine, client *pluginsdk.Client, adapter Pro
 		opt(&cfg)
 	}
 
-	wsClient := NewWorkspaceClient(client)
 	h := &agentHandler{
 		client:        client,
 		adapter:       adapter,
 		config:        cfg,
 		defaultPrompt: defaultPrompt,
-		wsClient:      wsClient,
-		wsHandler:     NewWorkspaceToolHandler(wsClient),
 	}
 
 	// Register POST /chat via the existing SDK SSE handler.
@@ -73,7 +65,7 @@ func RegisterAgentChat(router *gin.Engine, client *pluginsdk.Client, adapter Pro
 		})
 	})
 
-	// Discovered tools endpoint — includes MCP tools + built-in workspace tools.
+	// Discovered tools endpoint.
 	router.GET("/mcp", func(c *gin.Context) {
 		tools := DiscoverTools(client)
 		type entry struct {
@@ -93,65 +85,10 @@ func RegisterAgentChat(router *gin.Engine, client *pluginsdk.Client, adapter Pro
 				PluginID:    t.PluginID,
 			})
 		}
-		for _, wt := range WorkspaceTools() {
-			var params interface{}
-			if wt.Parameters != nil {
-				json.Unmarshal(wt.Parameters, &params)
-			}
-			entries = append(entries, entry{
-				Name:        wt.Name,
-				Description: wt.Description,
-				Parameters:  params,
-				PluginID:    "agentkit",
-			})
-		}
 		c.JSON(200, gin.H{"tools": entries})
 	})
 
-	// Register workspace tool MCP endpoints so CLI-based agents can call them.
-	for _, toolName := range []string{"workspace__create", "workspace__exec", "workspace__list", "workspace__destroy"} {
-		name := toolName // capture
-		router.POST("/mcp/"+name, func(c *gin.Context) {
-			var args json.RawMessage
-			if err := c.ShouldBindJSON(&args); err != nil {
-				c.JSON(400, gin.H{"error": "invalid request body"})
-				return
-			}
-			result, err := h.wsHandler.Execute(c.Request.Context(), ToolCall{
-				ID:        "mcp-" + name,
-				Name:      name,
-				Arguments: args,
-			})
-			if err != nil {
-				c.JSON(500, gin.H{"error": err.Error()})
-				return
-			}
-			c.Data(200, "application/json", []byte(result))
-		})
-	}
 
-	// Push workspace tools to infra-mcp-server so CLI agents discover them.
-	registerWorkspaceToolsWithMCP := func(mcpPlugin pluginsdk.PluginInfo) {
-		type mcpTool struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			Parameters  json.RawMessage `json:"parameters"`
-		}
-		var tools []mcpTool
-		for _, wt := range WorkspaceTools() {
-			tools = append(tools, mcpTool{
-				Name:        wt.Name,
-				Description: wt.Description,
-				Parameters:  wt.Parameters,
-			})
-		}
-		if err := client.RegisterToolsWithMCP(mcpPlugin.ID, tools); err != nil {
-			log.Printf("agentkit: failed to register workspace tools with MCP server: %v", err)
-		} else {
-			log.Printf("agentkit: registered %d workspace tools with MCP server", len(tools))
-		}
-	}
-	client.OnPluginAvailable("infra:mcp-server", registerWorkspaceToolsWithMCP)
 }
 
 // ChatStream implements pluginsdk.AgentProvider. It drives the full tool loop:
@@ -181,16 +118,12 @@ func (h *agentHandler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRe
 			systemPrompt = h.defaultPrompt
 		}
 
-		// Discover tools.
+		// Discover tools (includes workspace tools registered by workspace-manager).
 		discoveredTools := DiscoverTools(h.client)
 		toolDefs := ToToolDefinitions(discoveredTools)
 
-		// Add built-in workspace tools.
-		toolDefs = append(toolDefs, WorkspaceTools()...)
-
 		if len(toolDefs) > 0 && h.config.Debug {
-			log.Printf("agentkit: %d tools available (%d MCP + %d workspace) for %s",
-				len(toolDefs), len(toolDefs)-len(WorkspaceTools()), len(WorkspaceTools()), h.adapter.ProviderName())
+			log.Printf("agentkit: %d tools available for %s", len(toolDefs), h.adapter.ProviderName())
 		}
 
 		sink := newChannelSink(ch)
@@ -258,14 +191,7 @@ func (h *agentHandler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRe
 					log.Printf("agentkit: tool_call %s args=%s", tc.Name, truncate(string(tc.Arguments), 200))
 				}
 
-				// Handle workspace tools directly (before MCP routing).
-				var toolResult string
-				var execErr error
-				if IsWorkspaceTool(tc.Name) {
-					toolResult, execErr = h.wsHandler.Execute(ctx, tc)
-				} else {
-					toolResult, execErr = ExecuteToolCall(h.client, discoveredTools, tc)
-				}
+				toolResult, execErr := ExecuteToolCall(h.client, discoveredTools, tc)
 				isError := false
 				if execErr != nil {
 					log.Printf("agentkit: tool %s failed: %v", tc.Name, execErr)
