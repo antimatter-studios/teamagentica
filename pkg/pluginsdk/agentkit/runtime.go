@@ -21,6 +21,10 @@ type agentHandler struct {
 
 	// defaultPrompt is the fallback system prompt when the request doesn't provide one.
 	defaultPrompt string
+
+	// workspace tools support
+	wsClient  *WorkspaceClient
+	wsHandler *WorkspaceToolHandler
 }
 
 // RegisterAgentChat registers the standard agent routes on the given router.
@@ -46,11 +50,14 @@ func RegisterAgentChat(router *gin.Engine, client *pluginsdk.Client, adapter Pro
 		opt(&cfg)
 	}
 
+	wsClient := NewWorkspaceClient(client)
 	h := &agentHandler{
 		client:        client,
 		adapter:       adapter,
 		config:        cfg,
 		defaultPrompt: defaultPrompt,
+		wsClient:      wsClient,
+		wsHandler:     NewWorkspaceToolHandler(wsClient),
 	}
 
 	// Register POST /chat via the existing SDK SSE handler.
@@ -120,8 +127,12 @@ func (h *agentHandler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRe
 		discoveredTools := DiscoverTools(h.client)
 		toolDefs := ToToolDefinitions(discoveredTools)
 
+		// Add built-in workspace tools.
+		toolDefs = append(toolDefs, WorkspaceTools()...)
+
 		if len(toolDefs) > 0 && h.config.Debug {
-			log.Printf("agentkit: %d tools available for %s", len(toolDefs), h.adapter.ProviderName())
+			log.Printf("agentkit: %d tools available (%d MCP + %d workspace) for %s",
+				len(toolDefs), len(toolDefs)-len(WorkspaceTools()), len(WorkspaceTools()), h.adapter.ProviderName())
 		}
 
 		sink := newChannelSink(ch)
@@ -189,7 +200,14 @@ func (h *agentHandler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRe
 					log.Printf("agentkit: tool_call %s args=%s", tc.Name, truncate(string(tc.Arguments), 200))
 				}
 
-				toolResult, execErr := ExecuteToolCall(h.client, discoveredTools, tc)
+				// Handle workspace tools directly (before MCP routing).
+				var toolResult string
+				var execErr error
+				if IsWorkspaceTool(tc.Name) {
+					toolResult, execErr = h.wsHandler.Execute(ctx, tc)
+				} else {
+					toolResult, execErr = ExecuteToolCall(h.client, discoveredTools, tc)
+				}
 				isError := false
 				if execErr != nil {
 					log.Printf("agentkit: tool %s failed: %v", tc.Name, execErr)

@@ -16,6 +16,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/exec"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/provider"
 )
@@ -275,6 +276,57 @@ func main() {
 			log.Printf("[mcp] tools changed — cycling CLI process pool")
 			adapter.CyclePool()
 		})
+	}
+
+	// --- Workspace environment mode ---
+	// When running as a workspace environment, start the ExecServer on :9100
+	// and register with workspace-manager so it can spawn workspace containers.
+	if backend == "cli" && execMode != "remote" {
+		skipPerms := pluginConfig["CLAUDE_SKIP_PERMISSIONS"] == "true"
+		wsCliClient := claudecli.NewClient(cliBinary, workspaceDir, configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude"), cliTimeout, debug)
+		wsCliClient.SetPoolMax(1)
+		if skipPerms {
+			wsCliClient.SetSkipPermissions(true)
+		}
+
+		execSrv := exec.NewServer(wsCliClient)
+		go execSrv.Start(":9100")
+
+		registerWorkspaceEnv := func() {
+			skipVal := "false"
+			if skipPerms {
+				skipVal = "true"
+			}
+			payload := events.WorkspaceEnvironmentRegisterPayload{
+				PluginID:    manifest.ID,
+				DisplayName: "Claude Terminal",
+				Description: "Web terminal with Claude Code CLI — AI-powered coding assistant",
+				Image:       "teamagentica-devbox-terminal:latest",
+				Port:        7681,
+				Icon:        `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#D97706"/><path d="M8 10c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2c0 1.1-.9 2-2 2h-4c-1.1 0-2-.9-2-2v-2z" fill="#fff"/><rect x="9" y="15" width="6" height="2" rx="1" fill="#fff"/></svg>`,
+				Disks: []events.WorkspaceDiskSpec{
+					{Type: "workspace", Target: "/workspace"},
+					{Type: "shared", Name: "agent-anthropic", Target: "/home/coder/.claude"},
+					{Type: "shared", Name: "agent-anthropic-sidecar", Target: "/opt/agent-sidecar"},
+				},
+				EnvDefaults: map[string]string{
+					"DEVBOX_APP":              "claude",
+					"DEFAULT_WORKSPACE":       "/workspace",
+					"HOME":                    "/home/coder",
+					"CLAUDE_SKIP_PERMISSIONS": skipVal,
+					"TACLI_KERNEL":            "http://teamagentica-kernel:8080",
+				},
+			}
+			b, _ := json.Marshal(payload)
+			sdkClient.PublishEvent("workspace:environment:register", string(b))
+			log.Printf("[workspace-env] registered workspace environment: %s", manifest.ID)
+		}
+
+		sdkClient.Events().On("workspace:manager:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+			registerWorkspaceEnv()
+		}))
+
+		registerWorkspaceEnv()
 	}
 
 	// Copy sidecar binary to shared disk so workspace containers can run it.
