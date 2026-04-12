@@ -1,4 +1,4 @@
-# agent-kimi
+# agent-moonshot
 
 AI agent powered by Moonshot's Kimi K2 models with 128K context, thinking mode variants, and SSE streaming.
 

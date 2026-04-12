@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: agent-kimi
+  BINARY_NAME: agent-moonshot
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-agent-kimi:dev
+  DEV_IMAGE: teamagentica-agent-moonshot:dev
 
 tasks:
   default:

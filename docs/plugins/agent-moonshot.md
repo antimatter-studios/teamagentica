@@ -1,4 +1,4 @@
-# agent-kimi
+# agent-moonshot
 
 > Moonshot Kimi models via OpenAI-compatible API.
 

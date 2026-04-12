@@ -1,4 +1,4 @@
-module github.com/antimatter-studios/teamagentica/plugins/agent-kimi
+module github.com/antimatter-studios/teamagentica/plugins/agent-moonshot
 
 go 1.25.0
 

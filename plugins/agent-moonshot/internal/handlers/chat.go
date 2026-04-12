@@ -9,9 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimi"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimicli"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimi"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimicli"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/usage"
 )
 
 type Handler struct {
@@ -85,7 +85,7 @@ func (h *Handler) emitEvent(eventType, detail string) {
 func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
-		"plugin":     "agent-kimi",
+		"plugin":     "agent-moonshot",
 		"version":    "1.0.0",
 		"configured": h.apiKey != "",
 		"model":      h.model,

@@ -11,8 +11,8 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/handlers"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimicli"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimicli"
 )
 
 //go:embed system-prompt.md

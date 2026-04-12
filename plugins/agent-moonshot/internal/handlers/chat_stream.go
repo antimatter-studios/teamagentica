@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimi"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimicli"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimi"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimicli"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/usage"
 )
 
 // ChatStream implements pluginsdk.AgentProvider.

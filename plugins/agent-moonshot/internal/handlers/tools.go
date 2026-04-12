@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-kimi/internal/kimi"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-moonshot/internal/kimi"
 )
 
 // discoveredTool holds a tool schema from a plugin with its routing info.
@@ -57,7 +57,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 
 	plugins, err := sdk.SearchPlugins("tool:")
 	if err != nil {
-		log.Printf("agent-kimi: tool discovery failed: %v", err)
+		log.Printf("agent-moonshot: tool discovery failed: %v", err)
 		return nil
 	}
 
@@ -68,7 +68,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 	for _, p := range plugins {
 		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/mcp", nil)
 		if err != nil {
-			log.Printf("agent-kimi: failed to get tools from %s: %v", p.ID, err)
+			log.Printf("agent-moonshot: failed to get tools from %s: %v", p.ID, err)
 			continue
 		}
 
@@ -81,7 +81,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 			} `json:"tools"`
 		}
 		if err := json.Unmarshal(body, &resp); err != nil {
-			log.Printf("agent-kimi: failed to parse tools from %s: %v", p.ID, err)
+			log.Printf("agent-moonshot: failed to parse tools from %s: %v", p.ID, err)
 			continue
 		}
 
@@ -105,7 +105,7 @@ func discoverTools(sdk *pluginsdk.Client) []discoveredTool {
 		for i, t := range allTools {
 			names[i] = t.PrefixedName
 		}
-		log.Printf("agent-kimi: discovered %d tools: %s", len(allTools), strings.Join(names, ", "))
+		log.Printf("agent-moonshot: discovered %d tools: %s", len(allTools), strings.Join(names, ", "))
 	}
 
 	return allTools

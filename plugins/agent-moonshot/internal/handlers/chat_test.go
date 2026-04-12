@@ -37,8 +37,8 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	if resp["plugin"] != "agent-kimi" {
-		t.Errorf("expected plugin=agent-kimi, got %v", resp["plugin"])
+	if resp["plugin"] != "agent-moonshot" {
+		t.Errorf("expected plugin=agent-moonshot, got %v", resp["plugin"])
 	}
 	if resp["status"] != "ok" {
 		t.Errorf("expected status=ok, got %v", resp["status"])

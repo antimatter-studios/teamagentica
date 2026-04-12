@@ -8,8 +8,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-kimi/ plugins/agent-kimi/
-WORKDIR /build/plugins/agent-kimi
+COPY plugins/agent-moonshot/ plugins/agent-moonshot/
+WORKDIR /build/plugins/agent-moonshot
 
 RUN go mod download
 
@@ -23,9 +23,9 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-kimi/ plugins/agent-kimi/
-WORKDIR /build/plugins/agent-kimi
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-kimi .
+COPY plugins/agent-moonshot/ plugins/agent-moonshot/
+WORKDIR /build/plugins/agent-moonshot
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-moonshot .
 
 # -- Kimi CLI installer --
 FROM python:3.12-alpine AS kimi-installer
@@ -41,11 +41,11 @@ RUN apk add --no-cache ca-certificates \
 COPY --from=kimi-installer /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=kimi-installer /usr/local/bin/kimi /usr/local/bin/kimi
 
-COPY --from=builder /agent-kimi /usr/local/bin/agent-kimi
+COPY --from=builder /agent-moonshot /usr/local/bin/agent-moonshot
 RUN mkdir -p /data/kimi-home && chown -R teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/agent-kimi/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/agent-moonshot/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 EXPOSE 8081
-CMD ["agent-kimi"]
+CMD ["agent-moonshot"]
