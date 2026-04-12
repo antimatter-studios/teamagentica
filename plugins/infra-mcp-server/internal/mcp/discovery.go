@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -123,53 +122,8 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 		return cache.tools
 	}
 
-	plugins, err := sdk.SearchPlugins("tool:")
-	if err != nil {
-		log.Printf("mcp-server: tool discovery failed: %v", err)
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Start with pushed tools (registered via POST /tools/register).
+	// Push-based only: use tools registered via POST /tools/register.
 	pluginTools := pushedToolsByPlugin()
-
-	// Pull-based fallback: fetch from plugins that haven't pushed.
-	for _, p := range plugins {
-		if _, hasPushed := pluginTools[p.ID]; hasPushed {
-			continue // already have pushed tools for this plugin
-		}
-
-		body, err := sdk.RouteToPlugin(ctx, p.ID, "GET", "/mcp", nil)
-		if err != nil {
-			log.Printf("mcp-server: failed to get tools from %s: %v", p.ID, err)
-			continue
-		}
-
-		var resp struct {
-			Tools []struct {
-				Name        string          `json:"name"`
-				Description string          `json:"description"`
-				Endpoint    string          `json:"endpoint"`
-				Parameters  json.RawMessage `json:"parameters"`
-			} `json:"tools"`
-		}
-		if err := json.Unmarshal(body, &resp); err != nil {
-			log.Printf("mcp-server: failed to parse tools from %s: %v", p.ID, err)
-			continue
-		}
-
-		for _, t := range resp.Tools {
-			pluginTools[p.ID] = append(pluginTools[p.ID], rawTool{
-				PluginID:    p.ID,
-				Name:        t.Name,
-				Description: t.Description,
-				Endpoint:    t.Endpoint,
-				Parameters:  t.Parameters,
-			})
-		}
-	}
 
 	// Build alias-based tool entries.
 	var allTools []discoveredTool
