@@ -68,7 +68,8 @@ type Client struct {
 	config       Config
 	registration Registration
 	httpClient   *http.Client
-	routeClient  *http.Client // longer timeout for RouteToPlugin (AI chat)
+	routeClient     *http.Client // longer timeout for RouteToPlugin (AI chat)
+	routeClientBase *http.Client // same as routeClient but without authz transport wrapping (used by token cache to avoid deadlock)
 	stopCh       chan struct{}
 
 	// Event handler dispatch — populated by OnEvent(), dispatched by EventHandler().
@@ -85,6 +86,9 @@ type Client struct {
 	// Cached storage plugin discovery.
 	storagePluginID string
 	storageMu       sync.RWMutex
+
+	// Authz token cache for outgoing request authentication.
+	tokenCache *tokenCache
 
 	// Event client — lazy-initialized by Events().
 	eventClient     *EventClient
@@ -133,20 +137,30 @@ func NewClient(cfg Config, reg Registration) *Client {
 	// Long timeout for data-plane calls (RouteToPlugin — AI agent chat can take 2+ min).
 	routeClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
 
+	// Unwrapped copy for authz-internal calls (token minting). Uses the same
+	// base transport but is never wrapped with the authz RoundTripper, avoiding
+	// a deadlock where getToken → fetchToken → RouteToPlugin → getToken.
+	routeClientBase := &http.Client{Timeout: 10 * time.Second, Transport: transport}
+
 	// Auto-set candidate flag from config if not already set.
 	if cfg.Candidate {
 		reg.Candidate = true
 	}
 
-	return &Client{
-		config:       cfg,
-		registration: reg,
-		httpClient:   httpClient,
-		routeClient:  routeClient,
-		peers:        make(map[string]peerEntry),
-		stopCh:       make(chan struct{}),
-		registeredCh: make(chan struct{}),
+	c := &Client{
+		config:          cfg,
+		registration:    reg,
+		httpClient:      httpClient,
+		routeClient:     routeClient,
+		routeClientBase: routeClientBase,
+		peers:           make(map[string]peerEntry),
+		stopCh:          make(chan struct{}),
+		registeredCh:    make(chan struct{}),
 	}
+
+	c.initAuthz()
+
+	return c
 }
 
 // TLSConfig returns the *tls.Config used by this client for outbound mTLS,
@@ -468,11 +482,11 @@ func (c *Client) ReportRelayProgress(update ProgressUpdate) {
 	log.Printf("pluginsdk: sent progress to relay: task=%s status=%s", update.TaskID, update.Status)
 }
 
-// FetchAliases retrieves the current alias list from the alias-registry plugin
+// FetchAliases retrieves the current alias list from the persona plugin
 // via the kernel's plugin-to-plugin routing. Returns entries suitable for
 // alias.NewAliasMap or alias.Replace.
 func (c *Client) FetchAliases() ([]alias.AliasInfo, error) {
-	data, err := c.RouteToPlugin(context.Background(), "infra-alias-registry", "GET", "/aliases", nil)
+	data, err := c.RouteToPlugin(context.Background(), "infra-agent-registry", "GET", "/aliases", nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch aliases: %w", err)
 	}

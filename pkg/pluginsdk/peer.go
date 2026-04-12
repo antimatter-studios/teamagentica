@@ -169,6 +169,45 @@ func (c *Client) RouteToPlugin(ctx context.Context, pluginID, method, path strin
 	return c.routeToPluginInternal(ctx, pluginID, method, path, body, nil)
 }
 
+// RouteToPluginNoAuthz routes a request to a plugin without injecting an
+// Authorization header. Used internally by the token cache to mint tokens
+// without triggering a deadlock (getToken → fetchToken → RouteToPlugin → getToken).
+func (c *Client) RouteToPluginNoAuthz(ctx context.Context, pluginID, method, path string, body io.Reader) ([]byte, error) {
+	entry, ok := c.resolvePeer(pluginID)
+	if !ok {
+		c.loadPeerRegistry()
+		entry, ok = c.resolvePeer(pluginID)
+		if !ok {
+			return nil, fmt.Errorf("plugin %s not found in peer registry", pluginID)
+		}
+	}
+
+	url := c.peerURL(entry, path)
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.routeClientBase.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("plugin returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
+}
+
 // RouteToPluginWithHeaders is like RouteToPlugin but allows setting custom headers.
 func (c *Client) RouteToPluginWithHeaders(ctx context.Context, pluginID, method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
 	return c.routeToPluginInternal(ctx, pluginID, method, path, body, headers)

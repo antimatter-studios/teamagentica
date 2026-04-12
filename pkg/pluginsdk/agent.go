@@ -62,6 +62,9 @@ type DoneEvent struct {
 	Backend     string             `json:"backend,omitempty"`
 	Usage       *AgentUsage        `json:"usage,omitempty"`
 	Attachments []AgentAttachment  `json:"attachments,omitempty"`
+	CostUSD     float64            `json:"cost_usd,omitempty"`
+	NumTurns    int                `json:"num_turns,omitempty"`
+	SessionID   string             `json:"session_id,omitempty"`
 }
 
 // ErrorEvent is emitted when the stream encounters an error.
