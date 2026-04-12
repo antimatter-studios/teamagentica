@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
@@ -13,11 +12,14 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/usage"
 )
 
+// Handler holds plugin-specific configuration and exposes HTTP handlers for
+// routes that are NOT covered by agentkit (usage, models, config, OpenAI proxy).
+//
+// The /chat, /health, and /mcp routes are now handled by agentkit.RegisterAgentChat.
 type Handler struct {
 	mu            sync.RWMutex
 	apiKey        string
 	model         string
-	toolLoopLimit int
 	debug         bool
 	defaultPrompt string
 	sdk           *pluginsdk.Client
@@ -39,7 +41,6 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
 		apiKey:        cfg.APIKey,
 		model:         cfg.Model,
-		toolLoopLimit: 20,
 		debug:         cfg.Debug,
 		defaultPrompt: cfg.DefaultSystemPrompt,
 		client:        gemini.NewClient(cfg.APIKey, cfg.Debug),
@@ -51,12 +52,17 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
+// Tracker returns the usage tracker for sharing with the adapter.
+func (h *Handler) Tracker() *usage.Tracker {
+	return h.usage
+}
+
 // ApplyConfig updates mutable config fields in-place without restarting.
 func (h *Handler) ApplyConfig(config map[string]string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if v, ok := config["GEMINI_MODEL"]; ok && v != "" {
-		log.Printf("[config] updating model: %s → %s", h.model, v)
+		log.Printf("[config] updating model: %s -> %s", h.model, v)
 		h.model = v
 	}
 	rebuildClient := false
@@ -79,22 +85,6 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 	}
 }
 
-func (h *Handler) emitEvent(eventType, detail string) {
-	if h.sdk != nil {
-		h.sdk.PublishEvent(eventType, detail)
-	}
-}
-
-func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"plugin":     "agent-google",
-		"version":    "1.0.0",
-		"configured": h.apiKey != "",
-		"model":      h.model,
-	})
-}
-
 // SystemPrompt returns the system prompt this agent would use, plus
 // rendered previews for every persona/alias that routes through this plugin.
 func (h *Handler) SystemPrompt(c *gin.Context) {
@@ -107,34 +97,6 @@ func (h *Handler) SystemPrompt(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
-}
-
-// DiscoveredTools returns the tools this agent has discovered from tool:* plugins.
-func (h *Handler) DiscoveredTools(c *gin.Context) {
-	tools := discoverTools(h.sdk)
-
-	type toolEntry struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Endpoint    string          `json:"endpoint"`
-		Parameters  json.RawMessage `json:"parameters"`
-		PluginID    string          `json:"plugin_id"`
-	}
-
-	entries := make([]toolEntry, len(tools))
-	for i, t := range tools {
-		entries[i] = toolEntry{
-			Name:        t.PrefixedName,
-			Description: t.Description,
-			Endpoint:    t.Endpoint,
-			Parameters:  t.Parameters,
-			PluginID:    t.PluginID,
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"tools": entries,
-	})
 }
 
 // Models returns the list of available models and the current default.
@@ -198,11 +160,4 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 		records = []usage.RequestRecord{}
 	}
 	c.JSON(http.StatusOK, gin.H{"records": records})
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

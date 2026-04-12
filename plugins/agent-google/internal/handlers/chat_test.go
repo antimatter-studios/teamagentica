@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/gemini"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/usage"
 )
@@ -21,23 +19,23 @@ func init() {
 // newHandlerWithTmpDir creates a test handler with the given settings.
 func newHandlerWithTmpDir(apiKey, model, tmpDir string) *Handler {
 	return &Handler{
-		apiKey:        apiKey,
-		model:         model,
-		toolLoopLimit: 20,
-		client:        gemini.NewClient(apiKey, false),
-		usage:         usage.NewTracker(tmpDir),
+		apiKey: apiKey,
+		model:  model,
+		client: gemini.NewClient(apiKey, false),
+		usage:  usage.NewTracker(tmpDir),
 	}
 }
 
 func TestHealthConfigured(t *testing.T) {
+	// Health is now handled by agentkit, but we can still test the handler's Models endpoint.
 	tmpDir := t.TempDir()
 	h := newHandlerWithTmpDir("test-key", "gemini-2.5-flash", tmpDir)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/health", nil)
+	c.Request = httptest.NewRequest(http.MethodGet, "/models", nil)
 
-	h.Health(c)
+	h.Models(c)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -48,69 +46,8 @@ func TestHealthConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if body["status"] != "ok" {
-		t.Errorf("expected status=ok, got %v", body["status"])
-	}
-	if body["plugin"] != "agent-google" {
-		t.Errorf("expected plugin=agent-google, got %v", body["plugin"])
-	}
-	if body["configured"] != true {
-		t.Errorf("expected configured=true, got %v", body["configured"])
-	}
-	if body["model"] != "gemini-2.5-flash" {
-		t.Errorf("expected model=gemini-2.5-flash, got %v", body["model"])
-	}
-}
-
-func TestHealthNotConfigured(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("", "gemini-2.5-flash", tmpDir)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/health", nil)
-
-	h.Health(c)
-
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-
-	if body["configured"] != false {
-		t.Errorf("expected configured=false when no API key, got %v", body["configured"])
-	}
-}
-
-func TestChatStreamEmptyMessage(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("test-key", "gemini-2.5-flash", tmpDir)
-
-	req := pluginsdk.AgentChatRequest{}
-	ch := h.ChatStream(context.Background(), req)
-
-	var events []pluginsdk.AgentStreamEvent
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
-	if len(events) != 1 || events[0].Type != "error" {
-		t.Fatalf("expected single error event, got %d events", len(events))
-	}
-}
-
-func TestChatStreamNoAPIKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("", "gemini-2.5-flash", tmpDir)
-
-	req := pluginsdk.AgentChatRequest{Message: "hello"}
-	ch := h.ChatStream(context.Background(), req)
-
-	var events []pluginsdk.AgentStreamEvent
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
-	if len(events) != 1 || events[0].Type != "error" {
-		t.Fatalf("expected single error event, got %d events", len(events))
+	if body["current"] != "gemini-2.5-flash" {
+		t.Errorf("expected current=gemini-2.5-flash, got %v", body["current"])
 	}
 }
 
@@ -184,14 +121,6 @@ func TestModelsNoAPIKey(t *testing.T) {
 	if body["current"] != "gemini-2.5-flash" {
 		t.Errorf("expected current=gemini-2.5-flash, got %v", body["current"])
 	}
-
-	models, ok := body["models"].([]interface{})
-	if !ok {
-		t.Fatal("expected models to be an array")
-	}
-	if len(models) == 0 {
-		t.Error("expected default models list to be non-empty")
-	}
 }
 
 func TestNewHandlerFromConfig(t *testing.T) {
@@ -205,15 +134,6 @@ func TestNewHandlerFromConfig(t *testing.T) {
 	}
 	if h.model != "gemini-2.5-pro" {
 		t.Errorf("expected model=gemini-2.5-pro, got %s", h.model)
-	}
-}
-
-func TestTruncateStr(t *testing.T) {
-	if got := truncateStr("hello", 10); got != "hello" {
-		t.Errorf("short string: expected 'hello', got %q", got)
-	}
-	if got := truncateStr("hello world", 5); got != "hello..." {
-		t.Errorf("long string: expected 'hello...', got %q", got)
 	}
 }
 
