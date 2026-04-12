@@ -129,6 +129,29 @@ func RegisterAgentChat(router *gin.Engine, client *pluginsdk.Client, adapter Pro
 			c.Data(200, "application/json", []byte(result))
 		})
 	}
+
+	// Push workspace tools to infra-mcp-server so CLI agents discover them.
+	registerWorkspaceToolsWithMCP := func(mcpPlugin pluginsdk.PluginInfo) {
+		type mcpTool struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		}
+		var tools []mcpTool
+		for _, wt := range WorkspaceTools() {
+			tools = append(tools, mcpTool{
+				Name:        wt.Name,
+				Description: wt.Description,
+				Parameters:  wt.Parameters,
+			})
+		}
+		if err := client.RegisterToolsWithMCP(mcpPlugin.ID, tools); err != nil {
+			log.Printf("agentkit: failed to register workspace tools with MCP server: %v", err)
+		} else {
+			log.Printf("agentkit: registered %d workspace tools with MCP server", len(tools))
+		}
+	}
+	client.OnPluginAvailable("infra:mcp-server", registerWorkspaceToolsWithMCP)
 }
 
 // ChatStream implements pluginsdk.AgentProvider. It drives the full tool loop:
