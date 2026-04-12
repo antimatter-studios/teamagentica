@@ -79,8 +79,9 @@ type Bot struct {
 
 // taskProgress tracks a pending task group for progress updates.
 type taskProgress struct {
-	ChannelID string
-	MessageID string // Discord message ID for editing
+	ChannelID      string
+	MessageID      string // Discord message ID for editing
+	ChunksDelivered int   // number of message_chunk messages sent
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -694,16 +695,36 @@ func (b *Bot) HandleRelayProgress(detail string) {
 	}
 
 	switch ev.Status {
+	case "message_chunk":
+		// Send agent text as a regular message.
+		text := ev.Message
+		if text == "" {
+			return
+		}
+		if tp.ChunksDelivered == 0 && ev.Responder != "" {
+			text = formatAttributedResponse(ev.Responder, text)
+		}
+		b.sendResponse(b.session, tp.ChannelID, text)
+		b.tasksMu.Lock()
+		b.taskChats[ev.TaskGroupID] = taskProgress{
+			ChannelID:       tp.ChannelID,
+			MessageID:       tp.MessageID,
+			ChunksDelivered: tp.ChunksDelivered + 1,
+		}
+		b.tasksMu.Unlock()
+
 	case "completed":
 		// Delete the thinking message.
 		b.session.ChannelMessageDelete(tp.ChannelID, tp.MessageID)
 
-		// Send the final response.
-		response := ev.Response
-		if ev.Responder != "" {
-			response = formatAttributedResponse(ev.Responder, response)
+		// Only send final response if no chunks were delivered.
+		if tp.ChunksDelivered == 0 {
+			response := ev.Response
+			if ev.Responder != "" {
+				response = formatAttributedResponse(ev.Responder, response)
+			}
+			b.sendResponse(b.session, tp.ChannelID, response)
 		}
-		b.sendResponse(b.session, tp.ChannelID, response)
 
 		b.tasksMu.Lock()
 		delete(b.taskChats, ev.TaskGroupID)
@@ -721,8 +742,11 @@ func (b *Bot) HandleRelayProgress(detail string) {
 
 		b.emitEvent("task_failed", fmt.Sprintf("task_group=%s error=%s", ev.TaskGroupID, ev.Message))
 
+	case "streaming":
+		// Ignore — text is delivered via message_chunk now.
+
 	default:
-		// Progress update — edit the thinking message.
+		// Progress update — edit the thinking message (tool activity, etc.).
 		msg := ev.Message
 		if msg == "" {
 			msg = ev.Status + "..."
