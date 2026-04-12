@@ -1,11 +1,14 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -151,7 +154,7 @@ func (a *AnthropicAdapter) streamCLI(ctx context.Context, req agentkit.ProviderR
 
 	systemPrompt := req.SystemPrompt
 	if systemPrompt == "" {
-		systemPrompt = a.defaultPrompt
+		systemPrompt = a.renderPrompt(a.defaultPrompt)
 	}
 
 	// Convert agentkit messages to anthropic format to extract prompt.
@@ -284,7 +287,7 @@ func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.Provid
 
 	systemPrompt := req.SystemPrompt
 	if systemPrompt == "" {
-		systemPrompt = a.defaultPrompt
+		systemPrompt = a.renderPrompt(a.defaultPrompt)
 	}
 
 	messages := toAnthropicMessages(req.Messages)
@@ -507,4 +510,23 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// renderPrompt renders a Go template string, stripping template syntax if present.
+func (a *AnthropicAdapter) renderPrompt(raw string) string {
+	if !strings.Contains(raw, "{{") {
+		return raw
+	}
+	tmpl, err := template.New("prompt").Parse(raw)
+	if err != nil {
+		log.Printf("[adapter] failed to parse prompt template: %v", err)
+		return raw
+	}
+	data := struct{ Alias string }{}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		log.Printf("[adapter] failed to render prompt template: %v", err)
+		return raw
+	}
+	return buf.String()
 }
