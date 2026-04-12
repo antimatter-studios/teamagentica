@@ -267,7 +267,7 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 			continue
 		}
 		// Translate storage-disk internal path to host path.
-		// storage-disk returns e.g. "/storage-root/shared/agent-claude"
+		// storage-disk returns e.g. "/storage-root/shared/agent-anthropic"
 		// Host path is: dataDir + "/storage-disk" + path
 		diskPaths[sd.Name] = o.translateDiskPath(path)
 	}
@@ -295,9 +295,59 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 
 	log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
 	o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
+
+	// Fire-and-forget: register plugin identity with infra-authz.
+	go o.registerPluginIdentity(ctx, plugin)
 }
 
-// translateDiskPath converts a storage-disk internal path (e.g. "/data/storage-root/shared/agent-claude")
+// registerPluginIdentity sends a fire-and-forget POST to infra-authz to register
+// a plugin's identity and requested scopes. Non-blocking — errors are logged only.
+func (o *Orchestrator) registerPluginIdentity(ctx context.Context, plugin *models.Plugin) {
+	scopes := plugin.GetRequestedScopes()
+	if len(scopes) == 0 {
+		return
+	}
+
+	var authz models.Plugin
+	if err := o.db().First(&authz, "id = ?", "infra-authz").Error; err != nil {
+		return
+	}
+	if authz.Host == "" || authz.HTTPPort == 0 {
+		return
+	}
+
+	principal := fmt.Sprintf("plugin:%s", plugin.ID)
+	capsType := ""
+	caps := plugin.GetCapabilities()
+	if len(caps) > 0 {
+		capsType = caps[0]
+	}
+	scopesJSON, _ := json.Marshal(scopes)
+	payload := fmt.Sprintf(`{"plugin_id":%q,"principal":%q,"project_id":"default","agent_type":%q,"scopes":%s}`,
+		plugin.ID, principal, capsType, string(scopesJSON))
+
+	url := fmt.Sprintf("%s://%s:%d/identity/register", o.pluginScheme(), authz.Host, authz.HTTPPort)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.pluginHTTPClient().Do(req)
+	if err != nil {
+		log.Printf("orchestrator: failed to register identity for %s with infra-authz: %v", plugin.ID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("orchestrator: registered identity for %s with infra-authz (scopes=%v)", plugin.ID, scopes)
+	} else {
+		log.Printf("orchestrator: infra-authz returned %d for identity registration of %s", resp.StatusCode, plugin.ID)
+	}
+}
+
+// translateDiskPath converts a storage-disk internal path (e.g. "/data/storage-root/shared/agent-anthropic")
 // to a host-side path for Docker bind mounting.
 // storage-disk's /data maps to host's {DataDir}/storage-disk, so we strip the /data prefix.
 func (o *Orchestrator) translateDiskPath(storagePath string) string {
@@ -307,7 +357,7 @@ func (o *Orchestrator) translateDiskPath(storagePath string) string {
 }
 
 // ensureDisk calls storage-disk's API to get-or-create a disk and returns
-// the path (from storage-disk's perspective, e.g. "/storage-root/shared/agent-claude").
+// the path (from storage-disk's perspective, e.g. "/storage-root/shared/agent-anthropic").
 // The kernel translates this to a host-side path for bind mounting.
 func (o *Orchestrator) ensureDisk(ctx context.Context, diskName, diskType string) (string, error) {
 	// Find storage-disk plugin address.
@@ -359,55 +409,22 @@ func (o *Orchestrator) ensureDisk(ctx context.Context, diskName, diskType string
 	return "", fmt.Errorf("storage-disk returned %d for disk %q", resp.StatusCode, diskName)
 }
 
-// resolveDiskMounts resolves DiskMount entries to host-side paths via storage-disk's by-id API.
-func (o *Orchestrator) resolveDiskMounts(ctx context.Context, mounts []models.DiskMount) ([]runtime.ResolvedDiskMount, error) {
-	if len(mounts) == 0 {
-		return nil, nil
-	}
-
-	var storageDisk models.Plugin
-	if err := o.db().First(&storageDisk, "id = ?", "storage-disk").Error; err != nil {
-		return nil, fmt.Errorf("storage-disk plugin not found: %w", err)
-	}
-	if storageDisk.Host == "" || storageDisk.HTTPPort == 0 {
-		return nil, fmt.Errorf("storage-disk plugin not ready (host=%q port=%d)", storageDisk.Host, storageDisk.HTTPPort)
-	}
-
-	baseURL := fmt.Sprintf("%s://%s:%d", o.pluginScheme(), storageDisk.Host, storageDisk.HTTPPort)
-	client := o.pluginHTTPClient()
-
+// translateDiskMounts converts pre-resolved DiskMount entries (with SourcePath)
+// into host-side bind mount paths. No storage-disk API calls needed.
+func (o *Orchestrator) translateDiskMounts(mounts []models.DiskMount) []runtime.ResolvedDiskMount {
 	var resolved []runtime.ResolvedDiskMount
 	for _, dm := range mounts {
-		if dm.DiskID == "" || dm.Target == "" {
+		if dm.SourcePath == "" || dm.Target == "" {
 			continue
 		}
-
-		req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/disks/by-id/%s", baseURL, dm.DiskID), nil)
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve disk %s: %w", dm.DiskID, err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("storage-disk returned %d for disk id %s", resp.StatusCode, dm.DiskID)
-		}
-
-		var result struct {
-			Path string `json:"path"`
-		}
-		json.NewDecoder(resp.Body).Decode(&result)
-
-		hostPath := o.translateDiskPath(result.Path)
+		hostPath := o.translateDiskPath(dm.SourcePath)
 		resolved = append(resolved, runtime.ResolvedDiskMount{
 			HostPath: hostPath,
 			Target:   dm.Target,
 			ReadOnly: dm.ReadOnly,
 		})
-		log.Printf("orchestrator: resolved disk %s → %s (target=%s)", dm.DiskID, hostPath, dm.Target)
 	}
-
-	return resolved, nil
+	return resolved
 }
 
 // waitForHealthy polls the DB until a plugin has registered (host is set)
@@ -500,6 +517,107 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	return nil
 }
 
+// MigrateDiskMountsToSourcePath is a one-time migration that converts managed
+// container disk_mounts from the old format (disk_id) to the new format (source_path).
+// It resolves each disk_id via storage-disk's API and rewrites the record.
+// Records that already have source_path are skipped.
+func (o *Orchestrator) MigrateDiskMountsToSourcePath(ctx context.Context) {
+	var containers []models.ManagedContainer
+	if err := o.db().Find(&containers).Error; err != nil {
+		log.Printf("orchestrator: migration: failed to query managed containers: %v", err)
+		return
+	}
+
+	// Find storage-disk plugin for resolution.
+	var storageDisk models.Plugin
+	if err := o.db().First(&storageDisk, "id = ?", "storage-disk").Error; err != nil {
+		log.Printf("orchestrator: migration: storage-disk not found, skipping disk_mounts migration")
+		return
+	}
+	if storageDisk.Host == "" || storageDisk.HTTPPort == 0 {
+		log.Printf("orchestrator: migration: storage-disk not ready, skipping disk_mounts migration")
+		return
+	}
+
+	baseURL := fmt.Sprintf("%s://%s:%d", o.pluginScheme(), storageDisk.Host, storageDisk.HTTPPort)
+	client := o.pluginHTTPClient()
+
+	for i := range containers {
+		mc := &containers[i]
+		mounts := mc.GetDiskMounts()
+		if len(mounts) == 0 {
+			continue
+		}
+
+		// Check if any mount needs migration (has empty SourcePath).
+		needsMigration := false
+		for _, dm := range mounts {
+			if dm.SourcePath == "" && dm.Target != "" {
+				needsMigration = true
+				break
+			}
+		}
+		if !needsMigration {
+			continue
+		}
+
+		// Read raw JSON to extract old disk_id values.
+		var rawMounts []struct {
+			DiskID     string `json:"disk_id"`
+			SourcePath string `json:"source_path"`
+			Target     string `json:"target"`
+			ReadOnly   bool   `json:"read_only,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(mc.DiskMounts), &rawMounts); err != nil {
+			continue
+		}
+
+		migrated := make([]models.DiskMount, 0, len(rawMounts))
+		for _, rm := range rawMounts {
+			if rm.SourcePath != "" {
+				// Already migrated.
+				migrated = append(migrated, models.DiskMount{
+					SourcePath: rm.SourcePath,
+					Target:     rm.Target,
+					ReadOnly:   rm.ReadOnly,
+				})
+				continue
+			}
+			if rm.DiskID == "" {
+				continue
+			}
+
+			// Resolve disk_id → path via storage-disk.
+			req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/disks/by-id/%s", baseURL, rm.DiskID), nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("orchestrator: migration: failed to resolve disk %s for container %s: %v", rm.DiskID, mc.ID, err)
+				continue
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("orchestrator: migration: storage-disk returned %d for disk %s", resp.StatusCode, rm.DiskID)
+				continue
+			}
+
+			var result struct{ Path string `json:"path"` }
+			json.NewDecoder(resp.Body).Decode(&result)
+
+			migrated = append(migrated, models.DiskMount{
+				SourcePath: result.Path,
+				Target:     rm.Target,
+				ReadOnly:   rm.ReadOnly,
+			})
+			log.Printf("orchestrator: migration: disk %s → %s (container %s)", rm.DiskID, result.Path, mc.ID)
+		}
+
+		mc.SetDiskMounts(migrated)
+		o.db().Model(mc).Update("disk_mounts", mc.DiskMounts)
+		log.Printf("orchestrator: migration: migrated disk_mounts for container %s (%s)", mc.ID, mc.Name)
+	}
+}
+
 // RecoverManagedContainers recreates managed containers that were running
 // before the kernel restarted. Docker containers don't survive host restart,
 // so we recreate them from the stored config.
@@ -522,12 +640,7 @@ func (o *Orchestrator) RecoverManagedContainers(ctx context.Context) {
 
 	for i := range containers {
 		mc := &containers[i]
-		resolvedMounts, err := o.resolveDiskMounts(ctx, mc.GetDiskMounts())
-		if err != nil {
-			log.Printf("orchestrator: failed to resolve disks for managed container %s: %v", mc.ID, err)
-			o.db().Model(mc).Update("status", "stopped")
-			continue
-		}
+		resolvedMounts := o.translateDiskMounts(mc.GetDiskMounts())
 		containerID, err := o.runtime.StartManagedContainer(ctx, mc, o.config.BaseDomain, resolvedMounts)
 		if err != nil {
 			log.Printf("orchestrator: failed to recover managed container %s: %v", mc.ID, err)

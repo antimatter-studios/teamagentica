@@ -50,6 +50,9 @@ type Plugin struct {
 	// the disk directory and bind-mounts it into the plugin container.
 	SharedDisks JSONRawString `json:"shared_disks,omitempty" gorm:"type:json"`
 
+	// RequestedScopes is a JSON array of authorization scopes the plugin needs.
+	RequestedScopes JSONStringList `json:"requested_scopes,omitempty" gorm:"type:json"`
+
 	// ConfigSchema is a JSON string mapping env var names to ConfigSchemaField objects.
 	// Example:
 	//   {
@@ -105,6 +108,7 @@ type ConfigSchemaField struct {
 	Dynamic     bool         `json:"dynamic,omitempty"`       // Fetch options at runtime from plugin
 	HelpText    string       `json:"help_text,omitempty"`     // Tooltip/description
 	VisibleWhen *VisibleWhen `json:"visible_when,omitempty"`  // Show only when another field matches a value
+	OAuthMethod string       `json:"oauth_method,omitempty"`  // OAuth flow variant: "device_code" or "redirect_code"
 	Order       int          `json:"order,omitempty"`         // Display order (lower = first)
 }
 
@@ -203,6 +207,19 @@ func (p *Plugin) GetCapabilities() []string {
 // SetCapabilities stores a string slice as capabilities.
 func (p *Plugin) SetCapabilities(caps []string) {
 	p.Capabilities = JSONStringList(caps)
+}
+
+// GetRequestedScopes returns the requested authorization scopes as a string slice.
+func (p *Plugin) GetRequestedScopes() []string {
+	if p.RequestedScopes == nil {
+		return nil
+	}
+	return []string(p.RequestedScopes)
+}
+
+// SetRequestedScopes stores requested authorization scopes.
+func (p *Plugin) SetRequestedScopes(scopes []string) {
+	p.RequestedScopes = JSONStringList(scopes)
 }
 
 // GetDependencies returns the required capabilities as a string slice.
