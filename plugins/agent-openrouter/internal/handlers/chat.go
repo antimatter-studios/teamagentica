@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log"
 	"net/http"
 	"sync"
 
@@ -12,6 +11,10 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openrouter/internal/usage"
 )
 
+// Handler holds plugin-specific configuration and exposes HTTP handlers for
+// routes that are NOT covered by agentkit (usage, models, config options, etc.).
+//
+// The /chat, /health, and /mcp routes are now handled by agentkit.RegisterAgentChat.
 type Handler struct {
 	mu     sync.RWMutex
 	apiKey string
@@ -36,40 +39,27 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
+// Tracker returns the usage tracker for sharing with the adapter.
+func (h *Handler) Tracker() *usage.Tracker {
+	return h.usage
+}
+
 // ApplyConfig updates mutable config fields in-place without restarting.
 func (h *Handler) ApplyConfig(config map[string]string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if v, ok := config["OPENROUTER_API_KEY"]; ok {
 		if v != h.apiKey {
-			log.Printf("[config] updating API key")
 			h.apiKey = v
 			h.client = openrouter.NewClient(v, h.debug)
 		}
 	}
 	if v, ok := config["OPENROUTER_MODEL"]; ok && v != "" {
-		log.Printf("[config] updating model: %s → %s", h.model, v)
 		h.model = v
 	}
 	if v, ok := config["PLUGIN_DEBUG"]; ok {
 		h.debug = v == "true"
 	}
-}
-
-func (h *Handler) emitEvent(eventType, detail string) {
-	if h.sdk != nil {
-		h.sdk.PublishEvent(eventType, detail)
-	}
-}
-
-func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"plugin":     "agent-openrouter",
-		"version":    "1.0.0",
-		"configured": h.apiKey != "",
-		"model":      h.model,
-	})
 }
 
 // Models returns the list of available models and the current default.
@@ -85,7 +75,6 @@ func (h *Handler) Models(c *gin.Context) {
 
 	models, err := h.client.ListModels()
 	if err != nil {
-		log.Printf("ListModels error: %v", err)
 		c.JSON(http.StatusOK, gin.H{
 			"models":  []string{},
 			"current": h.model,
@@ -111,7 +100,6 @@ func (h *Handler) ConfigOptions(c *gin.Context) {
 		}
 		models, err := h.client.ListModels()
 		if err != nil {
-			log.Printf("ListModels error: %v", err)
 			c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
 			return
 		}

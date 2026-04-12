@@ -14,8 +14,47 @@ import (
 type StreamEvent struct {
 	Token        string
 	FinishReason string
+	ToolCalls    []ToolCallDelta
 	Usage        *Usage
 	Err          error
+}
+
+// ToolCallDelta represents a tool call chunk from the streaming API.
+type ToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function,omitempty"`
+}
+
+// ToolDef describes a tool for the OpenAI-compatible API.
+type ToolDef struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction is the function descriptor inside a ToolDef.
+type ToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// ToolCallFunction holds the function name and arguments in a tool call message.
+// This is distinct from ToolFunction (which holds the schema for tool definitions).
+type ToolCallFunction struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// ToolCallMessage is a tool_call entry in an assistant message.
+type ToolCallMessage struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
 }
 
 // streamChunk is the raw JSON structure of a streaming SSE chunk.
@@ -31,12 +70,14 @@ type streamChoice struct {
 }
 
 type streamDelta struct {
-	Content string `json:"content,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	ToolCalls []ToolCallDelta `json:"tool_calls,omitempty"`
 }
 
 type streamRequest struct {
 	Model         string    `json:"model"`
 	Messages      []Message `json:"messages"`
+	Tools         []ToolDef `json:"tools,omitempty"`
 	Stream        bool      `json:"stream"`
 	StreamOptions *streamOpts `json:"stream_options,omitempty"`
 }
@@ -46,7 +87,7 @@ type streamOpts struct {
 }
 
 // ChatCompletionStream opens a streaming connection and sends events on the returned channel.
-func ChatCompletionStream(ctx context.Context, apiKey, model string, messages []Message) <-chan StreamEvent {
+func ChatCompletionStream(ctx context.Context, apiKey, model string, messages []Message, tools []ToolDef) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 32)
 
 	go func() {
@@ -59,6 +100,9 @@ func ChatCompletionStream(ctx context.Context, apiKey, model string, messages []
 			StreamOptions: &streamOpts{
 				IncludeUsage: true,
 			},
+		}
+		if len(tools) > 0 {
+			reqBody.Tools = tools
 		}
 
 		body, err := json.Marshal(reqBody)
@@ -125,6 +169,9 @@ func ChatCompletionStream(ctx context.Context, apiKey, model string, messages []
 			choice := chunk.Choices[0]
 			ev := StreamEvent{
 				Token: choice.Delta.Content,
+			}
+			if len(choice.Delta.ToolCalls) > 0 {
+				ev.ToolCalls = choice.Delta.ToolCalls
 			}
 			if choice.FinishReason != nil {
 				ev.FinishReason = *choice.FinishReason

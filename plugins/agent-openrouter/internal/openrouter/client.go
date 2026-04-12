@@ -11,9 +11,13 @@ import (
 const baseURL = "https://openrouter.ai/api/v1"
 
 // Message is the standard role+content pair used by the handler layer.
+// For role="assistant" with tool calls, ToolCalls is populated.
+// For role="tool", ToolCallID identifies which call this result is for.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content,omitempty"`
+	ToolCalls  []ToolCallMessage `json:"tool_calls,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
 }
 
 // Usage holds token counts from the API response.

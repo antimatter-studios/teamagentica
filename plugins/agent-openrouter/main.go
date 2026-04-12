@@ -9,8 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openrouter/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-openrouter/internal/provider"
 )
 
 func main() {
@@ -64,13 +66,28 @@ func main() {
 		}
 	}
 
-	router := gin.Default()
-
+	// Create plugin-specific handler (models, config options, usage).
 	h := handlers.NewHandler(apiKey, model, dataPath, debug)
 	h.SetSDK(sdkClient)
 
-	router.GET("/health", h.Health)
-	pluginsdk.RegisterAgentChat(router, h)
+	// Create the agentkit adapter.
+	adapter := provider.NewAdapter(provider.AdapterConfig{
+		APIKey:  apiKey,
+		Model:   model,
+		Debug:   debug,
+		Tracker: h.Tracker(),
+	})
+
+	router := gin.Default()
+
+	// Register core agent routes via agentkit (/chat, /health, /mcp).
+	agentkit.RegisterAgentChat(router, sdkClient, adapter, "",
+		agentkit.WithDefaultModel(model),
+		agentkit.WithMaxTokens(4096),
+		agentkit.WithDebug(debug),
+	)
+
+	// Plugin-specific routes (not handled by agentkit).
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
 	router.GET("/usage", h.Usage)
@@ -84,6 +101,7 @@ func main() {
 	// Apply config updates in-place without restarting the container.
 	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		h.ApplyConfig(p.Config)
+		adapter.ApplyConfig(p.Config)
 	})
 
 	sdkClient.ListenAndServe(port, router)
