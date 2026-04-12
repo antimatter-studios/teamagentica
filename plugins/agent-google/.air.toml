@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "build"
 
 [build]
-  bin = "./build/air-agent-gemini"
-  cmd = "go build -o ./build/air-agent-gemini ."
+  bin = "./build/air-agent-google"
+  cmd = "go build -o ./build/air-agent-google ."
   delay = 1000
   exclude_dir = ["build", "vendor", "node_modules"]
   exclude_file = []

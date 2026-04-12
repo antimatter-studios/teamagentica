@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/usage"
 	"github.com/gin-gonic/gin"
 )
 

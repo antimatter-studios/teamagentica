@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: agent-gemini
+  BINARY_NAME: agent-google
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-agent-gemini:dev
+  DEV_IMAGE: teamagentica-agent-google:dev
 
 tasks:
   default:

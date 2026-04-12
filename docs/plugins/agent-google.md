@@ -1,4 +1,4 @@
-# agent-gemini
+# agent-google
 
 > Google Gemini models with vision support.
 

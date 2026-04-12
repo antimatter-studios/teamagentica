@@ -10,8 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/gemini"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/gemini"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/usage"
 )
 
 func init() {
@@ -51,8 +51,8 @@ func TestHealthConfigured(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("expected status=ok, got %v", body["status"])
 	}
-	if body["plugin"] != "agent-gemini" {
-		t.Errorf("expected plugin=agent-gemini, got %v", body["plugin"])
+	if body["plugin"] != "agent-google" {
+		t.Errorf("expected plugin=agent-google, got %v", body["plugin"])
 	}
 	if body["configured"] != true {
 		t.Errorf("expected configured=true, got %v", body["configured"])

@@ -1,9 +1,9 @@
-id: agent-gemini
-name: "Google Gemini Agent"
+id: agent-google
+name: "Google Agent"
 description: "AI agent powered by Google Gemini models including Flash and Pro"
 group: agents
 version: "1.0.33"
-image: "teamagentica-agent-gemini:latest"
+image: "teamagentica-agent-google:latest"
 author: teamagentica
 tags: [chat, ai, agent, gemini, google]
 capabilities: ["agent:chat", "agent:completion", "memory:extraction"]
@@ -29,10 +29,28 @@ config_schema:
     order: 99
 default_pricing:
   - provider: gemini
+    model: gemini-2.0-flash
+    input_per_1m: 0.10
+    output_per_1m: 0.40
+    cached_per_1m: 0.025
+    currency: USD
+  - provider: gemini
+    model: gemini-2.0-flash-lite
+    input_per_1m: 0.075
+    output_per_1m: 0.30
+    cached_per_1m: 0
+    currency: USD
+  - provider: gemini
     model: gemini-2.5-flash
     input_per_1m: 0.15
     output_per_1m: 0.60
     cached_per_1m: 0.0375
+    currency: USD
+  - provider: gemini
+    model: gemini-2.5-flash-lite
+    input_per_1m: 0.10
+    output_per_1m: 0.40
+    cached_per_1m: 0.01
     currency: USD
   - provider: gemini
     model: gemini-2.5-pro
@@ -41,8 +59,26 @@ default_pricing:
     cached_per_1m: 0.3125
     currency: USD
   - provider: gemini
-    model: gemini-2.0-flash
-    input_per_1m: 0.10
-    output_per_1m: 0.40
+    model: gemini-3-flash-preview
+    input_per_1m: 0.50
+    output_per_1m: 3.00
+    cached_per_1m: 0.05
+    currency: USD
+  - provider: gemini
+    model: gemini-3-pro-preview
+    input_per_1m: 2.00
+    output_per_1m: 12.00
+    cached_per_1m: 0
+    currency: USD
+  - provider: gemini
+    model: gemini-3.1-flash-lite-preview
+    input_per_1m: 0.25
+    output_per_1m: 1.50
     cached_per_1m: 0.025
+    currency: USD
+  - provider: gemini
+    model: gemini-3.1-pro-preview
+    input_per_1m: 2.00
+    output_per_1m: 12.00
+    cached_per_1m: 0.20
     currency: USD

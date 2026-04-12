@@ -1,4 +1,4 @@
-module github.com/antimatter-studios/teamagentica/plugins/agent-gemini
+module github.com/antimatter-studios/teamagentica/plugins/agent-google
 
 go 1.25.0
 

@@ -8,8 +8,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-gemini/ plugins/agent-gemini/
-WORKDIR /build/plugins/agent-gemini
+COPY plugins/agent-google/ plugins/agent-google/
+WORKDIR /build/plugins/agent-google
 
 RUN go mod download
 
@@ -23,9 +23,9 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/agent-gemini/ plugins/agent-gemini/
-WORKDIR /build/plugins/agent-gemini
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-gemini .
+COPY plugins/agent-google/ plugins/agent-google/
+WORKDIR /build/plugins/agent-google
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-google .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod
@@ -33,11 +33,11 @@ FROM alpine:3.19 AS prod
 RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica
 
-COPY --from=builder /agent-gemini /usr/local/bin/agent-gemini
+COPY --from=builder /agent-google /usr/local/bin/agent-google
 RUN mkdir -p /data && chown teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/agent-gemini/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/agent-google/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 EXPOSE 8081
-CMD ["agent-gemini"]
+CMD ["agent-google"]

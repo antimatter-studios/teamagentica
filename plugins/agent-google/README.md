@@ -1,4 +1,4 @@
-# agent-gemini
+# agent-google
 
 AI agent powered by Google Gemini models with tool-use loop, SSE streaming, OpenAI-compatible proxy, and memory extraction.
 

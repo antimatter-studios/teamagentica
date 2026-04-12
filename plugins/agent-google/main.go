@@ -10,7 +10,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/handlers"
 )
 
 //go:embed system-prompt.md

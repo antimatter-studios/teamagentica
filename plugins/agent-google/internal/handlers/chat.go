@@ -9,8 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/gemini"
-	"github.com/antimatter-studios/teamagentica/plugins/agent-gemini/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/gemini"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-google/internal/usage"
 )
 
 type Handler struct {
@@ -88,7 +88,7 @@ func (h *Handler) emitEvent(eventType, detail string) {
 func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
-		"plugin":     "agent-gemini",
+		"plugin":     "agent-google",
 		"version":    "1.0.0",
 		"configured": h.apiKey != "",
 		"model":      h.model,
