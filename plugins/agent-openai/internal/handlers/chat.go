@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,8 +14,10 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/usage"
 )
 
-// Handler holds the plugin's configuration and exposes HTTP handlers.
-// Mutable config fields are protected by mu and updated via ApplyConfig.
+// Handler holds plugin-specific configuration and exposes HTTP handlers for
+// routes that are NOT covered by agentkit (auth, MCP proxy, usage, models, etc.).
+//
+// The /chat, /health, and /mcp routes are now handled by agentkit.RegisterAgentChat.
 type Handler struct {
 	mu            sync.RWMutex
 	backend       string // "subscription" or "api_key"
@@ -62,16 +63,14 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
-// emitEvent sends a debug event to the kernel console.
-func (h *Handler) emitEvent(eventType, detail string) {
-	if h.sdk != nil {
-		h.sdk.PublishEvent(eventType, detail)
-	}
-}
-
 // SetCodexCLI attaches the Codex CLI client to the handler.
 func (h *Handler) SetCodexCLI(client *codexcli.Client) {
 	h.codexCLI = client
+}
+
+// Tracker returns the usage tracker for sharing with the adapter.
+func (h *Handler) Tracker() *usage.Tracker {
+	return h.usage
 }
 
 // ApplyConfig updates mutable config fields in-place without restarting.
@@ -79,14 +78,14 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if v, ok := config["OPENAI_MODEL"]; ok && v != "" {
-		log.Printf("[config] updating model: %s → %s", h.model, v)
+		log.Printf("[config] updating model: %s -> %s", h.model, v)
 		h.model = v
 	}
 	if v, ok := config["OPENAI_API_KEY"]; ok {
 		h.apiKey = v
 	}
 	if v, ok := config["OPENAI_API_ENDPOINT"]; ok && v != "" {
-		log.Printf("[config] updating endpoint: %s → %s", h.endpoint, v)
+		log.Printf("[config] updating endpoint: %s -> %s", h.endpoint, v)
 		h.endpoint = v
 	}
 	if v, ok := config["PLUGIN_DEBUG"]; ok {
@@ -94,62 +93,10 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 	}
 	if v, ok := config["TOOL_LOOP_LIMIT"]; ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			log.Printf("[config] updating tool_loop_limit: %d → %d", h.toolLoopLimit, n)
+			log.Printf("[config] updating tool_loop_limit: %d -> %d", h.toolLoopLimit, n)
 			h.toolLoopLimit = n
 		}
 	}
-}
-
-// Health returns a simple health check response.
-func (h *Handler) Health(c *gin.Context) {
-	h.mu.RLock()
-	backend := h.backend
-	apiKey := h.apiKey
-	h.mu.RUnlock()
-	configured := false
-	switch backend {
-	case "subscription":
-		configured = h.codexCLI != nil && h.codexCLI.IsAuthenticated()
-	case "api_key":
-		configured = apiKey != ""
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"plugin":     "agent-openai",
-		"version":    "1.0.0",
-		"configured": configured,
-		"backend":    backend,
-	})
-}
-
-// emitUsage sends a usage report via the SDK for guaranteed delivery to infra-cost-tracking.
-func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, totalTokens, cachedTokens int, durationMs int64, userID string) {
-	if h.sdk == nil {
-		return
-	}
-	h.sdk.ReportUsage(pluginsdk.UsageReport{
-		UserID:       userID,
-		Provider:     provider,
-		Model:        model,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  totalTokens,
-		CachedTokens: cachedTokens,
-		DurationMs:   durationMs,
-	})
-}
-
-// isValidWorkspaceID checks that a workspace ID is safe for use as a directory name.
-func isValidWorkspaceID(id string) bool {
-	if id == "" || len(id) > 128 {
-		return false
-	}
-	for _, r := range id {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
-			return false
-		}
-	}
-	return true
 }
 
 // SystemPrompt returns the system prompt this agent would use, plus
@@ -166,34 +113,6 @@ func (h *Handler) SystemPrompt(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
-}
-
-// DiscoveredTools returns the tools this agent has discovered from tool:* plugins.
-func (h *Handler) DiscoveredTools(c *gin.Context) {
-	tools := discoverTools(h.sdk)
-
-	type toolEntry struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Endpoint    string          `json:"endpoint"`
-		Parameters  json.RawMessage `json:"parameters"`
-		PluginID    string          `json:"plugin_id"`
-	}
-
-	entries := make([]toolEntry, len(tools))
-	for i, t := range tools {
-		entries[i] = toolEntry{
-			Name:        t.PrefixedName,
-			Description: t.Description,
-			Endpoint:    t.Endpoint,
-			Parameters:  t.Parameters,
-			PluginID:    t.PluginID,
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"tools": entries,
-	})
 }
 
 // truncateStr shortens a string for debug logging.
@@ -241,7 +160,6 @@ func (h *Handler) Models(c *gin.Context) {
 // --- Config options endpoints -----------------------------------------------
 
 // ConfigOptions returns dynamic select options for a config field.
-// GET /config/options/:field → {"options": [...], "error": "..."}
 func (h *Handler) ConfigOptions(c *gin.Context) {
 	field := c.Param("field")
 

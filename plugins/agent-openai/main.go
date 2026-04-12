@@ -10,9 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/codexcli"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/provider"
 )
 
 //go:embed system-prompt.md
@@ -81,10 +83,7 @@ func main() {
 		model = "gpt-5.3-codex"
 	}
 
-	// Set up Gin router.
-	router := gin.Default()
-
-	// Create handler with config.
+	// Create plugin-specific handler (auth, usage, models, config options).
 	h := handlers.NewHandler(handlers.HandlerConfig{
 		Backend:             backend,
 		APIKey:              apiKey,
@@ -94,6 +93,16 @@ func main() {
 		Debug:               debug,
 		DataPath:            dataPath,
 		DefaultSystemPrompt: defaultSystemPrompt,
+	})
+
+	// Create the agentkit adapter.
+	adapter := provider.NewAdapter(provider.AdapterConfig{
+		Backend:  backend,
+		APIKey:   apiKey,
+		Model:    model,
+		Endpoint: endpoint,
+		Debug:    debug,
+		Tracker:  h.Tracker(),
 	})
 
 	// Initialise the appropriate backend.
@@ -117,6 +126,9 @@ func main() {
 				cliClient.SetTLS(sdkCfg.TLSCA)
 				log.Printf("[cli] TLS CA configured for Codex CLI subprocess")
 			}
+
+			// Attach CLI client to both adapter and handler (handler needs it for auth).
+			adapter.SetCodexCLI(cliClient)
 			h.SetCodexCLI(cliClient)
 
 			if cliClient.IsAuthenticated() {
@@ -135,17 +147,26 @@ func main() {
 		}
 	}
 
-	// Register routes.
-	router.GET("/health", h.Health)
-	pluginsdk.RegisterAgentChat(router, h)
-	router.GET("/mcp", h.DiscoveredTools)
+	// Set up Gin router.
+	router := gin.Default()
+
+	// Wire event emission from the adapter to the SDK.
+	h.SetSDK(sdkClient)
+	adapter.SetEmitEvent(func(eventType, detail string) {
+		sdkClient.PublishEvent(eventType, detail)
+	})
+
+	// Register core agent routes via agentkit (/chat, /health, /mcp).
+	agentkit.RegisterAgentChat(router, sdkClient, adapter, defaultSystemPrompt,
+		agentkit.WithDefaultModel(model),
+		agentkit.WithMaxToolLoops(toolLoopLimit),
+		agentkit.WithDebug(debug),
+	)
+
+	// Plugin-specific routes (not handled by agentkit).
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
-
-	// Config options route (dynamic select fields).
 	router.GET("/config/options/:field", h.ConfigOptions)
-
-	// Usage tracking.
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
 
@@ -158,9 +179,10 @@ func main() {
 	// Apply config updates in-place without restarting the container.
 	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		h.ApplyConfig(p.Config)
+		adapter.ApplyConfig(p.Config)
 	})
 
-	// MCP bridge: localhost plain HTTP proxy → infra-mcp-server via mTLS.
+	// MCP bridge: localhost plain HTTP proxy -> infra-mcp-server via mTLS.
 	// Codex CLI (which can't present client certs) connects to this proxy.
 	if backend == "subscription" {
 		codexHome := dataPath + "/codex-home"
@@ -175,7 +197,7 @@ func main() {
 			if err := codexcli.WriteMCPConfig(codexHome, proxy.URL); err != nil {
 				log.Printf("[mcp] failed to write MCP config: %v", err)
 			} else {
-				log.Printf("[mcp] configured MCP proxy → %s (plugin=%s)", proxy.URL, mcpPluginID)
+				log.Printf("[mcp] configured MCP proxy -> %s (plugin=%s)", proxy.URL, mcpPluginID)
 			}
 		}
 
@@ -207,8 +229,6 @@ func main() {
 			log.Printf("[mcp] MCP server disabled, config removed")
 		}))
 	}
-
-	h.SetSDK(sdkClient)
 
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)

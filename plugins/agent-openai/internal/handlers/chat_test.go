@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,177 +23,6 @@ func newHandlerWithTmpDir(backend, apiKey, model, tmpDir string) *Handler {
 		model:   model,
 		usage:   usage.NewTracker(tmpDir),
 	}
-}
-
-func TestHealthAPIKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("api_key", "sk-test", "gpt-4o", tmpDir)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/health", nil)
-
-	h.Health(c)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var body map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-
-	if body["status"] != "ok" {
-		t.Errorf("expected status=ok, got %v", body["status"])
-	}
-	if body["plugin"] != "agent-openai" {
-		t.Errorf("expected plugin=agent-openai, got %v", body["plugin"])
-	}
-	if body["configured"] != true {
-		t.Errorf("expected configured=true, got %v", body["configured"])
-	}
-	if body["backend"] != "api_key" {
-		t.Errorf("expected backend=api_key, got %v", body["backend"])
-	}
-}
-
-func TestHealthAPIKeyNotConfigured(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("api_key", "", "gpt-4o", tmpDir)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/health", nil)
-
-	h.Health(c)
-
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-
-	if body["configured"] != false {
-		t.Errorf("expected configured=false when no API key, got %v", body["configured"])
-	}
-}
-
-func TestHealthSubscriptionNoCLI(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("subscription", "", "gpt-5.3-codex", tmpDir)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/health", nil)
-
-	h.Health(c)
-
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-
-	if body["configured"] != false {
-		t.Errorf("expected configured=false when codexCLI is nil, got %v", body["configured"])
-	}
-	if body["backend"] != "subscription" {
-		t.Errorf("expected backend=subscription, got %v", body["backend"])
-	}
-}
-
-func TestChatEmptyMessage(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("api_key", "sk-test", "gpt-4o", tmpDir)
-
-	reqBody := `{"message":"","conversation":[]}`
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(reqBody))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-
-	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
-
-	if body["error"] != "message or conversation required" {
-		t.Errorf("expected error about empty message, got %v", body["error"])
-	}
-}
-
-func TestChatInvalidJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("api_key", "sk-test", "gpt-4o", tmpDir)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(`{bad json`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestChatSubscriptionNoCLI(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("subscription", "", "gpt-5.3-codex", tmpDir)
-
-	reqBody := `{"message":"hello"}`
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(reqBody))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 when codexCLI nil, got %d", w.Code)
-	}
-}
-
-func TestChatAPIKeyNotSet(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("api_key", "", "gpt-4o", tmpDir)
-
-	reqBody := `{"message":"hello"}`
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(reqBody))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 when api key empty, got %d", w.Code)
-	}
-}
-
-func TestChatUnknownBackend(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("bogus", "", "gpt-4o", tmpDir)
-
-	reqBody := `{"message":"hello"}`
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/chat", bytes.NewBufferString(reqBody))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for unknown backend, got %d", w.Code)
-	}
-}
-
-func TestEmitUsageNoSDK(t *testing.T) {
-	tmpDir := t.TempDir()
-	h := newHandlerWithTmpDir("api_key", "sk-test", "gpt-4o", tmpDir)
-	// sdk is nil — should not panic
-	h.emitUsage("openai", "gpt-4o", 100, 50, 150, 0, 1000, "")
 }
 
 func TestUsageRecordsEmpty(t *testing.T) {
@@ -314,5 +142,13 @@ func TestAuthStatusNoCLI(t *testing.T) {
 
 	if body["codex_enabled"] != false {
 		t.Errorf("expected codex_enabled=false, got %v", body["codex_enabled"])
+	}
+}
+
+func TestTracker(t *testing.T) {
+	tmpDir := t.TempDir()
+	h := newHandlerWithTmpDir("api_key", "sk-test", "gpt-4o", tmpDir)
+	if h.Tracker() == nil {
+		t.Error("expected non-nil tracker")
 	}
 }
