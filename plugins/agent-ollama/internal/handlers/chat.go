@@ -15,7 +15,10 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-ollama/internal/usage"
 )
 
-// Handler holds the plugin's configuration and exposes HTTP handlers.
+// Handler holds the plugin's configuration and exposes HTTP handlers for
+// routes that are NOT covered by agentkit (models, usage, config, OpenAI proxy).
+//
+// The /chat, /health, and /mcp routes are now handled by agentkit.RegisterAgentChat.
 type Handler struct {
 	mu            sync.RWMutex
 	model         string
@@ -58,6 +61,11 @@ func (h *Handler) SetModelList(models []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.modelList = models
+}
+
+// Tracker returns the usage tracker for sharing with the adapter.
+func (h *Handler) Tracker() *usage.Tracker {
+	return h.usage
 }
 
 func (h *Handler) emitEvent(eventType, detail string) {
@@ -136,37 +144,6 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 	}
 }
 
-// Health returns a health check.
-func (h *Handler) Health(c *gin.Context) {
-	h.mu.RLock()
-	endpoint := h.endpoint
-	h.mu.RUnlock()
-
-	err := ollama.Healthy(endpoint)
-	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"plugin":     "agent-ollama",
-		"configured": err == nil,
-		"backend":    "ollama",
-	})
-}
-
-func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, totalTokens, cachedTokens int, durationMs int64, userID string) {
-	if h.sdk == nil {
-		return
-	}
-	h.sdk.ReportUsage(pluginsdk.UsageReport{
-		UserID:       userID,
-		Provider:     provider,
-		Model:        model,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  totalTokens,
-		CachedTokens: cachedTokens,
-		DurationMs:   durationMs,
-	})
-}
-
 // SystemPrompt returns the system prompt, plus rendered previews for
 // every persona/alias that routes through this plugin.
 func (h *Handler) SystemPrompt(c *gin.Context) {
@@ -179,29 +156,6 @@ func (h *Handler) SystemPrompt(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
-}
-
-// DiscoveredTools returns tools this agent has discovered.
-func (h *Handler) DiscoveredTools(c *gin.Context) {
-	tools := discoverTools(h.sdk)
-	type toolEntry struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Endpoint    string          `json:"endpoint"`
-		Parameters  json.RawMessage `json:"parameters"`
-		PluginID    string          `json:"plugin_id"`
-	}
-	entries := make([]toolEntry, len(tools))
-	for i, t := range tools {
-		entries[i] = toolEntry{
-			Name:        t.PrefixedName,
-			Description: t.Description,
-			Endpoint:    t.Endpoint,
-			Parameters:  t.Parameters,
-			PluginID:    t.PluginID,
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{"tools": entries})
 }
 
 // Models returns available models from Ollama.
@@ -310,11 +264,4 @@ func (h *Handler) DeleteModel(c *gin.Context) {
 	log.Printf("[models] %s deleted", req.Model)
 	h.emitEvent("model_delete", fmt.Sprintf("%s deleted", req.Model))
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "model": req.Model})
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

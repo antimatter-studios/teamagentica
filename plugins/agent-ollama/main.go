@@ -13,9 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-ollama/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-ollama/internal/ollama"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-ollama/internal/provider"
 )
 
 //go:embed system-prompt.md
@@ -67,8 +69,7 @@ func main() {
 	modelsToPull := parseModelList(pluginConfig["OLLAMA_MODELS"], []string{"llama3.2:3b", "nomic-embed-text"})
 	go pullModels(ollamaEndpoint, modelsToPull)
 
-	router := gin.Default()
-
+	// Create the plugin-specific handler (models, usage, config, OpenAI proxy).
 	h := handlers.NewHandler(handlers.HandlerConfig{
 		Model:               model,
 		Endpoint:            ollamaEndpoint,
@@ -77,13 +78,27 @@ func main() {
 		DataPath:            dataPath,
 		DefaultSystemPrompt: defaultSystemPrompt,
 	})
-
 	h.SetModelList(modelsToPull)
+	h.SetSDK(sdkClient)
 
-	// Routes.
-	router.GET("/health", h.Health)
-	pluginsdk.RegisterAgentChat(router, h)
-	router.GET("/mcp", h.DiscoveredTools)
+	// Create the agentkit adapter.
+	adapter := provider.NewAdapter(provider.AdapterConfig{
+		Model:    model,
+		Endpoint: ollamaEndpoint,
+		Debug:    debug,
+		Tracker:  h.Tracker(),
+	})
+
+	router := gin.Default()
+
+	// Register core agent routes via agentkit (/chat, /health, /mcp).
+	agentkit.RegisterAgentChat(router, sdkClient, adapter, defaultSystemPrompt,
+		agentkit.WithDefaultModel(model),
+		agentkit.WithMaxToolLoops(toolLoopLimit),
+		agentkit.WithDebug(debug),
+	)
+
+	// Plugin-specific routes (not handled by agentkit).
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
 	router.POST("/models/pull", h.PullModel)
@@ -95,6 +110,7 @@ func main() {
 	// Config updates in-place.
 	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
 		h.ApplyConfig(p.Config)
+		adapter.ApplyConfig(p.Config)
 	})
 
 	// Pricing (Ollama is free, but track for consistency).
@@ -103,10 +119,7 @@ func main() {
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
 	// OpenAI-compatible proxy — forwards to internal Ollama's OpenAI-compat layer.
-	// Allows other plugins (e.g. infra-agent-memory-gateway) to use Ollama models via standard endpoints.
 	router.Any("/v1/*path", h.OpenAIProxy)
-
-	h.SetSDK(sdkClient)
 
 	sdkClient.ListenAndServe(defaultPort, router)
 }
