@@ -1,0 +1,22 @@
+id: infra-authz
+name: "Authorization Service"
+description: "Authorization service — identity, RBAC, token minting, audit logging, JIT elevation"
+group: infrastructure
+version: "1.0.1"
+image: "teamagentica-infra-authz:latest"
+author: teamagentica
+tags: [infrastructure, security]
+capabilities: ["infra:authz", "tool:authz"]
+config_schema:
+  TOKEN_EXPIRY_MINUTES:
+    type: string
+    label: "Token Expiry (minutes)"
+    default: "60"
+    help_text: "Default JWT token expiry in minutes"
+    order: 1
+  PLUGIN_DEBUG:
+    type: boolean
+    label: "Debug Mode"
+    default: "false"
+    help_text: "Log detailed request/response traffic to the debug console (may include sensitive data)"
+    order: 99
