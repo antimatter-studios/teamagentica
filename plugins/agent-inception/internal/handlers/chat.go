@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,7 +15,11 @@ import (
 	"github.com/antimatter-studios/teamagentica/plugins/agent-inception/internal/usage"
 )
 
-// Handler holds the plugin's configuration and exposes HTTP handlers.
+// Handler holds plugin-specific configuration and exposes HTTP handlers for
+// routes that are NOT covered by agentkit (apply-edit, next-edit, FIM, usage,
+// models, config options, system prompt).
+//
+// The /chat, /health, and /mcp routes are now handled by agentkit.RegisterAgentChat.
 type Handler struct {
 	mu            sync.RWMutex
 	apiKey        string
@@ -31,24 +34,42 @@ type Handler struct {
 	defaultPrompt string
 }
 
-// NewHandler creates a new Handler with the given configuration values.
-func NewHandler(apiKey, model, endpoint, dataPath string, debug, diffusing, instant bool, toolLoopLimit int, defaultPrompt string) *Handler {
+// HandlerConfig holds all parameters for constructing a Handler.
+type HandlerConfig struct {
+	APIKey        string
+	Model         string
+	Endpoint      string
+	DataPath      string
+	Debug         bool
+	Diffusing     bool
+	Instant       bool
+	ToolLoopLimit int
+	DefaultPrompt string
+}
+
+// NewHandler creates a new Handler from the given config.
+func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
-		apiKey:        apiKey,
-		model:         model,
-		endpoint:      endpoint,
-		diffusing:     diffusing,
-		instant:       instant,
-		toolLoopLimit: toolLoopLimit,
-		debug:         debug,
-		usage:         usage.NewTracker(dataPath),
-		defaultPrompt: defaultPrompt,
+		apiKey:        cfg.APIKey,
+		model:         cfg.Model,
+		endpoint:      cfg.Endpoint,
+		diffusing:     cfg.Diffusing,
+		instant:       cfg.Instant,
+		toolLoopLimit: cfg.ToolLoopLimit,
+		debug:         cfg.Debug,
+		usage:         usage.NewTracker(cfg.DataPath),
+		defaultPrompt: cfg.DefaultPrompt,
 	}
 }
 
 // SetSDK attaches the plugin SDK client for event reporting.
 func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
+}
+
+// Tracker returns the usage tracker for sharing with the adapter.
+func (h *Handler) Tracker() *usage.Tracker {
+	return h.usage
 }
 
 // ApplyConfig updates mutable config fields in-place without restarting.
@@ -59,11 +80,11 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 		h.apiKey = v
 	}
 	if v, ok := config["INCEPTION_MODEL"]; ok && v != "" {
-		log.Printf("[config] updating model: %s → %s", h.model, v)
+		log.Printf("[config] updating model: %s -> %s", h.model, v)
 		h.model = v
 	}
 	if v, ok := config["INCEPTION_API_ENDPOINT"]; ok && v != "" {
-		log.Printf("[config] updating endpoint: %s → %s", h.endpoint, v)
+		log.Printf("[config] updating endpoint: %s -> %s", h.endpoint, v)
 		h.endpoint = v
 	}
 	if v, ok := config["PLUGIN_DEBUG"]; ok {
@@ -77,7 +98,7 @@ func (h *Handler) ApplyConfig(config map[string]string) {
 	}
 	if v, ok := config["TOOL_LOOP_LIMIT"]; ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			log.Printf("[config] updating tool_loop_limit: %d → %d", h.toolLoopLimit, n)
+			log.Printf("[config] updating tool_loop_limit: %d -> %d", h.toolLoopLimit, n)
 			h.toolLoopLimit = n
 		}
 	}
@@ -87,16 +108,6 @@ func (h *Handler) emitEvent(eventType, detail string) {
 	if h.sdk != nil {
 		h.sdk.PublishEvent(eventType, detail)
 	}
-}
-
-// Health returns a simple health check response.
-func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"status":     "ok",
-		"plugin":     "agent-inception",
-		"version":    "1.0.0",
-		"configured": h.apiKey != "",
-	})
 }
 
 // ApplyEditRequest is the body for POST /apply-edit.
@@ -204,109 +215,6 @@ func (h *Handler) NextEdit(c *gin.Context) {
 	})
 }
 
-func (h *Handler) emitUsage(provider, model string, inputTokens, outputTokens, totalTokens int, durationMs int64, userID string) {
-	if h.sdk == nil {
-		return
-	}
-	h.sdk.ReportUsage(pluginsdk.UsageReport{
-		UserID:       userID,
-		Provider:     provider,
-		Model:        model,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  totalTokens,
-		DurationMs:   durationMs,
-	})
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// SystemPrompt returns the system prompt this agent would use, plus
-// rendered previews for every persona/alias that routes through this plugin.
-func (h *Handler) SystemPrompt(c *gin.Context) {
-	resp := gin.H{"default_prompt": h.defaultPrompt}
-
-	if h.sdk != nil {
-		if previews, err := h.sdk.SystemPromptPreview(h.sdk.PluginID(), h.defaultPrompt); err == nil && len(previews) > 0 {
-			resp["aliases"] = previews
-		}
-	}
-
-	c.JSON(http.StatusOK, resp)
-}
-
-// DiscoveredTools returns the tools this agent has discovered from tool:* plugins.
-func (h *Handler) DiscoveredTools(c *gin.Context) {
-	tools := discoverTools(h.sdk)
-
-	type toolEntry struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Endpoint    string          `json:"endpoint"`
-		Parameters  json.RawMessage `json:"parameters"`
-		PluginID    string          `json:"plugin_id"`
-	}
-
-	entries := make([]toolEntry, len(tools))
-	for i, t := range tools {
-		entries[i] = toolEntry{
-			Name:        t.PrefixedName,
-			Description: t.Description,
-			Endpoint:    t.Endpoint,
-			Parameters:  t.Parameters,
-			PluginID:    t.PluginID,
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"tools": entries,
-	})
-}
-
-// Models returns available models and the current default.
-func (h *Handler) Models(c *gin.Context) {
-	if h.apiKey != "" {
-		models, err := inception.ListModels(h.apiKey, h.endpoint)
-		if err == nil {
-			c.JSON(http.StatusOK, gin.H{"models": models, "current": h.model})
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"models":  []string{h.model},
-		"current": h.model,
-	})
-}
-
-// ConfigOptions returns dynamic select options for a config field.
-func (h *Handler) ConfigOptions(c *gin.Context) {
-	field := c.Param("field")
-
-	switch field {
-	case "INCEPTION_MODEL":
-		if h.apiKey != "" {
-			models, err := inception.ListModels(h.apiKey, h.endpoint)
-			if err != nil {
-				log.Printf("ListModels error: %v", err)
-				c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"options": models})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"options": []string{h.model}})
-
-	default:
-		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Unknown field"})
-	}
-}
-
 // FIMRequest is the body for POST /fim.
 type FIMRequest struct {
 	Prompt string `json:"prompt"`
@@ -357,6 +265,59 @@ func (h *Handler) FIM(c *gin.Context) {
 			"completion_tokens": resp.Usage.CompletionTokens,
 		},
 	})
+}
+
+// SystemPrompt returns the system prompt this agent would use, plus
+// rendered previews for every persona/alias that routes through this plugin.
+func (h *Handler) SystemPrompt(c *gin.Context) {
+	resp := gin.H{"default_prompt": h.defaultPrompt}
+
+	if h.sdk != nil {
+		if previews, err := h.sdk.SystemPromptPreview(h.sdk.PluginID(), h.defaultPrompt); err == nil && len(previews) > 0 {
+			resp["aliases"] = previews
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// Models returns available models and the current default.
+func (h *Handler) Models(c *gin.Context) {
+	if h.apiKey != "" {
+		models, err := inception.ListModels(h.apiKey, h.endpoint)
+		if err == nil {
+			c.JSON(http.StatusOK, gin.H{"models": models, "current": h.model})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"models":  []string{h.model},
+		"current": h.model,
+	})
+}
+
+// ConfigOptions returns dynamic select options for a config field.
+func (h *Handler) ConfigOptions(c *gin.Context) {
+	field := c.Param("field")
+
+	switch field {
+	case "INCEPTION_MODEL":
+		if h.apiKey != "" {
+			models, err := inception.ListModels(h.apiKey, h.endpoint)
+			if err != nil {
+				log.Printf("ListModels error: %v", err)
+				c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Failed to fetch models: " + err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"options": models})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"options": []string{h.model}})
+
+	default:
+		c.JSON(http.StatusOK, gin.H{"options": []string{}, "error": "Unknown field"})
+	}
 }
 
 // Usage returns accumulated usage stats.

@@ -10,8 +10,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-inception/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-inception/internal/provider"
 )
 
 //go:embed system-prompt.md
@@ -20,9 +22,7 @@ var defaultSystemPrompt string
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Load SDK infrastructure config from env.
 	sdkCfg := pluginsdk.LoadConfig()
-
 	manifest := pluginsdk.LoadManifest()
 
 	const defaultPort = 8085
@@ -41,28 +41,17 @@ func main() {
 		},
 	})
 
-	// Start SDK first (register + heartbeat + event server).
 	sdkClient.Start(context.Background())
 
-	// Fetch plugin config from kernel API.
 	pluginConfig, err := sdkClient.FetchConfig()
 	if err != nil {
 		log.Fatalf("Failed to fetch plugin config: %v", err)
 	}
 
 	apiKey := pluginConfig["INCEPTION_API_KEY"]
-	model := pluginConfig["INCEPTION_MODEL"]
-	if model == "" {
-		model = "mercury-2"
-	}
-	endpoint := pluginConfig["INCEPTION_API_ENDPOINT"]
-	if endpoint == "" {
-		endpoint = "https://api.inceptionlabs.ai/v1"
-	}
-	dataPath := pluginConfig["INCEPTION_DATA_PATH"]
-	if dataPath == "" {
-		dataPath = "/data"
-	}
+	model := configOrDefault(pluginConfig, "INCEPTION_MODEL", "mercury-2")
+	endpoint := configOrDefault(pluginConfig, "INCEPTION_API_ENDPOINT", "https://api.inceptionlabs.ai/v1")
+	dataPath := configOrDefault(pluginConfig, "INCEPTION_DATA_PATH", "/data")
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 	diffusing := pluginConfig["INCEPTION_DIFFUSING"] == "true"
 	instant := pluginConfig["INCEPTION_INSTANT"] == "true"
@@ -74,30 +63,45 @@ func main() {
 		}
 	}
 
-	port := defaultPort
-	if portStr := pluginConfig["AGENT_INCEPTION_PORT"]; portStr != "" {
-		if p, err := strconv.Atoi(portStr); err == nil {
-			port = p
-		}
-	}
+	// Create the plugin-specific handler (apply-edit, next-edit, FIM, usage, models, config).
+	h := handlers.NewHandler(handlers.HandlerConfig{
+		APIKey:        apiKey,
+		Model:         model,
+		Endpoint:      endpoint,
+		DataPath:      dataPath,
+		Debug:         debug,
+		Diffusing:     diffusing,
+		Instant:       instant,
+		ToolLoopLimit: toolLoopLimit,
+		DefaultPrompt: defaultSystemPrompt,
+	})
+	h.SetSDK(sdkClient)
+
+	// Create the agentkit adapter.
+	adapter := provider.NewAdapter(provider.AdapterConfig{
+		APIKey:    apiKey,
+		Model:     model,
+		Endpoint:  endpoint,
+		Diffusing: diffusing,
+		Instant:   instant,
+		Debug:     debug,
+		Tracker:   h.Tracker(),
+	})
 
 	router := gin.Default()
 
-	h := handlers.NewHandler(apiKey, model, endpoint, dataPath, debug, diffusing, instant, toolLoopLimit, defaultSystemPrompt)
-	h.SetSDK(sdkClient)
+	// Register core agent routes via agentkit (/chat, /health, /mcp).
+	agentkit.RegisterAgentChat(router, sdkClient, adapter, defaultSystemPrompt,
+		agentkit.WithDefaultModel(model),
+		agentkit.WithMaxTokens(4096),
+		agentkit.WithMaxToolLoops(toolLoopLimit),
+		agentkit.WithDebug(debug),
+	)
 
-	// Standard agent routes.
-	router.GET("/health", h.Health)
-	pluginsdk.RegisterAgentChat(router, h)
-	router.GET("/mcp", h.DiscoveredTools)
+	// Plugin-specific routes (not handled by agentkit).
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/models", h.Models)
 	router.GET("/config/options/:field", h.ConfigOptions)
-
-	// Apply config updates in-place without restarting the container.
-	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
-		h.ApplyConfig(p.Config)
-	})
 
 	// Inception-specific code editing endpoints.
 	router.POST("/apply-edit", h.ApplyEdit)
@@ -108,12 +112,25 @@ func main() {
 	router.GET("/usage", h.Usage)
 	router.GET("/usage/records", h.UsageRecords)
 
+	// Apply config updates in-place without restarting the container.
+	events.OnConfigUpdate(sdkClient, func(p events.ConfigUpdatePayload) {
+		h.ApplyConfig(p.Config)
+		adapter.ApplyConfig(p.Config)
+	})
+
 	// Pricing endpoints.
 	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
 
-	sdkClient.ListenAndServe(port, router)
+	sdkClient.ListenAndServe(defaultPort, router)
+}
+
+func configOrDefault(m map[string]string, key, fallback string) string {
+	if v, ok := m[key]; ok && v != "" {
+		return v
+	}
+	return fallback
 }
 
 func getHostname() string {
