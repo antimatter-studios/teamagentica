@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"bytes"
 
@@ -145,7 +146,7 @@ func (d *DockerRuntime) ensureNetwork(ctx context.Context) error {
 }
 
 // pluginDir derives the plugin directory name from its Docker image tag.
-// e.g. "teamagentica-agent-claude:dev" → "agent-claude"
+// e.g. "teamagentica-agent-anthropic:dev" → "agent-anthropic"
 func pluginDir(imageRef string) string {
 	name := imageRef
 	if i := strings.LastIndex(name, ":"); i >= 0 {
@@ -271,6 +272,15 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		}
 	}
 
+	// Inject agent identity env vars for RBAC.
+	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
+	env["AGENT_PLUGIN_ID"] = plugin.ID
+	env["AGENT_PROJECT_ID"] = "default"
+	env["AGENT_INSTANCE_ID"] = containerName
+	env["AGENT_PRINCIPAL"] = "agent:default:" + containerName
+	env["AGENT_TYPE"] = deriveAgentType(plugin.GetCapabilities())
+	env["AGENT_SESSION_ID"] = sessionID
+
 	// Inject extra env vars from runtime config (e.g. Go cache paths in dev).
 	for k, v := range d.rtCfg.PluginEnv {
 		env[k] = v
@@ -328,17 +338,6 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		mounts = append(mounts, *certMount)
 	}
 
-	// Cross-mount the storage-disk shared filesystem into plugins that need it.
-	if hasCapabilityPrefix(plugin.GetCapabilities(), "agent:chat") ||
-		hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:") ||
-		hasCapabilityPrefix(plugin.GetCapabilities(), "storage:") {
-		src := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Source, vars)
-		sub := runtimecfg.Resolve(d.rtCfg.StorageCrossMount.Subpath, vars)
-		ensureBindDir(d.rtCfg.StorageCrossMount.Type, src, d.dataDir)
-		mounts = append(mounts, resolveMount(d.rtCfg.StorageCrossMount, src, "/storage-root", sub))
-		log.Printf("cross-mounting storage-disk into plugin %s at /storage-root", plugin.ID)
-	}
-
 	// Extra mounts from runtime config (source code, SDK, Go caches in dev; empty in prod).
 	for _, pm := range d.rtCfg.PluginMounts {
 		src := runtimecfg.Resolve(pm.Source, vars)
@@ -359,8 +358,7 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		}
 		hostPath, ok := diskPaths[sd.Name]
 		if !ok {
-			log.Printf("WARNING: no resolved path for shared disk %s in plugin %s — skipping mount", sd.Name, plugin.ID)
-			continue
+			return "", fmt.Errorf("shared disk %q declared by plugin %s could not be resolved — storage-disk may be unavailable", sd.Name, plugin.ID)
 		}
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeBind,
@@ -552,6 +550,18 @@ func (d *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	return info.State.Running, nil
 }
 
+// ResolveContainerID looks up the actual container ID for a plugin by its
+// deterministic name. This reconciles stale container IDs after kernel restarts
+// where containers were recreated with new Docker IDs.
+func (d *DockerRuntime) ResolveContainerID(ctx context.Context, pluginID string) (string, bool, error) {
+	containerName := "teamagentica-plugin-" + pluginID
+	info, err := d.client.ContainerInspect(ctx, containerName)
+	if err != nil {
+		return "", false, err
+	}
+	return info.ID, info.State.Running, nil
+}
+
 // ContainerLogs returns the last N lines of a container's logs.
 func (d *DockerRuntime) ContainerLogs(ctx context.Context, containerID string, tail int) (string, error) {
 	reader, err := d.client.ContainerLogs(ctx, containerID, container.LogsOptions{
@@ -587,4 +597,18 @@ func hasCapabilityPrefix(caps []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+func deriveAgentType(caps []string) string {
+	for _, c := range caps {
+		if strings.HasPrefix(c, "agent:") {
+			return strings.TrimPrefix(c, "agent:")
+		}
+	}
+	for _, c := range caps {
+		if strings.HasPrefix(c, "infra:") {
+			return "infra"
+		}
+	}
+	return "plugin"
 }
