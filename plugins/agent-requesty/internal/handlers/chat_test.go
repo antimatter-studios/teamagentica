@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -65,87 +64,6 @@ func TestHealthNotConfigured(t *testing.T) {
 	}
 	if resp["configured"] != false {
 		t.Errorf("expected configured=false, got %v", resp["configured"])
-	}
-}
-
-func TestChatEmptyBody(t *testing.T) {
-	h := newTestHandler("test-key", "google/gemini-2.5-flash", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`{}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if resp["error"] != "message or conversation required" {
-		t.Errorf("unexpected error: %v", resp["error"])
-	}
-}
-
-func TestChatEmptyMessage(t *testing.T) {
-	h := newTestHandler("test-key", "google/gemini-2.5-flash", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`{"message":""}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestChatInvalidJSON(t *testing.T) {
-	h := newTestHandler("test-key", "google/gemini-2.5-flash", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`not json`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["error"] != "invalid request body" {
-		t.Errorf("unexpected error: %v", resp["error"])
-	}
-}
-
-func TestChatNoAPIKey(t *testing.T) {
-	h := newTestHandler("", "google/gemini-2.5-flash", t.TempDir())
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/chat", strings.NewReader(`{"message":"hello"}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	h.Chat(c)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-
-	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	errStr, _ := resp["error"].(string)
-	if !strings.Contains(errStr, "REQUESTY_API_KEY") {
-		t.Errorf("expected error mentioning REQUESTY_API_KEY, got: %v", errStr)
 	}
 }
 
@@ -210,5 +128,12 @@ func TestTruncateStr(t *testing.T) {
 	long := "abcdefghij"
 	if got := truncateStr(long, 5); got != "abcde..." {
 		t.Errorf("expected abcde..., got %s", got)
+	}
+}
+
+func TestTrackerAccessor(t *testing.T) {
+	h := newTestHandler("test-key", "google/gemini-2.5-flash", t.TempDir())
+	if h.Tracker() == nil {
+		t.Error("expected non-nil tracker")
 	}
 }

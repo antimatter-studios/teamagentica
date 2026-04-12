@@ -12,8 +12,10 @@ const baseURL = "https://router.requesty.ai/v1"
 
 // Message is the standard role+content pair used by the handler layer.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role         string          `json:"role"`
+	Content      string          `json:"content,omitempty"`
+	ToolCalls    []ToolCallDelta `json:"tool_calls,omitempty"`    // assistant tool-use requests
+	ToolCallID   string          `json:"tool_call_id,omitempty"`  // tool result reference
 }
 
 // Usage holds token counts from the API response.

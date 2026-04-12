@@ -36,6 +36,11 @@ func (h *Handler) SetSDK(sdk *pluginsdk.Client) {
 	h.sdk = sdk
 }
 
+// Tracker returns the usage tracker so the adapter can record usage.
+func (h *Handler) Tracker() *usage.Tracker {
+	return h.usage
+}
+
 // ApplyConfig updates mutable config fields in-place without restarting.
 func (h *Handler) ApplyConfig(config map[string]string) {
 	h.mu.Lock()
