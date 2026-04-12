@@ -41,7 +41,7 @@ func (h *Handler) Health(c *gin.Context) {
 }
 
 func (h *Handler) Info(c *gin.Context) {
-	tools := mcpserver.DiscoverTools(h.sdk, h.mcpSrv.Aliases())
+	tools := mcpserver.BuildToolList(h.mcpSrv.Aliases())
 	toolNames := make([]string, len(tools))
 	for i, t := range tools {
 		toolNames[i] = t.FullName
@@ -81,10 +81,9 @@ func (h *Handler) RegisterTools(c *gin.Context) {
 	}
 
 	tools := mcpserver.ToRawTools(req.PluginID, req.Tools)
-	mcpserver.RegisterPushedTools(req.PluginID, tools)
+	mcpserver.RegisterTools(req.PluginID, tools)
 
-	// Invalidate cache and refresh mcp-go registry.
-	mcpserver.InvalidateCache()
+	// Refresh mcp-go registry.
 	h.mcpSrv.RefreshTools()
 
 	// Notify subscribers that the MCP tool list has changed.

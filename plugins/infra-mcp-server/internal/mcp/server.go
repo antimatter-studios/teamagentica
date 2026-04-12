@@ -67,7 +67,7 @@ func (s *Server) HTTPServer() *mcpsrv.StreamableHTTPServer {
 // UpdateAliases replaces the alias map and re-registers tools.
 func (s *Server) UpdateAliases(infos []alias.AliasInfo) {
 	s.aliases.Replace(infos)
-	InvalidateCache()
+	InvalidateToolCache()
 	s.RefreshTools()
 }
 
@@ -78,7 +78,7 @@ func (s *Server) Aliases() *alias.AliasMap {
 
 // RefreshTools re-discovers plugin tools and syncs them into the mcp-go server.
 func (s *Server) RefreshTools() {
-	tools := DiscoverTools(s.sdk, s.aliases)
+	tools := BuildToolList(s.aliases)
 
 	// Build the new tool set: builtin + discovered.
 	var serverTools []mcpsrv.ServerTool
@@ -109,7 +109,7 @@ func (s *Server) RefreshTools() {
 }
 
 // makeToolHandler creates a mcp-go ToolHandlerFunc that routes to the correct plugin.
-func (s *Server) makeToolHandler(dt discoveredTool) mcpsrv.ToolHandlerFunc {
+func (s *Server) makeToolHandler(dt registeredTool) mcpsrv.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		if s.debug {
 			log.Printf("mcp-server: tools/call name=%s", req.Params.Name)
@@ -142,7 +142,7 @@ func (s *Server) makeToolHandler(dt discoveredTool) mcpsrv.ToolHandlerFunc {
 }
 
 // buildChatBody constructs a chat request for agent delegation tools.
-func (s *Server) buildChatBody(dt discoveredTool, argsJSON []byte) *bytes.Reader {
+func (s *Server) buildChatBody(dt registeredTool, argsJSON []byte) *bytes.Reader {
 	var args struct {
 		Message string `json:"message"`
 	}
@@ -299,10 +299,10 @@ func (s *Server) handleListAgents(ctx context.Context, req mcplib.CallToolReques
 
 func (s *Server) handleListTools(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	// Refresh tools into mcp-go registry so tools/list stays in sync.
-	InvalidateCache()
+	InvalidateToolCache()
 	s.RefreshTools()
 
-	tools := DiscoverTools(s.sdk, s.aliases)
+	tools := BuildToolList(s.aliases)
 	type toolInfo struct {
 		Name        string `json:"name"`
 		PluginID    string `json:"plugin_id"`

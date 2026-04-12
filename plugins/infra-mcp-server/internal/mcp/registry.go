@@ -8,47 +8,47 @@ import (
 	"sync"
 	"time"
 
-	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/alias"
 )
 
-// discoveredTool holds a tool from a plugin with routing info.
-type discoveredTool struct {
+// registeredTool holds a tool from a plugin with routing info.
+type registeredTool struct {
 	PluginID   string          `json:"plugin_id"`
-	AliasName  string          `json:"alias_name,omitempty"` // alias that generated this entry (e.g. "nb2")
-	AliasModel string          `json:"alias_model,omitempty"` // model from alias (e.g. "gemini-3.1-flash-image-preview")
+	AliasName  string          `json:"alias_name,omitempty"`
+	AliasModel string          `json:"alias_model,omitempty"`
 	Name       string          `json:"name"`
-	FullName   string          `json:"full_name"` // aliasName__toolName or pluginID__toolName
+	FullName   string          `json:"full_name"` // pluginID__toolName
 	Desc       string          `json:"description"`
 	Endpoint   string          `json:"endpoint"`
 	Parameters json.RawMessage `json:"parameters"`
 }
 
 // inputSchema returns the Parameters as a JSON schema, defaulting to empty object.
-func (dt discoveredTool) inputSchema() json.RawMessage {
-	if dt.Parameters != nil && len(dt.Parameters) > 0 {
-		return dt.Parameters
+func (t registeredTool) inputSchema() json.RawMessage {
+	if t.Parameters != nil && len(t.Parameters) > 0 {
+		return t.Parameters
 	}
 	return json.RawMessage(`{"type":"object","properties":{}}`)
 }
 
-// toolCache caches discovered tools with TTL.
-type toolCache struct {
-	mu        sync.RWMutex
-	tools     []discoveredTool
-	fetchedAt time.Time
-	ttl       time.Duration
-}
-
-var cache = &toolCache{ttl: 60 * time.Second}
-
-// pushedToolStore stores tools registered via POST /tools/register.
-type pushedToolStore struct {
+// toolRegistry stores tools pushed by plugins and builds the final tool list.
+type toolRegistry struct {
 	mu    sync.RWMutex
 	tools map[string][]rawTool // plugin_id → tools
+
+	// cached built tool list
+	cacheMu   sync.RWMutex
+	cache     []registeredTool
+	cacheTime time.Time
+	cacheTTL  time.Duration
 }
 
-// rawTool is a tool definition from a plugin.
+var registry = &toolRegistry{
+	tools:    make(map[string][]rawTool),
+	cacheTTL: 60 * time.Second,
+}
+
+// rawTool is a tool definition pushed by a plugin.
 type rawTool struct {
 	PluginID    string
 	Name        string
@@ -57,22 +57,21 @@ type rawTool struct {
 	Parameters  json.RawMessage
 }
 
-var pushed = &pushedToolStore{tools: make(map[string][]rawTool)}
-
-// RegisterPushedTools stores tools for a plugin, replacing any previous entry.
-func RegisterPushedTools(pluginID string, tools []rawTool) {
-	pushed.mu.Lock()
-	pushed.tools[pluginID] = tools
-	pushed.mu.Unlock()
-	log.Printf("mcp-server: %s pushed %d tools", pluginID, len(tools))
+// RegisterTools stores tools for a plugin, replacing any previous entry.
+func RegisterTools(pluginID string, tools []rawTool) {
+	registry.mu.Lock()
+	registry.tools[pluginID] = tools
+	registry.mu.Unlock()
+	InvalidateToolCache()
+	log.Printf("mcp-server: %s registered %d tools", pluginID, len(tools))
 }
 
-// pushedToolsByPlugin returns a copy of all pushed tools keyed by plugin ID.
-func pushedToolsByPlugin() map[string][]rawTool {
-	pushed.mu.RLock()
-	defer pushed.mu.RUnlock()
-	out := make(map[string][]rawTool, len(pushed.tools))
-	for k, v := range pushed.tools {
+// toolsByPlugin returns a copy of all registered tools keyed by plugin ID.
+func toolsByPlugin() map[string][]rawTool {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	out := make(map[string][]rawTool, len(registry.tools))
+	for k, v := range registry.tools {
 		out[k] = v
 	}
 	return out
@@ -98,36 +97,27 @@ func ToRawTools(pluginID string, tools []struct {
 	return out
 }
 
-// DiscoverTools queries kernel for tool:* plugins and builds MCP tool entries.
-// If aliases are provided, tool-type aliases generate alias-named entries
-// (e.g. "nb2__generate_image") so the coordinator can match @mentions to tools.
-// Plugins without aliases still get raw plugin-named entries as fallback.
-func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredTool {
-	if sdk == nil {
-		return nil
-	}
-
-	cache.mu.RLock()
-	if time.Since(cache.fetchedAt) < cache.ttl && cache.tools != nil {
-		tools := cache.tools
-		cache.mu.RUnlock()
+// BuildToolList assembles the final tool list from registered tools + alias context.
+func BuildToolList(aliases *alias.AliasMap) []registeredTool {
+	registry.cacheMu.RLock()
+	if time.Since(registry.cacheTime) < registry.cacheTTL && registry.cache != nil {
+		tools := registry.cache
+		registry.cacheMu.RUnlock()
 		return tools
 	}
-	cache.mu.RUnlock()
+	registry.cacheMu.RUnlock()
 
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	registry.cacheMu.Lock()
+	defer registry.cacheMu.Unlock()
 
-	if time.Since(cache.fetchedAt) < cache.ttl && cache.tools != nil {
-		return cache.tools
+	if time.Since(registry.cacheTime) < registry.cacheTTL && registry.cache != nil {
+		return registry.cache
 	}
 
-	// Push-based only: use tools registered via POST /tools/register.
-	pluginTools := pushedToolsByPlugin()
+	pluginTools := toolsByPlugin()
 
-	// Build alias-based tool entries.
-	var allTools []discoveredTool
-	coveredPlugins := make(map[string]bool) // plugins that have at least one alias
+	var allTools []registeredTool
+	coveredPlugins := make(map[string]bool)
 
 	if aliases != nil {
 		for _, entry := range aliases.List() {
@@ -135,7 +125,6 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 
 			switch entry.Target.Type {
 			case alias.TargetImage, alias.TargetVideo, alias.TargetStorage:
-				// Tool alias — create alias-named entries for each plugin tool.
 				tools, ok := pluginTools[pluginID]
 				if !ok {
 					continue
@@ -158,7 +147,7 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 						desc = fmt.Sprintf("%s (alias: @%s, type: %s)", desc, entry.Alias, toolType)
 					}
 
-					allTools = append(allTools, discoveredTool{
+					allTools = append(allTools, registeredTool{
 						PluginID:   pluginID,
 						AliasName:  entry.Alias,
 						AliasModel: entry.Target.Model,
@@ -171,7 +160,6 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 				}
 
 			case alias.TargetAgent:
-				// Agent alias — create a chat tool so the coordinator can delegate.
 				modelDesc := ""
 				if entry.Target.Model != "" {
 					modelDesc = fmt.Sprintf(" using model %s", entry.Target.Model)
@@ -179,7 +167,7 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 				desc := fmt.Sprintf("Send a message to @%s (%s%s) and get a response. Use this when the user wants to talk to or delegate a task to @%s.",
 					entry.Alias, pluginID, modelDesc, entry.Alias)
 
-				allTools = append(allTools, discoveredTool{
+				allTools = append(allTools, registeredTool{
 					PluginID:   pluginID,
 					AliasName:  entry.Alias,
 					AliasModel: entry.Target.Model,
@@ -193,13 +181,13 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 		}
 	}
 
-	// Add raw plugin-named tools for plugins without any alias coverage.
+	// Add raw plugin-named tools for plugins without alias coverage.
 	for pluginID, tools := range pluginTools {
 		if coveredPlugins[pluginID] {
 			continue
 		}
 		for _, t := range tools {
-			allTools = append(allTools, discoveredTool{
+			allTools = append(allTools, registeredTool{
 				PluginID:   t.PluginID,
 				Name:       t.Name,
 				FullName:   t.PluginID + "__" + t.Name,
@@ -210,24 +198,24 @@ func DiscoverTools(sdk *pluginsdk.Client, aliases *alias.AliasMap) []discoveredT
 		}
 	}
 
-	cache.tools = allTools
-	cache.fetchedAt = time.Now()
+	registry.cache = allTools
+	registry.cacheTime = time.Now()
 
 	if len(allTools) > 0 {
 		names := make([]string, len(allTools))
 		for i, t := range allTools {
 			names[i] = t.FullName
 		}
-		log.Printf("mcp-server: discovered %d tools: %s", len(allTools), strings.Join(names, ", "))
+		log.Printf("mcp-server: registered %d tools: %s", len(allTools), strings.Join(names, ", "))
 	}
 
 	return allTools
 }
 
-// InvalidateCache forces re-discovery on next call.
-func InvalidateCache() {
-	cache.mu.Lock()
-	cache.tools = nil
-	cache.fetchedAt = time.Time{}
-	cache.mu.Unlock()
+// InvalidateToolCache forces rebuild on next call.
+func InvalidateToolCache() {
+	registry.cacheMu.Lock()
+	registry.cache = nil
+	registry.cacheTime = time.Time{}
+	registry.cacheMu.Unlock()
 }
