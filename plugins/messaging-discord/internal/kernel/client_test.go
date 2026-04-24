@@ -30,7 +30,7 @@ func TestNewClient_WithTLS(t *testing.T) {
 func TestFindImageTool_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/plugins/search" {
-			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-stability", Status: "running"}}}
+			resp := searchResponse{Plugins: []pluginInfo{{ID: "agent-stability", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
@@ -43,8 +43,8 @@ func TestFindImageTool_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if pluginID != "tool-stability" {
-		t.Errorf("expected 'tool-stability', got %q", pluginID)
+	if pluginID != "agent-stability" {
+		t.Errorf("expected 'agent-stability', got %q", pluginID)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestFindImageTool_NoRunningPlugin(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/plugins/search" {
 			resp := searchResponse{Plugins: []pluginInfo{
-				{ID: "tool-stability", Status: "stopped"},
+				{ID: "agent-stability", Status: "stopped"},
 				{ID: "tool-dalle", Status: "installing"},
 			}}
 			json.NewEncoder(w).Encode(resp)
@@ -76,7 +76,7 @@ func TestFindVideoTool_Success(t *testing.T) {
 			if q != "agent:tool:video:veo" {
 				t.Errorf("expected capability=agent:tool:video:veo, got %q", q)
 			}
-			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-veo", Status: "running"}}}
+			resp := searchResponse{Plugins: []pluginInfo{{ID: "agent-veo", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
@@ -89,8 +89,8 @@ func TestFindVideoTool_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if pluginID != "tool-veo" {
-		t.Errorf("expected 'tool-veo', got %q", pluginID)
+	if pluginID != "agent-veo" {
+		t.Errorf("expected 'agent-veo', got %q", pluginID)
 	}
 }
 
@@ -98,9 +98,9 @@ func TestGenerateImage_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/plugins/search":
-			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-stability", Status: "running"}}}
+			resp := searchResponse{Plugins: []pluginInfo{{ID: "agent-stability", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)
-		case "/api/route/tool-stability/generate":
+		case "/api/route/agent-stability/generate":
 			if r.Method != http.MethodPost {
 				t.Errorf("expected POST, got %s", r.Method)
 			}
@@ -148,9 +148,9 @@ func TestGenerateImage_Error(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/plugins/search":
-			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-stability", Status: "running"}}}
+			resp := searchResponse{Plugins: []pluginInfo{{ID: "agent-stability", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)
-		case "/api/route/tool-stability/generate":
+		case "/api/route/agent-stability/generate":
 			resp := imageGenerateResponse{
 				Status: "error",
 				Error:  "content policy violation",
@@ -173,9 +173,9 @@ func TestGenerateVideo_Accepted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/plugins/search":
-			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-veo", Status: "running"}}}
+			resp := searchResponse{Plugins: []pluginInfo{{ID: "agent-veo", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)
-		case "/api/route/tool-veo/generate":
+		case "/api/route/agent-veo/generate":
 			if r.Method != http.MethodPost {
 				t.Errorf("expected POST, got %s", r.Method)
 			}
@@ -212,9 +212,9 @@ func TestCheckVideoStatus_Completed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/plugins/search":
-			resp := searchResponse{Plugins: []pluginInfo{{ID: "tool-veo", Status: "running"}}}
+			resp := searchResponse{Plugins: []pluginInfo{{ID: "agent-veo", Status: "running"}}}
 			json.NewEncoder(w).Encode(resp)
-		case "/api/route/tool-veo/status/task-123":
+		case "/api/route/agent-veo/status/task-123":
 			if r.Method != http.MethodGet {
 				t.Errorf("expected GET, got %s", r.Method)
 			}

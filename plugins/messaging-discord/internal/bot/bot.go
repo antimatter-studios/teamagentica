@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand/v2"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,9 +81,10 @@ type Bot struct {
 
 // taskProgress tracks a pending task group for progress updates.
 type taskProgress struct {
-	ChannelID      string
-	MessageID      string // Discord message ID for editing
-	ChunksDelivered int   // number of message_chunk messages sent
+	ChannelID       string
+	MessageID       string             // Discord message ID for editing
+	Cancel          context.CancelFunc // cancels the typing/thinking loop
+	ChunksDelivered int                // number of message_chunk messages sent
 }
 
 // New creates a new Bot instance. It does not open the connection yet.
@@ -498,29 +501,43 @@ func (b *Bot) processBuffered(channelID string, text string, mediaURLs []string)
 			return
 		}
 
-		// Start typing indicator loop with rotating status phrases.
+		// Typing loop — bounded by a safety timeout so a silent relay can't
+		// leave the "is typing" indicator hanging forever. Cancelled explicitly
+		// on first chunk / completed / failed via taskProgress.Cancel.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		taskGroupID := accepted.TaskGroupID
 		go func() {
 			ticker := time.NewTicker(8 * time.Second)
 			defer ticker.Stop()
 			for {
-				// Check if task is still tracked.
-				b.tasksMu.Lock()
-				_, active := b.taskChats[accepted.TaskGroupID]
-				b.tasksMu.Unlock()
-				if !active {
+				select {
+				case <-ctx.Done():
+					if ctx.Err() == context.DeadlineExceeded {
+						b.tasksMu.Lock()
+						_, stillTracked := b.taskChats[taskGroupID]
+						if stillTracked {
+							delete(b.taskChats, taskGroupID)
+						}
+						b.tasksMu.Unlock()
+						if stillTracked {
+							s.ChannelMessageEdit(channelID, sent.ID, "(no response received within timeout)")
+							b.emitEvent("task_timeout", fmt.Sprintf("task_group=%s", taskGroupID))
+						}
+					}
 					return
+				case <-ticker.C:
+					s.ChannelTyping(channelID)
+					phrase := thinkingPhrases[rand.IntN(len(thinkingPhrases))]
+					s.ChannelMessageEdit(channelID, sent.ID, phrase)
 				}
-				s.ChannelTyping(channelID)
-				phrase := thinkingPhrases[rand.IntN(len(thinkingPhrases))]
-				s.ChannelMessageEdit(channelID, sent.ID, phrase)
-				<-ticker.C
 			}
 		}()
 
 		b.tasksMu.Lock()
-		b.taskChats[accepted.TaskGroupID] = taskProgress{
+		b.taskChats[taskGroupID] = taskProgress{
 			ChannelID: channelID,
 			MessageID: sent.ID,
+			Cancel:    cancel,
 		}
 		b.tasksMu.Unlock()
 
@@ -680,6 +697,13 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		Message     string `json:"message"`
 		Response    string `json:"response,omitempty"`
 		Responder   string `json:"responder,omitempty"`
+		Attachments []struct {
+			MimeType  string `json:"mime_type"`
+			ImageData string `json:"image_data,omitempty"`
+			Type      string `json:"type,omitempty"`
+			URL       string `json:"url,omitempty"`
+			Filename  string `json:"filename,omitempty"`
+		} `json:"attachments,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(detail), &ev); err != nil {
 		log.Printf("[progress] failed to parse relay:progress: %v", err)
@@ -701,29 +725,111 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		if text == "" {
 			return
 		}
-		if tp.ChunksDelivered == 0 && ev.Responder != "" {
-			text = formatAttributedResponse(ev.Responder, text)
+		if tp.ChunksDelivered == 0 {
+			// First chunk — stop the typing/thinking loop.
+			if tp.Cancel != nil {
+				tp.Cancel()
+			}
+			if ev.Responder != "" {
+				text = formatAttributedResponse(ev.Responder, text)
+			}
 		}
 		b.sendResponse(b.session, tp.ChannelID, text)
 		b.tasksMu.Lock()
 		b.taskChats[ev.TaskGroupID] = taskProgress{
 			ChannelID:       tp.ChannelID,
 			MessageID:       tp.MessageID,
+			Cancel:          tp.Cancel,
 			ChunksDelivered: tp.ChunksDelivered + 1,
 		}
 		b.tasksMu.Unlock()
 
 	case "completed":
+		if tp.Cancel != nil {
+			tp.Cancel()
+		}
 		// Delete the thinking message.
 		b.session.ChannelMessageDelete(tp.ChannelID, tp.MessageID)
 
-		// Only send final response if no chunks were delivered.
+		// Only send final response text if no chunks were delivered.
 		if tp.ChunksDelivered == 0 {
 			response := ev.Response
-			if ev.Responder != "" {
+			if ev.Responder != "" && response != "" {
 				response = formatAttributedResponse(ev.Responder, response)
 			}
-			b.sendResponse(b.session, tp.ChannelID, response)
+			if response != "" {
+				b.sendResponse(b.session, tp.ChannelID, response)
+			}
+		}
+
+		// Upload any attached media. Supports three attachment shapes:
+		//   storage://<key>  — object-storage reference; fetched via sdk.StorageRead
+		//   https://...      — external URL; downloaded directly
+		//   ImageData (b64)  — inline base64 (legacy fallback, should be rare)
+		var files []*discordgo.File
+		for i, a := range ev.Attachments {
+			name := a.Filename
+			if name == "" {
+				ext := "png"
+				switch a.MimeType {
+				case "image/jpeg":
+					ext = "jpg"
+				case "image/gif":
+					ext = "gif"
+				case "image/webp":
+					ext = "webp"
+				case "video/mp4":
+					ext = "mp4"
+				}
+				name = fmt.Sprintf("attachment-%d.%s", i+1, ext)
+			}
+
+			var data []byte
+			switch {
+			case strings.HasPrefix(a.URL, "storage://"):
+				key := strings.TrimPrefix(a.URL, "storage://")
+				rc, _, err := b.sdk.StorageRead(context.Background(), key)
+				if err != nil {
+					log.Printf("[progress] attachment %d storage read %s: %v", i, key, err)
+					continue
+				}
+				data, err = io.ReadAll(rc)
+				rc.Close()
+				if err != nil {
+					log.Printf("[progress] attachment %d storage read body: %v", i, err)
+					continue
+				}
+			case strings.HasPrefix(a.URL, "http://") || strings.HasPrefix(a.URL, "https://"):
+				req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, a.URL, nil)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					log.Printf("[progress] attachment %d url fetch %s: %v", i, a.URL, err)
+					continue
+				}
+				data, err = io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil {
+					log.Printf("[progress] attachment %d url read body: %v", i, err)
+					continue
+				}
+			case a.ImageData != "":
+				var err error
+				data, err = base64.StdEncoding.DecodeString(a.ImageData)
+				if err != nil {
+					log.Printf("[progress] attachment %d base64 decode: %v", i, err)
+					continue
+				}
+			default:
+				log.Printf("[progress] attachment %d has no payload", i)
+				continue
+			}
+
+			files = append(files, &discordgo.File{Name: name, Reader: bytes.NewReader(data)})
+		}
+		if len(files) > 0 {
+			if _, err := b.session.ChannelMessageSendComplex(tp.ChannelID, &discordgo.MessageSend{Files: files}); err != nil {
+				log.Printf("[progress] send attachments error: %v", err)
+			}
 		}
 
 		b.tasksMu.Lock()
@@ -733,6 +839,9 @@ func (b *Bot) HandleRelayProgress(detail string) {
 		b.emitEvent("task_complete", fmt.Sprintf("task_group=%s", ev.TaskGroupID))
 
 	case "failed":
+		if tp.Cancel != nil {
+			tp.Cancel()
+		}
 		// Edit the thinking message with the error.
 		b.session.ChannelMessageEdit(tp.ChannelID, tp.MessageID, "Error: "+ev.Message)
 
