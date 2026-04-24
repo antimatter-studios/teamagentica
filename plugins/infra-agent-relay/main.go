@@ -711,8 +711,13 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 		mark("total")
 		log.Printf("[timing] tg=%s %s", taskGroupID, strings.Join(timings, " "))
 
+		responseText := agentResp.Response
+		if agentResp.ChunksEmitted {
+			// Text already delivered via message_chunk events — don't re-send.
+			responseText = ""
+		}
 		rr := &relayResponse{
-			Response:    agentResp.Response,
+			Response:    responseText,
 			Responder:   resolved.Alias,
 			Model:       agentResp.Model,
 			Backend:     agentResp.Backend,
@@ -773,8 +778,13 @@ func (r *relay) processChat(req relayRequest, taskGroupID string) {
 	mark("total")
 	log.Printf("[timing] tg=%s %s", taskGroupID, strings.Join(timings, " "))
 
+	responseText := agentResp.Response
+	if agentResp.ChunksEmitted {
+		// Text already delivered via message_chunk events — don't re-send.
+		responseText = ""
+	}
 	rr := &relayResponse{
-		Response:    agentResp.Response,
+		Response:    responseText,
 		Responder:   defaultAgent.Alias,
 		Model:       agentResp.Model,
 		Backend:     agentResp.Backend,
@@ -850,6 +860,10 @@ type agentChatResponse struct {
 	// Async fields — present when plugin returns immediately with a task ID.
 	Status      string              `json:"status,omitempty"`  // "processing" for async
 	TaskID      string              `json:"task_id,omitempty"` // plugin's internal task ID
+	// ChunksEmitted is true when response text was delivered via message_chunk
+	// events during streaming. Internal-only; tells handleChat to skip the
+	// response text in the completed event (it's already been sent).
+	ChunksEmitted bool `json:"-"`
 }
 
 // buildAgentRequest constructs a pluginsdk.AgentChatRequest from relay parameters.
@@ -983,15 +997,29 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 
 	var fullText string
 	var pendingChunk string
+	var chunksEmitted bool
 	const chunkMaxLen = 500
 	const chunkMinLen = 50
 	var finalResp agentChatResponse
+
+	emitChunk := func(text string) {
+		payload := map[string]interface{}{
+			"task_group_id": cb.TaskGroupID,
+			"channel_id":    cb.ChannelID,
+			"status":        "message_chunk",
+			"message":       strings.ReplaceAll(text, "@@", "@"),
+			"responder":     cb.Responder,
+		}
+		data, _ := json.Marshal(payload)
+		r.sdk.PublishEventTo(events.RelayProgress, string(data), cb.SourcePlugin)
+		chunksEmitted = true
+	}
 
 	flushChunk := func() {
 		if len(pendingChunk) < chunkMinLen {
 			return
 		}
-		r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "message_chunk", pendingChunk, nil)
+		emitChunk(pendingChunk)
 		pendingChunk = ""
 	}
 
@@ -1030,7 +1058,7 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 
 	// Flush any remaining pending chunk (no minimum length check — send whatever is left).
 	if pendingChunk != "" {
-		r.emitProgress(cb.SourcePlugin, cb.ChannelID, cb.TaskGroupID, "message_chunk", pendingChunk, nil)
+		emitChunk(pendingChunk)
 		pendingChunk = ""
 	}
 
@@ -1038,6 +1066,7 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 	if finalResp.Response == "" {
 		finalResp.Response = fullText
 	}
+	finalResp.ChunksEmitted = chunksEmitted
 
 	return &finalResp, nil
 }
@@ -1443,6 +1472,16 @@ func main() {
 	sdkClient.Events().On("agent:ready", pluginsdk.NewTimedDebouncer(1*time.Second, func(event pluginsdk.EventCallback) {
 		refreshAliases()
 	}))
+
+	// Re-fetch aliases when any plugin is installed, uninstalled, or swapped.
+	// The alias DB can change indirectly (e.g. a rename migration) with no
+	// agent:update event, so lifecycle transitions are the safest trigger for
+	// a full refresh. Debounced so rapid register/unregister doesn't storm the registry.
+	aliasLifecycleDebouncer := pluginsdk.NewTimedDebouncer(500*time.Millisecond, func(event pluginsdk.EventCallback) {
+		refreshAliases()
+	})
+	sdkClient.Events().On("plugin:ready", aliasLifecycleDebouncer)
+	sdkClient.Events().On("plugin:stopped", aliasLifecycleDebouncer)
 
 	sdkClient.Start(context.Background())
 
