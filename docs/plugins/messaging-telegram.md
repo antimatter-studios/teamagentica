@@ -115,5 +115,5 @@ Sends "typing" action every 4s while waiting for agent response.
 ## Related
 
 - [webhook-ingress](network-webhook-ingress.md) — Webhook URL management
-- [ngrok](network-ngrok.md) — Public tunnel for webhooks
+- [network-traffic-manager](network-traffic-manager.md) — Public tunnel for webhooks (ngrok driver)
 - [messaging-discord](messaging-discord.md), [messaging-whatsapp](messaging-whatsapp.md) — Other messaging plugins

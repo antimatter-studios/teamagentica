@@ -1,0 +1,24 @@
+id: network-traffic-manager
+name: "Network Traffic Manager"
+description: "Manages N named network tunnels (ngrok, ssh, ...). Each tunnel has its own driver + config and can be started/stopped by name. Broadcasts ingress:ready for tunnels with role=ingress."
+group: network
+version: "1.1.1"
+image: "teamagentica-network-traffic-manager:latest"
+author: TeamAgentica
+tags: [tunnel, networking, ngrok, ssh, ingress]
+capabilities: ["network:ingress", "network:tunnel"]
+config_schema:
+  TUNNELS:
+    type: string
+    label: "Tunnels (JSON array)"
+    help_text: >-
+      JSON array of tunnel specs.
+      Each spec: {name, driver, auto_start, role, target, config}.
+      target is "webhook" (auto-discover from webhook plugin) or "host:port".
+      role=ingress broadcasts ingress:ready when running.
+      Example: [{"name":"ingress","driver":"ngrok","auto_start":true,"role":"ingress","target":"webhook","config":{"authtoken":"...","domain":"..."}}]
+  HTTP_PORT:
+    type: number
+    label: "HTTP Port"
+    default: "9100"
+    help_text: "Port for the health + control endpoints"

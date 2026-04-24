@@ -73,5 +73,5 @@ Messages are automatically marked as read via `MarkRead(msg.ID)`.
 ## Related
 
 - [webhook-ingress](network-webhook-ingress.md) — Webhook URL management
-- [ngrok](network-ngrok.md) — Public tunnel for webhooks
+- [network-traffic-manager](network-traffic-manager.md) — Public tunnel for webhooks (ngrok driver)
 - [messaging-telegram](messaging-telegram.md), [messaging-discord](messaging-discord.md) — Other messaging plugins

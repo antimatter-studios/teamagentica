@@ -219,7 +219,7 @@ This is remarkably simple and debuggable — you can literally `ls` the IPC dire
 - **Video generation**: Veo, Seedance, Stability, NanoBanana — discoverable via `agent:tool:video` capability
 - **Image generation**: via `agent:tool:image` capability
 - **Cost tracking**: `system:cost-explorer`
-- **Tunnel/webhooks**: network-ngrok, network-webhook-ingress
+- **Tunnel/webhooks**: network-traffic-manager, network-webhook-ingress
 
 The capability-based discovery system means messaging bots auto-discover available tools. The Telegram bot dynamically creates `/<provider>` commands for each running video tool.
 

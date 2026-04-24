@@ -8,8 +8,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/network-ngrok-ingress/ plugins/network-ngrok-ingress/
-WORKDIR /build/plugins/network-ngrok-ingress
+COPY plugins/network-traffic-manager/ plugins/network-traffic-manager/
+WORKDIR /build/plugins/network-traffic-manager
 
 RUN go mod download
 
@@ -22,16 +22,16 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/network-ngrok-ingress/ plugins/network-ngrok-ingress/
-WORKDIR /build/plugins/network-ngrok-ingress
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /network-ngrok-ingress .
+COPY plugins/network-traffic-manager/ plugins/network-traffic-manager/
+WORKDIR /build/plugins/network-traffic-manager
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /network-traffic-manager .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod
 RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica
-COPY --from=builder /network-ngrok-ingress /usr/local/bin/network-ngrok-ingress
+COPY --from=builder /network-traffic-manager /usr/local/bin/network-traffic-manager
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/network-ngrok-ingress/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/network-traffic-manager/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
-CMD ["network-ngrok-ingress"]
+CMD ["network-traffic-manager"]

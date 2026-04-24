@@ -44,7 +44,7 @@ The network-webhook-ingress plugin acts as a reverse proxy for incoming webhooks
 
 ### Coordination Flow
 
-1. **network-ngrok** starts → sends `webhook:tunnel:update` to network-webhook-ingress
+1. **network-traffic-manager** starts its `role=ingress` tunnel → broadcasts `ingress:ready`
 2. **network-webhook-ingress** sets base URL → broadcasts `webhook:ready`
 3. **Messaging plugin** receives `webhook:ready` → sends `webhook:api:update` with its route
 4. **network-webhook-ingress** registers route → sends `webhook:plugin:url` back with the full public URL
@@ -59,5 +59,5 @@ The network-webhook-ingress plugin acts as a reverse proxy for incoming webhooks
 
 ## Related
 
-- [ngrok](network-ngrok.md) — Provides the public tunnel URL
+- [network-traffic-manager](network-traffic-manager.md) — Provides the public tunnel URL via ngrok driver
 - [messaging-telegram](messaging-telegram.md), [messaging-whatsapp](messaging-whatsapp.md) — Plugins that use webhook-ingress

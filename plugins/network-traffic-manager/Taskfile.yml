@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: network-ngrok-ingress
+  BINARY_NAME: network-traffic-manager
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-network-ngrok-ingress:dev
+  DEV_IMAGE: teamagentica-network-traffic-manager:dev
 
 tasks:
   default:

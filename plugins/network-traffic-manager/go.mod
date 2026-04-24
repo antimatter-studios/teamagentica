@@ -1,4 +1,4 @@
-module github.com/antimatter-studios/teamagentica/plugins/network-ngrok-ingress
+module github.com/antimatter-studios/teamagentica/plugins/network-traffic-manager
 
 go 1.25.0
 
