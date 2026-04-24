@@ -1,4 +1,4 @@
-# tool-stability
+# agent-stability
 
 > Stability AI image generation (Stable Diffusion 3).
 
@@ -90,5 +90,5 @@ Dynamic list from Stability engines API. Fallback: `sd3-medium`, `sd3-large`, `s
 
 ## Related
 
-- [tool-nanobanana](tool-nanobanana.md) — Alternative image generator (Gemini)
+- [agent-nanobanana](agent-nanobanana.md) — Alternative image generator (Gemini)
 - [agent-openai](agent-openai.md) — Can call this tool via function calling

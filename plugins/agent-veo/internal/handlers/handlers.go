@@ -1,18 +1,60 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/usage"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/veo"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-veo/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-veo/internal/veo"
 )
+
+// rehostToStorage downloads a remote URL and writes it to object storage under
+// the given key. Returns a storage:// URL on success. On failure (network,
+// storage write, no sdk), returns the original URL unchanged.
+func (h *Handler) rehostToStorage(ctx context.Context, externalURL, key, mimeType string) string {
+	if h.sdk == nil || externalURL == "" {
+		return externalURL
+	}
+	dlCtx, cancelDL := context.WithTimeout(ctx, 120*time.Second)
+	defer cancelDL()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, externalURL, nil)
+	if err != nil {
+		log.Printf("rehost: build request for %s: %v", externalURL, err)
+		return externalURL
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("rehost: download %s: %v", externalURL, err)
+		return externalURL
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("rehost: download %s returned %d", externalURL, resp.StatusCode)
+		return externalURL
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("rehost: read body %s: %v", externalURL, err)
+		return externalURL
+	}
+	writeCtx, cancelW := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelW()
+	if err := h.sdk.StorageWrite(writeCtx, key, bytes.NewReader(body), mimeType); err != nil {
+		log.Printf("rehost: storage write %s: %v", key, err)
+		return externalURL
+	}
+	return "storage://" + key
+}
 
 // task tracks an in-flight video generation.
 type task struct {
@@ -94,7 +136,7 @@ func (h *Handler) Health(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
-		"plugin":     "tool-veo",
+		"plugin":     "agent-veo",
 		"version":    "1.0.0",
 		"configured": apiKey != "",
 		"model":      model,
@@ -106,6 +148,151 @@ type generateRequest struct {
 	Prompt         string `json:"prompt" binding:"required"`
 	AspectRatio    string `json:"aspect_ratio,omitempty"`
 	NegativePrompt string `json:"negative_prompt,omitempty"`
+}
+
+// ChatStream implements pluginsdk.AgentProvider. Video generation is async;
+// this blocks up to ~100s while polling the Veo API. For jobs that exceed the
+// deadline, the task record is retained and reachable via GET /status/:taskId.
+func (h *Handler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRequest) <-chan pluginsdk.AgentStreamEvent {
+	ch := make(chan pluginsdk.AgentStreamEvent, 2)
+	go func() {
+		defer close(ch)
+
+		h.mu.RLock()
+		apiKey, model, client := h.apiKey, h.model, h.client
+		h.mu.RUnlock()
+
+		if apiKey == "" {
+			ch <- pluginsdk.StreamError("No API key configured. Set GEMINI_API_KEY.")
+			return
+		}
+		if req.Model != "" {
+			model = req.Model
+		}
+
+		prompt := req.Message
+		for i := len(req.Conversation) - 1; i >= 0; i-- {
+			if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
+				prompt = req.Conversation[i].Content
+				break
+			}
+		}
+		if prompt == "" {
+			ch <- pluginsdk.StreamError("message or conversation required")
+			return
+		}
+
+		h.emitEvent("chat_request", fmt.Sprintf("model=%s prompt=%s", model, truncateStr(prompt, 100)))
+		start := time.Now()
+
+		result, err := client.Generate(veo.GenerateRequest{Prompt: prompt})
+		if err != nil {
+			log.Printf("Veo chat/generate error: %v", err)
+			h.emitEvent("error", fmt.Sprintf("chat: %v", err))
+			if h.sdk != nil {
+				h.sdk.ReportUsage(pluginsdk.UsageReport{
+					UserID: req.UserID, Provider: "veo", Model: model,
+					RecordType: "request", Status: "failed",
+					Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
+				})
+			}
+			ch <- pluginsdk.StreamError("Video generation failed: " + err.Error())
+			return
+		}
+
+		h.mu.Lock()
+		h.nextID++
+		taskID := fmt.Sprintf("veo-%d", h.nextID)
+		h.tasks[taskID] = &task{
+			ID: taskID, Prompt: prompt, Model: model,
+			OperationName: result.OperationName,
+			Status:        "processing",
+			CreatedAt:     time.Now().UTC(),
+		}
+		h.mu.Unlock()
+
+		const pollInterval = 5 * time.Second
+		const maxWait = 100 * time.Second
+		deadline := time.Now().Add(maxWait)
+
+		var statusResult *veo.StatusResult
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+			statusResult, err = client.CheckStatus(result.OperationName)
+			if err != nil {
+				log.Printf("Veo poll error: %v", err)
+				continue
+			}
+			if statusResult.Done {
+				break
+			}
+		}
+
+		elapsed := time.Since(start)
+
+		if statusResult == nil || !statusResult.Done {
+			ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+				Response: fmt.Sprintf("Video generation is still in progress (task: %s). Check GET /status/%s for progress.", taskID, taskID),
+				Model:    model,
+			})
+			return
+		}
+
+		if statusResult.Error != "" {
+			h.mu.Lock()
+			t := h.tasks[taskID]
+			if t != nil {
+				t.Status = "failed"
+				t.Error = statusResult.Error
+				t.CompletedAt = time.Now().UTC()
+			}
+			h.mu.Unlock()
+			ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+				Response: "Video generation failed: " + statusResult.Error,
+				Model:    model,
+			})
+			return
+		}
+
+		h.mu.Lock()
+		t := h.tasks[taskID]
+		if t != nil {
+			t.Status = "completed"
+			t.VideoURI = statusResult.VideoURI
+			t.CompletedAt = time.Now().UTC()
+		}
+		h.mu.Unlock()
+
+		if h.sdk != nil {
+			h.sdk.ReportUsage(pluginsdk.UsageReport{
+				UserID: req.UserID, Provider: "veo", Model: model,
+				RecordType: "request", Status: "completed",
+				Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
+				TaskID: taskID,
+			})
+		}
+
+		h.emitEvent("chat_response", fmt.Sprintf("task=%s duration=%dms", taskID, elapsed.Milliseconds()))
+
+		rehostKey := fmt.Sprintf(".private/generated/agent-veo/%s.mp4", uuid.NewString())
+		finalURL := h.rehostToStorage(ctx, statusResult.VideoURI, rehostKey, "video/mp4")
+
+		ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+			Response: fmt.Sprintf("Here is the generated video (task: %s).", taskID),
+			Model:    model,
+			Attachments: []pluginsdk.AgentAttachment{{
+				Type:     "video",
+				MimeType: "video/mp4",
+				URL:      finalURL,
+				Filename: fmt.Sprintf("veo-%d.mp4", time.Now().Unix()),
+			}},
+		})
+	}()
+	return ch
 }
 
 // Generate submits a video generation request to Veo.

@@ -10,7 +10,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-veo/internal/handlers"
 )
 
 func main() {
@@ -70,6 +70,7 @@ func main() {
 	h.SetSDK(sdkClient)
 
 	router.GET("/health", h.Health)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.POST("/generate", h.Generate)
 	router.GET("/status/:taskId", h.Status)
 	router.GET("/mcp", h.Tools)

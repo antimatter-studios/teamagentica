@@ -299,7 +299,7 @@ func (m *AliasMap) IsEmpty() bool {
 
 // ToolInfo describes a discovered tool for system prompt generation.
 type ToolInfo struct {
-	FullName    string // e.g. "nb2__generate_image" or "tool-nanobanana__generate_image"
+	FullName    string // e.g. "nb2__generate_image" or "agent-nanobanana__generate_image"
 	Name        string // short name, e.g. "generate_video"
 	Description string
 	PluginID    string

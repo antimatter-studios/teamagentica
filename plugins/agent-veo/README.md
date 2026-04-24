@@ -1,4 +1,4 @@
-# tool-veo
+# agent-veo
 
 AI video generation powered by Google Veo via the Gemini API. Asynchronous -- submits generation requests and callers poll for completion.
 

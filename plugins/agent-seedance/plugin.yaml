@@ -1,13 +1,13 @@
-id: tool-seedance
+id: agent-seedance
 name: "Seedance Video"
 description: "AI video generation tool powered by Seedance 2.0 API"
 group: tools
-version: "2.0.27"
-image: "teamagentica-tool-seedance:latest"
+version: "2.0.29"
+image: "teamagentica-agent-seedance:latest"
 author: teamagentica
 tags: [video, ai, tool, seedance]
 capabilities: ["agent:tool:video-gen"]
-dependencies: ["cost:tracking"]
+dependencies: ["cost:tracking", "storage:api"]
 config_schema:
   SEEDANCE_API_KEY:
     type: string

@@ -62,4 +62,4 @@ Dynamic list from Gemini API (filters to `gemini-*` models supporting `generateC
 
 - [Plugin SDK](../plugin-sdk.md) — SDK reference
 - [agent-openai](agent-openai.md) — OpenAI agent (has tool calling)
-- [tool-nanobanana](tool-nanobanana.md) — Uses same Gemini API for image generation
+- [agent-nanobanana](agent-nanobanana.md) — Uses same Gemini API for image generation

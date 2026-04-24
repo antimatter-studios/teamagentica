@@ -1,4 +1,4 @@
-# tool-stability
+# agent-stability
 
 AI image generation powered by Stable Diffusion 3.5 via the Stability AI API. Synchronous -- returns base64-encoded image data directly.
 

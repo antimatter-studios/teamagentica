@@ -6,7 +6,7 @@ import (
 )
 
 // RegisterWebhook registers this plugin's webhook route with the webhook ingress.
-// prefix is the URL prefix the ingress will match (e.g. "/tool-seedance").
+// prefix is the URL prefix the ingress will match (e.g. "/agent-seedance").
 // Also subscribes to webhook:ready so the route is re-registered if the ingress restarts.
 func (c *Client) RegisterWebhook(prefix string) {
 	// Ensure prefix starts with /
@@ -38,7 +38,7 @@ func (c *Client) RegisterWebhook(prefix string) {
 
 // OnWebhookURL registers a callback that fires when the webhook ingress sends
 // this plugin its public webhook URL. The callback receives the full URL
-// (e.g. "https://abc.ngrok.io/tool-seedance").
+// (e.g. "https://abc.ngrok.io/agent-seedance").
 func (c *Client) OnWebhookURL(fn func(webhookURL string)) {
 	c.Events().On("webhook:plugin:url", NewNullDebouncer(func(event EventCallback) {
 		var data struct {

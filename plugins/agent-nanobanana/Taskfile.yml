@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: tool-nanobanana
+  BINARY_NAME: agent-nanobanana
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-tool-nanobanana:dev
+  DEV_IMAGE: teamagentica-agent-nanobanana:dev
 
 tasks:
   default:

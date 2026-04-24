@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,10 +11,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/nanobanana"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-nanobanana/internal/nanobanana"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-nanobanana/internal/usage"
 )
 
 type Handler struct {
@@ -77,7 +81,7 @@ func (h *Handler) Health(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":        "ok",
-		"plugin":        "tool-nanobanana",
+		"plugin":        "agent-nanobanana",
 		"version":       "1.0.0",
 		"configured":    apiKey != "",
 		"default_model": model,
@@ -103,9 +107,10 @@ func (h *Handler) Models(c *gin.Context) {
 }
 
 type generateRequest struct {
-	Prompt      string `json:"prompt" binding:"required"`
-	Model       string `json:"model,omitempty"`
-	AspectRatio string `json:"aspect_ratio,omitempty"`
+	Prompt      string   `json:"prompt" binding:"required"`
+	Model       string   `json:"model,omitempty"`
+	AspectRatio string   `json:"aspect_ratio,omitempty"`
+	ImageURLs   []string `json:"image_urls,omitempty"`
 }
 
 // Generate creates an image from a text prompt. Unlike video tools, this is
@@ -141,6 +146,7 @@ func (h *Handler) Generate(c *gin.Context) {
 		Prompt:      req.Prompt,
 		Model:       model,
 		AspectRatio: req.AspectRatio,
+		ImageURLs:   req.ImageURLs,
 	})
 	if err != nil {
 		log.Printf("Nano Banana generate error: %v", err)
@@ -188,15 +194,22 @@ func (h *Handler) Generate(c *gin.Context) {
 		})
 	}
 
-	h.emitEvent("generate_complete", fmt.Sprintf("model=%s duration=%dms mime=%s", model, elapsed.Milliseconds(), result.MimeType))
+	attachments, err := h.storeGeneratedImages(c.Request.Context(), result.Images)
+	if err != nil {
+		log.Printf("Nano Banana store error: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Image storage failed: " + err.Error()})
+		return
+	}
+
+	h.emitEvent("generate_complete", fmt.Sprintf("model=%s duration=%dms count=%d", model, elapsed.Milliseconds(), len(attachments)))
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":     "completed",
-		"image_data": result.ImageData,
-		"mime_type":  result.MimeType,
-		"text":       result.Text,
-		"model":      model,
-		"prompt":     req.Prompt,
+		"status":      "completed",
+		"attachments": attachments,
+		"count":       len(attachments),
+		"text":        result.Text,
+		"model":       model,
+		"prompt":      req.Prompt,
 	})
 }
 
@@ -241,98 +254,127 @@ func (h *Handler) UsageRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"records": records})
 }
 
-// chatRequest matches the shape used by agent-openai and the web UI.
-type chatRequest struct {
-	Message      string `json:"message"`
-	Model        string `json:"model,omitempty"`
-	Conversation []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"conversation"`
-}
+// ChatStream implements pluginsdk.AgentProvider — the SDK handles SSE framing,
+// this method just produces the one-shot image-generation event stream.
+func (h *Handler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRequest) <-chan pluginsdk.AgentStreamEvent {
+	ch := make(chan pluginsdk.AgentStreamEvent, 2)
+	go func() {
+		defer close(ch)
 
-// Chat wraps Generate and returns a chat-format response with the image
-// embedded as a markdown data URL.
-func (h *Handler) Chat(c *gin.Context) {
-	h.mu.RLock()
-	apiKey, defaultModel, client := h.apiKey, h.model, h.client
-	h.mu.RUnlock()
+		h.mu.RLock()
+		apiKey, defaultModel, client := h.apiKey, h.model, h.client
+		h.mu.RUnlock()
 
-	if apiKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set GEMINI_API_KEY."})
-		return
-	}
-
-	var req chatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	model := req.Model
-	if model == "" {
-		model = defaultModel
-	}
-
-	// Extract prompt: prefer last user message from conversation, fall back to message field.
-	prompt := req.Message
-	for i := len(req.Conversation) - 1; i >= 0; i-- {
-		if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
-			prompt = req.Conversation[i].Content
-			break
+		if apiKey == "" {
+			ch <- pluginsdk.StreamError("No API key configured. Set GEMINI_API_KEY.")
+			return
 		}
-	}
-	if prompt == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "message or conversation required"})
-		return
-	}
 
-	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
-	h.emitEvent("chat_request", fmt.Sprintf("model=%s prompt=%s", model, truncateStr(prompt, 100)))
+		model := req.Model
+		if model == "" {
+			model = defaultModel
+		}
 
-	start := time.Now()
+		prompt := req.Message
+		for i := len(req.Conversation) - 1; i >= 0; i-- {
+			if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
+				prompt = req.Conversation[i].Content
+				break
+			}
+		}
+		if prompt == "" {
+			ch <- pluginsdk.StreamError("message or conversation required")
+			return
+		}
 
-	result, err := client.Generate(nanobanana.GenerateRequest{Prompt: prompt, Model: model})
-	if err != nil {
-		log.Printf("Nano Banana chat/generate error: %v", err)
-		h.emitEvent("error", fmt.Sprintf("chat: %v", err))
+		h.emitEvent("chat_request", fmt.Sprintf("model=%s prompt=%s", model, truncateStr(prompt, 100)))
+		start := time.Now()
+
+		result, err := client.Generate(nanobanana.GenerateRequest{Prompt: prompt, Model: model, ImageURLs: req.ImageURLs})
+		if err != nil {
+			log.Printf("Nano Banana chat/generate error: %v", err)
+			h.emitEvent("error", fmt.Sprintf("chat: %v", err))
+			if h.sdk != nil {
+				h.sdk.ReportUsage(pluginsdk.UsageReport{
+					UserID: req.UserID, Provider: "nanobanana", Model: model,
+					RecordType: "request", Status: "failed",
+					Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
+				})
+			}
+			ch <- pluginsdk.StreamError("Image generation failed: " + err.Error())
+			return
+		}
+
+		elapsed := time.Since(start)
 		if h.sdk != nil {
 			h.sdk.ReportUsage(pluginsdk.UsageReport{
-				UserID: userID, Provider: "nanobanana", Model: model,
-				RecordType: "request", Status: "failed",
-				Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
+				UserID: req.UserID, Provider: "nanobanana", Model: model,
+				RecordType: "request", Status: "completed",
+				Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
 			})
 		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Image generation failed: " + err.Error()})
-		return
-	}
 
-	elapsed := time.Since(start)
-	if h.sdk != nil {
-		h.sdk.ReportUsage(pluginsdk.UsageReport{
-			UserID: userID, Provider: "nanobanana", Model: model,
-			RecordType: "request", Status: "completed",
-			Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
+		responseText := "Here is the generated image."
+		if result.Text != "" {
+			responseText = result.Text
+		}
+
+		h.emitEvent("chat_response", fmt.Sprintf("model=%s duration=%dms count=%d", model, elapsed.Milliseconds(), len(result.Images)))
+
+		attachments, storeErr := h.storeGeneratedImages(ctx, result.Images)
+		if storeErr != nil {
+			ch <- pluginsdk.StreamError(storeErr.Error())
+			return
+		}
+
+		ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+			Response:    responseText,
+			Model:       model,
+			Attachments: attachments,
+		})
+	}()
+	return ch
+}
+
+// storeGeneratedImages writes each image to object storage and returns an
+// attachment per image. storage:api is a hard dependency — if any write fails
+// the error is surfaced rather than silently inlining multi-MB base64.
+func (h *Handler) storeGeneratedImages(ctx context.Context, images []nanobanana.GeneratedImage) ([]pluginsdk.AgentAttachment, error) {
+	out := make([]pluginsdk.AgentAttachment, 0, len(images))
+	now := time.Now().Unix()
+	for i, img := range images {
+		ext := mimeToExt(img.MimeType)
+		key := fmt.Sprintf(".private/generated/agent-nanobanana/%s.%s", uuid.NewString(), ext)
+		rawImage, decodeErr := base64.StdEncoding.DecodeString(img.Data)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode image %d: %w", i, decodeErr)
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := h.sdk.StorageWrite(writeCtx, key, bytes.NewReader(rawImage), img.MimeType)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("store image %d: %w", i, err)
+		}
+		out = append(out, pluginsdk.AgentAttachment{
+			MimeType: img.MimeType,
+			Type:     "image",
+			URL:      "storage://" + key,
+			Filename: fmt.Sprintf("nanobanana-%d-%d.%s", now, i, ext),
 		})
 	}
+	return out, nil
+}
 
-	responseText := "Here is the generated image."
-	if result.Text != "" {
-		responseText = result.Text
+func mimeToExt(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return "jpg"
+	case "image/webp":
+		return "webp"
+	case "image/gif":
+		return "gif"
 	}
-
-	h.emitEvent("chat_response", fmt.Sprintf("model=%s duration=%dms", model, elapsed.Milliseconds()))
-
-	c.JSON(http.StatusOK, gin.H{
-		"response": responseText,
-		"model":    model,
-		"attachments": []gin.H{
-			{
-				"mime_type":  result.MimeType,
-				"image_data": result.ImageData,
-			},
-		},
-	})
+	return "png"
 }
 
 // ToolDefs returns the raw tool definitions for this plugin.
@@ -340,13 +382,14 @@ func (h *Handler) ToolDefs() interface{} {
 	return []gin.H{
 		{
 			"name":        "generate_image",
-			"description": "Generate a high-quality image using Nano Banana (Gemini image model). Preferred image generator — better results than Stability AI. Use this by default unless cost is a concern.",
+			"description": "Generate a high-quality image using Nano Banana (Gemini image model). Returns an attachments array (usually one image, occasionally more) and a count field — describe exactly that number of images, do not invent additional variants. Preferred image generator — better results than Stability AI. Use this by default unless cost is a concern. Supply image_urls to edit/restyle/compose existing images.",
 			"endpoint":    "/generate",
 			"parameters": gin.H{
 				"type": "object",
 				"properties": gin.H{
 					"prompt":       gin.H{"type": "string", "description": "Text prompt describing the image to generate"},
 					"aspect_ratio": gin.H{"type": "string", "description": "Aspect ratio (1:1, 16:9, 9:16)", "enum": []string{"1:1", "16:9", "9:16"}},
+					"image_urls":   gin.H{"type": "array", "items": gin.H{"type": "string"}, "description": "Optional reference image URLs used as input (image-to-image, editing, style transfer)"},
 				},
 				"required": []string{"prompt"},
 			},
@@ -383,8 +426,8 @@ PARAMETERS:
 - aspect_ratio (optional): Image aspect ratio (default: 1:1)
 
 OUTPUT:
-- Returns base64-encoded image data with MIME type
-- May include descriptive text about the generated image
+- Returns an attachments array of stored image URLs with a count field
+- Only describe the number of images you actually see in count — do not invent variants
 
 GUIDELINES:
 - Be descriptive and specific in prompt interpretation

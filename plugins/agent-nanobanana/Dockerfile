@@ -8,8 +8,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-nanobanana/ plugins/tool-nanobanana/
-WORKDIR /build/plugins/tool-nanobanana
+COPY plugins/agent-nanobanana/ plugins/agent-nanobanana/
+WORKDIR /build/plugins/agent-nanobanana
 
 RUN go mod download
 
@@ -22,8 +22,8 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-nanobanana/ plugins/tool-nanobanana/
-WORKDIR /build/plugins/tool-nanobanana
+COPY plugins/agent-nanobanana/ plugins/agent-nanobanana/
+WORKDIR /build/plugins/agent-nanobanana
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /nanobanana-plugin .
 
 # -- Prod stage --
@@ -32,6 +32,6 @@ RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica
 COPY --from=builder /nanobanana-plugin /usr/local/bin/nanobanana-plugin
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/tool-nanobanana/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/agent-nanobanana/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 CMD ["nanobanana-plugin"]

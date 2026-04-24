@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,10 +11,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-stability/internal/stability"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-stability/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-stability/internal/stability"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-stability/internal/usage"
 )
 
 type Handler struct {
@@ -76,7 +80,7 @@ func (h *Handler) Health(c *gin.Context) {
 	h.mu.RUnlock()
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
-		"plugin":     "tool-stability",
+		"plugin":     "agent-stability",
 		"version":    "1.0.0",
 		"configured": apiKey != "",
 		"model":      model,
@@ -185,99 +189,107 @@ func (h *Handler) Generate(c *gin.Context) {
 	})
 }
 
-type chatRequest struct {
-	Message      string `json:"message"`
-	Model        string `json:"model,omitempty"`
-	Conversation []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"conversation"`
-}
+// ChatStream implements pluginsdk.AgentProvider — the SDK handles SSE framing,
+// this method just produces the one-shot image-generation event stream.
+func (h *Handler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRequest) <-chan pluginsdk.AgentStreamEvent {
+	ch := make(chan pluginsdk.AgentStreamEvent, 2)
+	go func() {
+		defer close(ch)
 
-// Chat wraps Generate and returns a chat-format response with the image
-// embedded as an attachment.
-func (h *Handler) Chat(c *gin.Context) {
-	h.mu.RLock()
-	apiKey, model, client := h.apiKey, h.model, h.client
-	h.mu.RUnlock()
+		h.mu.RLock()
+		apiKey, model, client := h.apiKey, h.model, h.client
+		h.mu.RUnlock()
 
-	if apiKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set STABILITY_API_KEY."})
-		return
-	}
-
-	var req chatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	if req.Model != "" {
-		model = req.Model
-	}
-
-	// Extract prompt: prefer last user message from conversation, fall back to message field.
-	prompt := req.Message
-	for i := len(req.Conversation) - 1; i >= 0; i-- {
-		if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
-			prompt = req.Conversation[i].Content
-			break
+		if apiKey == "" {
+			ch <- pluginsdk.StreamError("No API key configured. Set STABILITY_API_KEY.")
+			return
 		}
-	}
-	if prompt == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "message or conversation required"})
-		return
-	}
 
-	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
-	h.emitEvent("chat_request", fmt.Sprintf("model=%s prompt=%s", model, truncateStr(prompt, 100)))
+		if req.Model != "" {
+			model = req.Model
+		}
 
-	start := time.Now()
+		prompt := req.Message
+		for i := len(req.Conversation) - 1; i >= 0; i-- {
+			if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
+				prompt = req.Conversation[i].Content
+				break
+			}
+		}
+		if prompt == "" {
+			ch <- pluginsdk.StreamError("message or conversation required")
+			return
+		}
 
-	result, err := client.Generate(stability.GenerateRequest{Prompt: prompt})
-	if err != nil {
-		log.Printf("Stability chat/generate error: %v", err)
-		h.emitEvent("error", fmt.Sprintf("chat: %v", err))
+		h.emitEvent("chat_request", fmt.Sprintf("model=%s prompt=%s", model, truncateStr(prompt, 100)))
+		start := time.Now()
+
+		result, err := client.Generate(stability.GenerateRequest{Prompt: prompt})
+		if err != nil {
+			log.Printf("Stability chat/generate error: %v", err)
+			h.emitEvent("error", fmt.Sprintf("chat: %v", err))
+			if h.sdk != nil {
+				h.sdk.ReportUsage(pluginsdk.UsageReport{
+					UserID: req.UserID, Provider: "stability", Model: model,
+					RecordType: "request", Status: "failed",
+					Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
+				})
+			}
+			ch <- pluginsdk.StreamError("Image generation failed: " + err.Error())
+			return
+		}
+
+		elapsed := time.Since(start)
+
+		h.usage.RecordRequest(usage.RequestRecord{
+			Model:      model,
+			Prompt:     truncateStr(prompt, 200),
+			Status:     "completed",
+			DurationMs: elapsed.Milliseconds(),
+		})
 		if h.sdk != nil {
 			h.sdk.ReportUsage(pluginsdk.UsageReport{
-				UserID: userID, Provider: "stability", Model: model,
-				RecordType: "request", Status: "failed",
-				Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
+				UserID: req.UserID, Provider: "stability", Model: model,
+				RecordType: "request", Status: "completed",
+				Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
 			})
 		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Image generation failed: " + err.Error()})
-		return
-	}
 
-	elapsed := time.Since(start)
+		h.emitEvent("chat_response", fmt.Sprintf("model=%s duration=%dms", model, elapsed.Milliseconds()))
 
-	h.usage.RecordRequest(usage.RequestRecord{
-		Model:      model,
-		Prompt:     truncateStr(prompt, 200),
-		Status:     "completed",
-		DurationMs: elapsed.Milliseconds(),
-	})
+		ext := "png"
+		switch result.MimeType {
+		case "image/jpeg":
+			ext = "jpg"
+		case "image/webp":
+			ext = "webp"
+		}
+		key := fmt.Sprintf(".private/generated/agent-stability/%s.%s", uuid.NewString(), ext)
+		rawImage, decodeErr := base64.StdEncoding.DecodeString(result.ImageData)
+		if decodeErr != nil {
+			ch <- pluginsdk.StreamError("decode image data: " + decodeErr.Error())
+			return
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := h.sdk.StorageWrite(writeCtx, key, bytes.NewReader(rawImage), result.MimeType); err != nil {
+			cancel()
+			ch <- pluginsdk.StreamError("store image: " + err.Error())
+			return
+		}
+		cancel()
 
-	if h.sdk != nil {
-		h.sdk.ReportUsage(pluginsdk.UsageReport{
-			UserID: userID, Provider: "stability", Model: model,
-			RecordType: "request", Status: "completed",
-			Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
+		ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+			Response: "Here is the generated image.",
+			Model:    model,
+			Attachments: []pluginsdk.AgentAttachment{{
+				MimeType: result.MimeType,
+				Type:     "image",
+				URL:      "storage://" + key,
+				Filename: fmt.Sprintf("stability-%d.%s", time.Now().Unix(), ext),
+			}},
 		})
-	}
-
-	h.emitEvent("chat_response", fmt.Sprintf("model=%s duration=%dms", model, elapsed.Milliseconds()))
-
-	c.JSON(http.StatusOK, gin.H{
-		"response": "Here is the generated image.",
-		"model":    model,
-		"attachments": []gin.H{
-			{
-				"mime_type":  result.MimeType,
-				"image_data": result.ImageData,
-			},
-		},
-	})
+	}()
+	return ch
 }
 
 // Models returns the static model list and current selection.

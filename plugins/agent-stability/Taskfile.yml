@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: tool-stability
+  BINARY_NAME: agent-stability
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-tool-stability:dev
+  DEV_IMAGE: teamagentica-agent-stability:dev
 
 tasks:
   default:

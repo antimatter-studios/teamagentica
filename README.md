@@ -68,10 +68,10 @@ First visit: register at the web UI — first user becomes admin.
 ### Tools
 | Plugin | Type | Capabilities |
 |--------|------|-------------|
-| tool-stability | Image gen | tool:image |
-| tool-seedance | Image gen | tool:image |
-| tool-nanobanana | Image gen | tool:image |
-| tool-veo | Video gen | tool:video |
+| agent-stability | Image gen | tool:image |
+| agent-seedance | Image gen | tool:image |
+| agent-nanobanana | Image gen | tool:image |
+| agent-veo | Video gen | tool:video |
 
 ### Infrastructure
 | Plugin | Purpose | Capabilities |
@@ -80,7 +80,7 @@ First visit: register at the web UI — first user becomes admin.
 | infra-cost-explorer | Usage analytics | system:cost-explorer |
 | infra-task-scheduler | Scheduled tasks | infra:scheduler |
 | infra-mcp-server | MCP protocol | system:mcp |
-| network-ngrok | Tunnel | network:tunnel |
+| network-traffic-manager | Tunnels (ngrok, ssh, ...) | network:ingress, network:tunnel |
 | network-webhook-ingress | Webhooks | network:webhook |
 
 ### Storage & Workspaces

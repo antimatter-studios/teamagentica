@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-nanobanana/internal/usage"
 )
 
 func init() {
@@ -40,8 +40,8 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	if resp["plugin"] != "tool-nanobanana" {
-		t.Errorf("expected plugin=tool-nanobanana, got %v", resp["plugin"])
+	if resp["plugin"] != "agent-nanobanana" {
+		t.Errorf("expected plugin=agent-nanobanana, got %v", resp["plugin"])
 	}
 	if resp["version"] != "1.0.0" {
 		t.Errorf("expected version=1.0.0, got %v", resp["version"])

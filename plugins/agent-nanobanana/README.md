@@ -1,4 +1,4 @@
-# tool-nanobanana
+# agent-nanobanana
 
 AI image generation using Google Gemini's native image output. Synchronous -- returns base64-encoded image data directly in the response.
 

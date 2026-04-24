@@ -1,4 +1,4 @@
-# tool-seedance
+# agent-seedance
 
 > Seedance video generation with async polling.
 
@@ -112,5 +112,5 @@ Static list (no live API): `seedance-2.0`, `seedance-1.0-pro`, `seedance-1.0-lit
 
 ## Related
 
-- [tool-veo](tool-veo.md) — Alternative video generator (Google Veo)
+- [agent-veo](agent-veo.md) — Alternative video generator (Google Veo)
 - [messaging-telegram](messaging-telegram.md) — Async video polling integration

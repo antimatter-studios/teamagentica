@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: tool-veo
+  BINARY_NAME: agent-veo
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-tool-veo:dev
+  DEV_IMAGE: teamagentica-agent-veo:dev
 
 tasks:
   default:

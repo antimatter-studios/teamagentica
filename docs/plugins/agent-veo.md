@@ -1,10 +1,10 @@
-# tool-veo
+# agent-veo
 
 > Google Veo video generation with async polling.
 
 ## Overview
 
-The Veo plugin generates videos using Google's Veo models via the Gemini API's long-running operations endpoint. Uses an asynchronous flow similar to tool-seedance: submit a request, then poll for completion.
+The Veo plugin generates videos using Google's Veo models via the Gemini API's long-running operations endpoint. Uses an asynchronous flow similar to agent-seedance: submit a request, then poll for completion.
 
 ## Capabilities
 
@@ -108,10 +108,10 @@ Dynamic list from Gemini API (filters to models supporting `predictLongRunning`)
 - Returns a Google Long-Running Operation with `name` field for polling
 - Video URI extracted from `response.generateVideoResponse.generatedSamples[0].video.uri`
 - Tasks stored in memory — lost on restart
-- Shares `GEMINI_API_KEY` with agent-google and tool-nanobanana
+- Shares `GEMINI_API_KEY` with agent-google and agent-nanobanana
 
 ## Related
 
-- [tool-seedance](tool-seedance.md) — Alternative video generator (Seedance)
-- [tool-nanobanana](tool-nanobanana.md) — Uses same Gemini API for images
+- [agent-seedance](agent-seedance.md) — Alternative video generator (Seedance)
+- [agent-nanobanana](agent-nanobanana.md) — Uses same Gemini API for images
 - [messaging-telegram](messaging-telegram.md) — Async video polling integration

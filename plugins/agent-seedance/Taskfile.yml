@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: tool-seedance
+  BINARY_NAME: agent-seedance
   BUILD_DIR: ./build
-  DEV_IMAGE: teamagentica-tool-seedance:dev
+  DEV_IMAGE: teamagentica-agent-seedance:dev
 
 tasks:
   default:

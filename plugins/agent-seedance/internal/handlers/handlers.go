@@ -1,18 +1,61 @@
 package handlers
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/seedance"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-seedance/internal/seedance"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-seedance/internal/usage"
 )
+
+// rehostToStorage downloads a remote URL and writes it to object storage under
+// the given key. Returns a storage:// URL on success. On failure (network,
+// storage write, no sdk), returns the original URL unchanged — external
+// provider URLs usually work immediately; rehosting is durability insurance.
+func (h *Handler) rehostToStorage(ctx context.Context, externalURL, key, mimeType string) string {
+	if h.sdk == nil || externalURL == "" {
+		return externalURL
+	}
+	dlCtx, cancelDL := context.WithTimeout(ctx, 120*time.Second)
+	defer cancelDL()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, externalURL, nil)
+	if err != nil {
+		log.Printf("rehost: build request for %s: %v", externalURL, err)
+		return externalURL
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("rehost: download %s: %v", externalURL, err)
+		return externalURL
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("rehost: download %s returned %d", externalURL, resp.StatusCode)
+		return externalURL
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("rehost: read body %s: %v", externalURL, err)
+		return externalURL
+	}
+	writeCtx, cancelW := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelW()
+	if err := h.sdk.StorageWrite(writeCtx, key, bytes.NewReader(body), mimeType); err != nil {
+		log.Printf("rehost: storage write %s: %v", key, err)
+		return externalURL
+	}
+	return "storage://" + key
+}
 
 // task tracks an in-flight video generation.
 type task struct {
@@ -62,7 +105,7 @@ func (h *Handler) SetCallbackBaseURL(url string) {
 }
 
 // WebhookCallback handles async status notifications from the Seedance API.
-// The ingress proxies POST /tool-seedance/callback/:taskId → POST /callback/:taskId.
+// The ingress proxies POST /agent-seedance/callback/:taskId → POST /callback/:taskId.
 func (h *Handler) WebhookCallback(c *gin.Context) {
 	// Debug probe: curl with X-Webhook-Debug header to verify ngrok forwarding.
 	if c.GetHeader("X-Webhook-Debug") != "" {
@@ -114,8 +157,11 @@ func (h *Handler) WebhookCallback(c *gin.Context) {
 			DurationMs: elapsed.Milliseconds(),
 		})
 
-		// Report progress to relay via event bus.
+		// Report progress to relay via event bus — rehost video to our storage
+		// so Discord etc. can fetch it even after the provider URL expires.
 		if h.sdk != nil {
+			rehostKey := fmt.Sprintf(".private/generated/agent-seedance/%s.mp4", uuid.NewString())
+			finalURL := h.rehostToStorage(context.Background(), statusResult.VideoURL, rehostKey, "video/mp4")
 			h.sdk.ReportRelayProgress(pluginsdk.ProgressUpdate{
 				TaskID:  taskID,
 				Status:  "completed",
@@ -126,7 +172,7 @@ func (h *Handler) WebhookCallback(c *gin.Context) {
 					URL      string `json:"url,omitempty"`
 					Filename string `json:"filename,omitempty"`
 				}{
-					{Type: "url", MimeType: "video/mp4", URL: statusResult.VideoURL, Filename: "seedance-video.mp4"},
+					{Type: "video", MimeType: "video/mp4", URL: finalURL, Filename: fmt.Sprintf("seedance-%d.mp4", time.Now().Unix())},
 				},
 			})
 		}
@@ -246,6 +292,8 @@ func (h *Handler) pollUntilComplete(taskID, remoteID string, start time.Time) {
 			})
 
 			if h.sdk != nil {
+				rehostKey := fmt.Sprintf(".private/generated/agent-seedance/%s.mp4", uuid.NewString())
+				finalURL := h.rehostToStorage(context.Background(), statusResult.VideoURL, rehostKey, "video/mp4")
 				h.sdk.ReportRelayProgress(pluginsdk.ProgressUpdate{
 					TaskID:  taskID,
 					Status:  "completed",
@@ -256,7 +304,7 @@ func (h *Handler) pollUntilComplete(taskID, remoteID string, start time.Time) {
 						URL      string `json:"url,omitempty"`
 						Filename string `json:"filename,omitempty"`
 					}{
-						{Type: "url", MimeType: "video/mp4", URL: statusResult.VideoURL, Filename: "seedance-video.mp4"},
+						{Type: "video", MimeType: "video/mp4", URL: finalURL, Filename: fmt.Sprintf("seedance-%d.mp4", time.Now().Unix())},
 					},
 				})
 			}
@@ -335,7 +383,7 @@ func (h *Handler) Health(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "ok",
-		"plugin":     "tool-seedance",
+		"plugin":     "agent-seedance",
 		"version":    "1.0.0",
 		"configured": apiKey != "",
 	})
@@ -541,184 +589,148 @@ func (h *Handler) Models(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"models": []string{"seedance-2.0"}})
 }
 
-// chatRequest matches the shape used by agent plugins and the relay.
-type chatRequest struct {
-	Message      string `json:"message"`
-	Model        string `json:"model,omitempty"`
-	Conversation []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"conversation"`
-}
+// ChatStream implements pluginsdk.AgentProvider. Video generation is async;
+// this blocks up to ~100s while polling the Seedance API. For longer jobs,
+// the webhook-driven async path (relay:task:progress events) remains active
+// via /callback/:taskId.
+func (h *Handler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRequest) <-chan pluginsdk.AgentStreamEvent {
+	ch := make(chan pluginsdk.AgentStreamEvent, 2)
+	go func() {
+		defer close(ch)
 
-// Chat wraps Generate with polling and returns a chat-format response with
-// the video URL as an attachment. Video generation is async so this blocks
-// until completion or timeout.
-func (h *Handler) Chat(c *gin.Context) {
-	h.mu.RLock()
-	apiKey, client := h.apiKey, h.client
-	h.mu.RUnlock()
+		h.mu.RLock()
+		apiKey, client, callbackBase := h.apiKey, h.client, h.callbackBaseURL
+		h.mu.RUnlock()
 
-	if apiKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No API key configured. Set SEEDANCE_API_KEY."})
-		return
-	}
-
-	var req chatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	// Extract prompt from message or last user conversation entry.
-	prompt := req.Message
-	for i := len(req.Conversation) - 1; i >= 0; i-- {
-		if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
-			prompt = req.Conversation[i].Content
-			break
+		if apiKey == "" {
+			ch <- pluginsdk.StreamError("No API key configured. Set SEEDANCE_API_KEY.")
+			return
 		}
-	}
-	if prompt == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "message or conversation required"})
-		return
-	}
 
-	userID := c.Request.Header.Get("X-Teamagentica-User-ID")
-	h.emitEvent("chat_request", fmt.Sprintf("prompt=%s", truncateStr(prompt, 100)))
-
-	start := time.Now()
-
-	// Build callback URL if webhook ingress is available.
-	h.mu.RLock()
-	callbackBase := h.callbackBaseURL
-	h.mu.RUnlock()
-
-	genReq := seedance.GenerateRequest{Prompt: prompt}
-
-	// Store task first so the webhook callback can find it.
-	h.mu.Lock()
-	h.nextID++
-	taskID := fmt.Sprintf("seed-%d", h.nextID)
-	h.mu.Unlock()
-
-	if callbackBase != "" {
-		genReq.CallbackURL = callbackBase + "/callback/" + taskID
-		log.Printf("[chat] using callback URL: %s", genReq.CallbackURL)
-	}
-
-	result, err := client.Generate(genReq)
-	if err != nil {
-		log.Printf("Seedance chat/generate error: %v", err)
-		if h.sdk != nil {
-			h.sdk.ReportUsage(pluginsdk.UsageReport{
-				UserID: userID, Provider: "seedance", Model: "seedance-2.0",
-				RecordType: "request", Status: "failed",
-				Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
-			})
-		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Video generation failed: " + err.Error()})
-		return
-	}
-
-	// Store task so webhook callback and status endpoint can find it.
-	h.mu.Lock()
-	t := &task{
-		ID:        taskID,
-		Prompt:    prompt,
-		RemoteID:  result.TaskID,
-		Status:    "processing",
-		CreatedAt: time.Now().UTC(),
-	}
-	h.tasks[taskID] = t
-	h.mu.Unlock()
-
-	// If webhook callback is configured, return async — the relay will wait
-	// for the completion event via the event bus.
-	if callbackBase != "" {
-		log.Printf("[chat] returning async response — webhook will deliver result for task %s", taskID)
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "processing",
-			"task_id": taskID,
-			"model":   "seedance-2.0",
-		})
-
-		// Background poller: if webhook hasn't delivered after 30s, poll
-		// the Seedance status API as a fallback (max 6 attempts = ~180s).
-		go h.pollUntilComplete(taskID, result.TaskID, start)
-		return
-	}
-
-	// Fallback: poll for completion when webhook is not available.
-	// Stay under the SDK route client timeout (120s).
-	const pollInterval = 5 * time.Second
-	const maxWait = 100 * time.Second
-	deadline := time.Now().Add(maxWait)
-
-	var status *seedance.StatusResult
-	for time.Now().Before(deadline) {
-		time.Sleep(pollInterval)
-		status, err = client.CheckStatus(result.TaskID)
-		if err != nil {
-			log.Printf("Seedance poll error: %v", err)
-			continue
-		}
-		if status.Status == "completed" || status.Status == "failed" {
-			break
-		}
-	}
-
-	elapsed := time.Since(start)
-
-	if status == nil || status.Status != "completed" {
-		if status != nil && status.Status == "failed" {
-			errMsg := status.Error
-			if errMsg == "" {
-				errMsg = "unknown error"
+		prompt := req.Message
+		for i := len(req.Conversation) - 1; i >= 0; i-- {
+			if req.Conversation[i].Role == "user" && req.Conversation[i].Content != "" {
+				prompt = req.Conversation[i].Content
+				break
 			}
+		}
+		if prompt == "" {
+			ch <- pluginsdk.StreamError("message or conversation required")
+			return
+		}
+
+		h.emitEvent("chat_request", fmt.Sprintf("prompt=%s", truncateStr(prompt, 100)))
+		start := time.Now()
+
+		h.mu.Lock()
+		h.nextID++
+		taskID := fmt.Sprintf("seed-%d", h.nextID)
+		h.mu.Unlock()
+
+		genReq := seedance.GenerateRequest{Prompt: prompt}
+		if callbackBase != "" {
+			genReq.CallbackURL = callbackBase + "/callback/" + taskID
+		}
+
+		result, err := client.Generate(genReq)
+		if err != nil {
+			log.Printf("Seedance chat/generate error: %v", err)
 			if h.sdk != nil {
 				h.sdk.ReportUsage(pluginsdk.UsageReport{
-					UserID: userID, Provider: "seedance", Model: "seedance-2.0",
+					UserID: req.UserID, Provider: "seedance", Model: "seedance-2.0",
 					RecordType: "request", Status: "failed",
-					Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
+					Prompt: truncateStr(prompt, 200), DurationMs: time.Since(start).Milliseconds(),
 				})
 			}
-			c.JSON(http.StatusOK, gin.H{
-				"response": "Video generation failed: " + errMsg,
-				"model":    "seedance-2.0",
+			ch <- pluginsdk.StreamError("Video generation failed: " + err.Error())
+			return
+		}
+
+		h.mu.Lock()
+		h.tasks[taskID] = &task{
+			ID: taskID, Prompt: prompt, RemoteID: result.TaskID,
+			Status: "processing", CreatedAt: time.Now().UTC(),
+		}
+		h.mu.Unlock()
+
+		// Poll until complete, failed, or deadline.
+		const pollInterval = 5 * time.Second
+		const maxWait = 100 * time.Second
+		deadline := time.Now().Add(maxWait)
+
+		var status *seedance.StatusResult
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+			status, err = client.CheckStatus(result.TaskID)
+			if err != nil {
+				log.Printf("Seedance poll error: %v", err)
+				continue
+			}
+			if status.Status == "completed" || status.Status == "failed" {
+				break
+			}
+		}
+
+		elapsed := time.Since(start)
+
+		if status == nil || status.Status != "completed" {
+			if status != nil && status.Status == "failed" {
+				errMsg := status.Error
+				if errMsg == "" {
+					errMsg = "unknown error"
+				}
+				if h.sdk != nil {
+					h.sdk.ReportUsage(pluginsdk.UsageReport{
+						UserID: req.UserID, Provider: "seedance", Model: "seedance-2.0",
+						RecordType: "request", Status: "failed",
+						Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
+					})
+				}
+				ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+					Response: "Video generation failed: " + errMsg,
+					Model:    "seedance-2.0",
+				})
+				return
+			}
+			// Still processing after deadline — webhook path will deliver later.
+			// Background poller ensures the task record gets finalised.
+			go h.pollUntilComplete(taskID, result.TaskID, start)
+			ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+				Response: fmt.Sprintf("Video generation is still in progress (task: %s). It typically takes 2-4 minutes. The video will be delivered once processing completes.", result.TaskID),
+				Model:    "seedance-2.0",
 			})
 			return
 		}
-		// Still processing — return a message rather than timing out.
-		c.JSON(http.StatusOK, gin.H{
-			"response": fmt.Sprintf("Video generation is still in progress (task: %s). It typically takes 2-4 minutes. The video will be available once processing completes.", result.TaskID),
-			"model":    "seedance-2.0",
+
+		if h.sdk != nil {
+			h.sdk.ReportUsage(pluginsdk.UsageReport{
+				UserID: req.UserID, Provider: "seedance", Model: "seedance-2.0",
+				RecordType: "request", Status: "completed",
+				Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
+			})
+		}
+
+		h.emitEvent("chat_response", fmt.Sprintf("duration=%dms", elapsed.Milliseconds()))
+
+		rehostKey := fmt.Sprintf(".private/generated/agent-seedance/%s.mp4", uuid.NewString())
+		finalURL := h.rehostToStorage(ctx, status.VideoURL, rehostKey, "video/mp4")
+
+		ch <- pluginsdk.StreamDone(pluginsdk.DoneEvent{
+			Response: fmt.Sprintf("Here is the generated video (task: %s).", taskID),
+			Model:    "seedance-2.0",
+			Attachments: []pluginsdk.AgentAttachment{{
+				Type:     "video",
+				MimeType: "video/mp4",
+				URL:      finalURL,
+				Filename: fmt.Sprintf("seedance-%d.mp4", time.Now().Unix()),
+			}},
 		})
-		return
-	}
-
-	if h.sdk != nil {
-		h.sdk.ReportUsage(pluginsdk.UsageReport{
-			UserID: userID, Provider: "seedance", Model: "seedance-2.0",
-			RecordType: "request", Status: "completed",
-			Prompt: truncateStr(prompt, 200), DurationMs: elapsed.Milliseconds(),
-		})
-	}
-
-	h.emitEvent("chat_response", fmt.Sprintf("duration=%dms", elapsed.Milliseconds()))
-
-	c.JSON(http.StatusOK, gin.H{
-		"response": fmt.Sprintf("Here is the generated video (task: %s).", taskID),
-		"model":    "seedance-2.0",
-		"task_id":  taskID,
-		"attachments": []gin.H{
-			{
-				"type":      "url",
-				"mime_type": "video/mp4",
-				"url":       status.VideoURL,
-				"filename":  "seedance-video.mp4",
-			},
-		},
-	})
+	}()
+	return ch
 }
 
 func (h *Handler) ConfigOptions(c *gin.Context) {

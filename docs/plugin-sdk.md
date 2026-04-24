@@ -275,10 +275,10 @@ err := client.UpdateManagedContainer(id, pluginsdk.UpdateContainerRequest{
 ```go
 // Find plugins by capability prefix
 plugins, err := client.SearchPlugins("agent:tool:image")
-// Returns []PluginInfo{{ID: "tool-stability", Capabilities: [...]}, ...}
+// Returns []PluginInfo{{ID: "agent-stability", Capabilities: [...]}, ...}
 
 // Proxy request to another plugin via kernel
-resp, err := client.RouteToPlugin(ctx, "tool-stability", "POST", "/generate", body)
+resp, err := client.RouteToPlugin(ctx, "agent-stability", "POST", "/generate", body)
 ```
 
 ## Storage Helpers

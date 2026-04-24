@@ -145,8 +145,8 @@ Aliases map `@mention` names to specific plugins, optionally with model override
 ```
 @claude  →  agent-openai (model: gpt-4o)
 @gemini  →  agent-google
-@draw    →  tool-stability (type: image)
-@video   →  tool-seedance (type: video)
+@draw    →  agent-stability (type: image)
+@video   →  agent-seedance (type: video)
 ```
 
 **Routing paths in messaging bots:**

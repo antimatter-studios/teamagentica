@@ -52,6 +52,9 @@ includes:
   infra-agent-relay:
     taskfile: ./plugins/infra-agent-relay/Taskfile.yml
     dir: ./plugins/infra-agent-relay
+  infra-alias-registry:
+    taskfile: ./plugins/infra-alias-registry/Taskfile.yml
+    dir: ./plugins/infra-alias-registry
   infra-builder:
     taskfile: ./plugins/infra-builder/Taskfile.yml
     dir: ./plugins/infra-builder
@@ -91,9 +94,9 @@ includes:
   messaging-whatsapp:
     taskfile: ./plugins/messaging-whatsapp/Taskfile.yml
     dir: ./plugins/messaging-whatsapp
-  network-ngrok-ingress:
-    taskfile: ./plugins/network-ngrok-ingress/Taskfile.yml
-    dir: ./plugins/network-ngrok-ingress
+  network-traffic-manager:
+    taskfile: ./plugins/network-traffic-manager/Taskfile.yml
+    dir: ./plugins/network-traffic-manager
   network-webhook:
     taskfile: ./plugins/network-webhook/Taskfile.yml
     dir: ./plugins/network-webhook
@@ -106,27 +109,24 @@ includes:
   system-user-manager:
     taskfile: ./plugins/system-user-manager/Taskfile.yml
     dir: ./plugins/system-user-manager
-  tool-nanobanana:
-    taskfile: ./plugins/tool-nanobanana/Taskfile.yml
-    dir: ./plugins/tool-nanobanana
-  tool-seedance:
-    taskfile: ./plugins/tool-seedance/Taskfile.yml
-    dir: ./plugins/tool-seedance
+  agent-nanobanana:
+    taskfile: ./plugins/agent-nanobanana/Taskfile.yml
+    dir: ./plugins/agent-nanobanana
+  agent-seedance:
+    taskfile: ./plugins/agent-seedance/Taskfile.yml
+    dir: ./plugins/agent-seedance
   tool-task-tracker:
     taskfile: ./plugins/tool-task-tracker/Taskfile.yml
     dir: ./plugins/tool-task-tracker
-  tool-stability:
-    taskfile: ./plugins/tool-stability/Taskfile.yml
-    dir: ./plugins/tool-stability
-  tool-veo:
-    taskfile: ./plugins/tool-veo/Taskfile.yml
-    dir: ./plugins/tool-veo
+  agent-stability:
+    taskfile: ./plugins/agent-stability/Taskfile.yml
+    dir: ./plugins/agent-stability
+  agent-veo:
+    taskfile: ./plugins/agent-veo/Taskfile.yml
+    dir: ./plugins/agent-veo
   workspace-env-claude-terminal:
     taskfile: ./plugins/workspace-env-claude-terminal/Taskfile.yml
     dir: ./plugins/workspace-env-claude-terminal
-  workspace-env-codex-terminal:
-    taskfile: ./plugins/workspace-env-codex-terminal/Taskfile.yml
-    dir: ./plugins/workspace-env-codex-terminal
   workspace-env-opencode-terminal:
     taskfile: ./plugins/workspace-env-opencode-terminal/Taskfile.yml
     dir: ./plugins/workspace-env-opencode-terminal
@@ -146,7 +146,7 @@ tasks:
       - docker builder prune -f
 
   plugin:build:
-    desc: "Build a single plugin (prod): task plugin:build -- network-ngrok-ingress [--version 1.0.3]"
+    desc: "Build a single plugin (prod): task plugin:build -- network-traffic-manager [--version 1.0.3]"
     vars:
       PLUGIN_NAME:
         sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
@@ -172,7 +172,7 @@ tasks:
         silent: true
 
   plugin:build:dev:
-    desc: "Build a single plugin (dev): task plugin:build:dev -- network-ngrok-ingress [--version 1.0.3]"
+    desc: "Build a single plugin (dev): task plugin:build:dev -- network-traffic-manager [--version 1.0.3]"
     vars:
       PLUGIN_NAME:
         sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
@@ -198,7 +198,7 @@ tasks:
         silent: true
 
   plugin:test:
-    desc: "Test a single plugin: task plugin:test -- network-ngrok-ingress"
+    desc: "Test a single plugin: task plugin:test -- network-traffic-manager"
     cmds:
       - task: "{{.CLI_ARGS}}:test"
 
@@ -292,17 +292,16 @@ tasks:
       - task: messaging-discord:build
       - task: messaging-telegram:build
       - task: messaging-whatsapp:build
-      - task: network-ngrok-ingress:build
+      - task: network-traffic-manager:build
       - task: network-webhook:build
       - task: storage-sss3:build
       - task: storage-disk:build
-      - task: tool-nanobanana:build
-      - task: tool-seedance:build
+      - task: agent-nanobanana:build
+      - task: agent-seedance:build
       - task: tool-task-tracker:build
-      - task: tool-stability:build
-      - task: tool-veo:build
+      - task: agent-stability:build
+      - task: agent-veo:build
       - task: workspace-env-claude-terminal:build
-      - task: workspace-env-codex-terminal:build
       - task: workspace-env-opencode-terminal:build
       - task: workspace-env-vscode-server:build
       - echo "All plugin images built successfully"
@@ -331,17 +330,16 @@ tasks:
       - task: messaging-discord:build:dev
       - task: messaging-telegram:build:dev
       - task: messaging-whatsapp:build:dev
-      - task: network-ngrok-ingress:build:dev
+      - task: network-traffic-manager:build:dev
       - task: network-webhook:build:dev
       - task: storage-sss3:build:dev
       - task: storage-disk:build:dev
-      - task: tool-nanobanana:build:dev
-      - task: tool-seedance:build:dev
+      - task: agent-nanobanana:build:dev
+      - task: agent-seedance:build:dev
       - task: tool-task-tracker:build:dev
-      - task: tool-stability:build:dev
-      - task: tool-veo:build:dev
+      - task: agent-stability:build:dev
+      - task: agent-veo:build:dev
       - task: workspace-env-claude-terminal:build:dev
-      - task: workspace-env-codex-terminal:build:dev
       - task: workspace-env-opencode-terminal:build:dev
       - task: workspace-env-vscode-server:build:dev
       - echo "All dev plugin images built successfully"

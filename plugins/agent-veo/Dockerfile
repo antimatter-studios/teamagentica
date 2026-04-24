@@ -8,8 +8,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-veo/ plugins/tool-veo/
-WORKDIR /build/plugins/tool-veo
+COPY plugins/agent-veo/ plugins/agent-veo/
+WORKDIR /build/plugins/agent-veo
 
 RUN go mod download
 
@@ -23,9 +23,9 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-veo/ plugins/tool-veo/
-WORKDIR /build/plugins/tool-veo
-RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /tool-veo .
+COPY plugins/agent-veo/ plugins/agent-veo/
+WORKDIR /build/plugins/agent-veo
+RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-veo .
 
 # -- Prod stage --
 FROM alpine:3.19 AS prod
@@ -33,11 +33,11 @@ FROM alpine:3.19 AS prod
 RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica
 
-COPY --from=builder /tool-veo /usr/local/bin/tool-veo
+COPY --from=builder /agent-veo /usr/local/bin/agent-veo
 RUN mkdir -p /data && chown teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/tool-veo/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/agent-veo/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 EXPOSE 8081
-CMD ["tool-veo"]
+CMD ["agent-veo"]

@@ -1,13 +1,13 @@
-id: tool-nanobanana
+id: agent-nanobanana
 name: "Nano Banana Image"
 description: "AI image generation using Google Gemini's native image output"
 group: tools
-version: "1.0.20"
-image: "teamagentica-tool-nanobanana:latest"
+version: "1.0.27"
+image: "teamagentica-agent-nanobanana:latest"
 author: teamagentica
 tags: [image, ai, tool, gemini, google]
 capabilities: ["agent:tool:image-gen"]
-dependencies: ["cost:tracking"]
+dependencies: ["cost:tracking", "storage:api"]
 config_schema:
   GEMINI_API_KEY:
     type: string

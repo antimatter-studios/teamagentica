@@ -1,13 +1,13 @@
-id: tool-veo
+id: agent-veo
 name: "Google Veo Video"
 description: "AI video generation tool powered by Google Veo"
 group: tools
-version: "1.0.17"
-image: "teamagentica-tool-veo:latest"
+version: "1.0.19"
+image: "teamagentica-agent-veo:latest"
 author: teamagentica
 tags: [video, ai, tool, veo, google, gemini]
 capabilities: ["agent:tool:video-gen"]
-dependencies: ["cost:tracking"]
+dependencies: ["cost:tracking", "storage:api"]
 config_schema:
   GEMINI_API_KEY:
     type: string

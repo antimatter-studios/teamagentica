@@ -10,7 +10,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-nanobanana/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-nanobanana/internal/handlers"
 )
 
 func main() {
@@ -75,7 +75,7 @@ func main() {
 	router.GET("/health", h.Health)
 	router.GET("/models", h.Models)
 	router.POST("/generate", h.Generate)
-	router.POST("/chat", h.Chat)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.GET("/mcp", h.Tools)
 	router.GET("/system-prompt", h.SystemPrompt)
 	router.GET("/config/options/:field", h.ConfigOptions)

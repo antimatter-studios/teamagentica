@@ -8,8 +8,8 @@ RUN go install github.com/air-verse/air@latest
 
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-stability/ plugins/tool-stability/
-WORKDIR /build/plugins/tool-stability
+COPY plugins/agent-stability/ plugins/agent-stability/
+WORKDIR /build/plugins/agent-stability
 
 RUN go mod download
 
@@ -22,8 +22,8 @@ ENV GONOSUMCHECK=github.com/antimatter-studios/*
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 COPY pkg/pluginsdk/ pkg/pluginsdk/
-COPY plugins/tool-stability/ plugins/tool-stability/
-WORKDIR /build/plugins/tool-stability
+COPY plugins/agent-stability/ plugins/agent-stability/
+WORKDIR /build/plugins/agent-stability
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /stability-plugin .
 
 # -- Prod stage --
@@ -32,6 +32,6 @@ RUN apk add --no-cache ca-certificates \
     && adduser -D -u 10001 teamagentica
 COPY --from=builder /stability-plugin /usr/local/bin/stability-plugin
 RUN mkdir -p /usr/local/etc/teamagentica
-COPY plugins/tool-stability/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+COPY plugins/agent-stability/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
 USER teamagentica
 CMD ["stability-plugin"]

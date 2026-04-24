@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/antimatter-studios/teamagentica/plugins/tool-veo/internal/usage"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-veo/internal/usage"
 )
 
 func init() {
@@ -40,8 +40,8 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	if resp["plugin"] != "tool-veo" {
-		t.Errorf("expected plugin=tool-veo, got %v", resp["plugin"])
+	if resp["plugin"] != "agent-veo" {
+		t.Errorf("expected plugin=agent-veo, got %v", resp["plugin"])
 	}
 	if resp["version"] != "1.0.0" {
 		t.Errorf("expected version=1.0.0, got %v", resp["version"])

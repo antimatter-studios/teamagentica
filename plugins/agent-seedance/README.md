@@ -1,4 +1,4 @@
-# tool-seedance
+# agent-seedance
 
 AI video generation powered by the Seedance 2.0 API. Asynchronous -- submits generation requests and delivers results via webhook callbacks or polling.
 

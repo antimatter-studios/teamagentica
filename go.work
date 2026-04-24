@@ -8,10 +8,14 @@ use (
 	./plugins/agent-google
 	./plugins/agent-inception
 	./plugins/agent-moonshot
+	./plugins/agent-nanobanana
 	./plugins/agent-ollama
 	./plugins/agent-openai
 	./plugins/agent-openrouter
 	./plugins/agent-requesty
+	./plugins/agent-seedance
+	./plugins/agent-stability
+	./plugins/agent-veo
 	./plugins/infra-agent-memory-gateway
 	./plugins/infra-agent-memory-lcm
 	./plugins/infra-agent-memory-mem0
@@ -29,19 +33,14 @@ use (
 	./plugins/messaging-discord
 	./plugins/messaging-telegram
 	./plugins/messaging-whatsapp
-	./plugins/network-ngrok-ingress
+	./plugins/network-traffic-manager
 	./plugins/network-webhook
 	./plugins/storage-disk
 	./plugins/storage-sss3
 	./plugins/system-teamagentica-plugin-provider
 	./plugins/system-user-manager
-	./plugins/tool-nanobanana
-	./plugins/tool-seedance
-	./plugins/tool-stability
 	./plugins/tool-task-tracker
-	./plugins/tool-veo
 	./plugins/workspace-env-claude-terminal
-	./plugins/workspace-env-codex-terminal
 	./plugins/workspace-env-opencode-terminal
 	./plugins/workspace-env-vscode-server
 	./plugins/workspace-manager

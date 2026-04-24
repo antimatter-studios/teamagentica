@@ -52,7 +52,7 @@ Each entry includes:
 
 ### Current Catalog
 
-18 plugins: agent-openai, agent-google, agent-moonshot, agent-openrouter, agent-requesty, messaging-discord, messaging-telegram, messaging-whatsapp, ngrok, webhook-ingress, tool-veo, tool-seedance, tool-nanobanana, tool-stability, storage-sss3, messaging-chat, mcp-server, cost-explorer.
+18 plugins: agent-openai, agent-google, agent-moonshot, agent-openrouter, agent-requesty, messaging-discord, messaging-telegram, messaging-whatsapp, ngrok, webhook-ingress, agent-veo, agent-seedance, agent-nanobanana, agent-stability, storage-sss3, messaging-chat, mcp-server, cost-explorer.
 
 ## Related
 

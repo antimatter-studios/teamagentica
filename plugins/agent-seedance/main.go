@@ -10,7 +10,7 @@ import (
 
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
-	"github.com/antimatter-studios/teamagentica/plugins/tool-seedance/internal/handlers"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-seedance/internal/handlers"
 )
 
 func main() {
@@ -67,7 +67,7 @@ func main() {
 
 	router.GET("/health", h.Health)
 	router.GET("/models", h.Models)
-	router.POST("/chat", h.Chat)
+	pluginsdk.RegisterAgentChat(router, h)
 	router.POST("/generate", h.Generate)
 	router.GET("/status/:taskId", h.Status)
 	router.POST("/callback/:taskId", h.WebhookCallback)
