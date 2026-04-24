@@ -318,8 +318,9 @@ func toKimiMessages(msgs []agentkit.Message) []kimi.Message {
 	out := make([]kimi.Message, 0, len(msgs))
 	for _, m := range msgs {
 		km := kimi.Message{
-			Role:    m.Role,
-			Content: m.Content,
+			Role:      m.Role,
+			Content:   m.Content,
+			ImageURLs: m.ImageURLs,
 		}
 
 		// Convert tool calls from agentkit to kimi format.
@@ -365,9 +366,11 @@ func toAgentkitToolCalls(calls []kimi.ToolCall) []agentkit.ToolCall {
 }
 
 // buildPrompt concatenates conversation messages into a single prompt string.
+// The Kimi CLI wire protocol only accepts text, so image URLs are injected as
+// bracketed notes so the model knows an image was attached.
 func buildPrompt(messages []kimi.Message) string {
 	if len(messages) == 1 {
-		return messages[0].Content
+		return withImageNotes(messages[0].Content, messages[0].ImageURLs)
 	}
 
 	var result string
@@ -383,9 +386,25 @@ func buildPrompt(messages []kimi.Message) string {
 		case "system":
 			result += "System: "
 		}
-		result += msg.Content
+		result += withImageNotes(msg.Content, msg.ImageURLs)
 	}
 	return result
+}
+
+// withImageNotes appends bracketed [attached image: <url>] lines so the CLI's
+// text-only prompt flow still communicates attached images to the model.
+func withImageNotes(content string, urls []string) string {
+	if len(urls) == 0 {
+		return content
+	}
+	out := content
+	for _, u := range urls {
+		if out != "" {
+			out += "\n"
+		}
+		out += "[attached image: " + u + "]"
+	}
+	return out
 }
 
 func truncate(s string, maxLen int) string {

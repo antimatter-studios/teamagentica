@@ -86,6 +86,16 @@ func (a *OllamaAdapter) StreamChat(ctx context.Context, req agentkit.ProviderReq
 	// Convert agentkit messages to ollama format.
 	messages := toOllamaMessages(req.Messages)
 
+	// If top-level req.ImageURLs are present, attach them to the last user message.
+	if len(req.ImageURLs) > 0 {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				messages[i].ImageURLs = append(messages[i].ImageURLs, req.ImageURLs...)
+				break
+			}
+		}
+	}
+
 	// Prepend system prompt.
 	if req.SystemPrompt != "" {
 		filtered := make([]ollama.Message, 0, len(messages))
@@ -176,8 +186,9 @@ func toOllamaMessages(msgs []agentkit.Message) []ollama.Message {
 	out := make([]ollama.Message, 0, len(msgs))
 	for _, m := range msgs {
 		om := ollama.Message{
-			Role:    m.Role,
-			Content: m.Content,
+			Role:      m.Role,
+			Content:   m.Content,
+			ImageURLs: m.ImageURLs,
 		}
 
 		// Convert tool calls from agentkit format.

@@ -2,7 +2,7 @@ id: agent-openrouter
 name: "OpenRouter"
 description: "AI router providing access to hundreds of models from OpenAI, Anthropic, Google, Meta and more via OpenRouter"
 group: agents
-version: "1.0.16"
+version: "1.0.18"
 image: "teamagentica-agent-openrouter:latest"
 author: teamagentica
 tags: [chat, ai, agent, openrouter, router]

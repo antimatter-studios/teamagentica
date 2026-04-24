@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -149,6 +150,7 @@ func (h *agentHandler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRe
 				Temperature:  h.config.Temperature,
 				WorkspaceID:  req.WorkspaceID,
 				SessionID:    req.SessionID,
+				ImageURLs:    req.ImageURLs,
 			}
 
 			result, err := h.adapter.StreamChat(ctx, provReq, sink)
@@ -269,15 +271,47 @@ func (h *agentHandler) ChatStream(ctx context.Context, req pluginsdk.AgentChatRe
 }
 
 // convertSDKMessages converts pluginsdk.AgentChatRequest messages to agentkit Messages.
+// req.ImageURLs are attached to the most recent user message so provider adapters
+// can route them via message-level OR top-level ProviderRequest.ImageURLs.
 func convertSDKMessages(req pluginsdk.AgentChatRequest) []Message {
+	var msgs []Message
 	if len(req.Conversation) > 0 {
-		msgs := make([]Message, len(req.Conversation))
+		msgs = make([]Message, len(req.Conversation))
 		for i, m := range req.Conversation {
 			msgs[i] = Message{Role: m.Role, Content: m.Content}
 		}
-		return msgs
+	} else {
+		msgs = []Message{{Role: "user", Content: req.Message}}
 	}
-	return []Message{{Role: "user", Content: req.Message}}
+
+	if len(req.ImageURLs) > 0 {
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				msgs[i].ImageURLs = append([]string(nil), req.ImageURLs...)
+				// Also inline the URLs as text. Some backends strip URLs when
+				// wiring images to the model (Gemini inlineData, Codex CLI
+				// localImage, Claude CLI @path). Without a visible URL the
+				// coordinator LLM has nothing to quote into tool calls like
+				// generate_image that take a URL parameter.
+				var sb strings.Builder
+				sb.WriteString(msgs[i].Content)
+				if msgs[i].Content != "" {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString("[Attached image URLs you may pass verbatim to tools: ")
+				for j, u := range req.ImageURLs {
+					if j > 0 {
+						sb.WriteString(", ")
+					}
+					sb.WriteString(u)
+				}
+				sb.WriteString("]")
+				msgs[i].Content = sb.String()
+				break
+			}
+		}
+	}
+	return msgs
 }
 
 func truncate(s string, maxLen int) string {

@@ -13,6 +13,7 @@ import (
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	ImageURLs  []string   `json:"-"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
@@ -113,6 +114,24 @@ func buildAPIMessages(messages []Message) []interface{} {
 				m["content"] = msg.Content
 			}
 			result = append(result, m)
+			continue
+		}
+
+		if len(msg.ImageURLs) > 0 {
+			// Build multipart content array for vision.
+			content := []map[string]interface{}{
+				{"type": "text", "text": msg.Content},
+			}
+			for _, u := range msg.ImageURLs {
+				content = append(content, map[string]interface{}{
+					"type":      "image_url",
+					"image_url": map[string]string{"url": u},
+				})
+			}
+			result = append(result, map[string]interface{}{
+				"role":    msg.Role,
+				"content": content,
+			})
 			continue
 		}
 

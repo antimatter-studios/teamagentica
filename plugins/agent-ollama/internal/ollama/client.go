@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -19,6 +21,7 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ImageURLs  []string   `json:"-"`
 }
 
 // ToolDef describes a tool available for function calling.
@@ -55,6 +58,41 @@ var httpClient = &http.Client{
 	Timeout: 300 * time.Second,
 }
 
+// downloadAndEncodeImage fetches a URL and returns the base64-encoded bytes.
+func downloadAndEncodeImage(url string) (string, error) {
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: status %d", url, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", url, err)
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+// encodeImageURLs downloads each URL and returns a slice of base64 strings.
+// Failed downloads are logged and skipped.
+func encodeImageURLs(urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		b64, err := downloadAndEncodeImage(u)
+		if err != nil {
+			log.Printf("[ollama] skipping image %s: %v", u, err)
+			continue
+		}
+		out = append(out, b64)
+	}
+	return out
+}
+
 // buildAPIMessages converts Messages into the OpenAI API format.
 func buildAPIMessages(messages []Message) []interface{} {
 	result := make([]interface{}, 0, len(messages))
@@ -78,10 +116,16 @@ func buildAPIMessages(messages []Message) []interface{} {
 			result = append(result, m)
 			continue
 		}
-		result = append(result, map[string]interface{}{
+		m := map[string]interface{}{
 			"role":    msg.Role,
 			"content": msg.Content,
-		})
+		}
+		if len(msg.ImageURLs) > 0 {
+			if imgs := encodeImageURLs(msg.ImageURLs); len(imgs) > 0 {
+				m["images"] = imgs
+			}
+		}
+		result = append(result, m)
 	}
 	return result
 }

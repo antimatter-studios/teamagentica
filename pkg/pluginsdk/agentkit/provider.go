@@ -31,12 +31,17 @@ type ProviderRequest struct {
 	Temperature  float64
 	WorkspaceID  string  // workspace context, if any
 	SessionID    string  // session/conversation ID
+	// ImageURLs attached to the current user turn. Adapters must forward these
+	// to their backend. The platform never filters by "can the model see?" —
+	// providers decide whether to use, ignore, or error.
+	ImageURLs []string
 }
 
 // Message is a provider-agnostic chat message.
 type Message struct {
 	Role       string      // "user", "assistant", "system", "tool"
 	Content    string
+	ImageURLs  []string    // image URLs attached to this message (user turns)
 	ToolCalls  []ToolCall  // assistant requesting tool use (role="assistant")
 	ToolResult *ToolResult // result of a tool call (role="tool")
 }

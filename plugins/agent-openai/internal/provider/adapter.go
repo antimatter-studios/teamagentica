@@ -150,7 +150,7 @@ func (a *OpenAIAdapter) streamSubscription(ctx context.Context, req agentkit.Pro
 		workdir = workdir + "/workspaces/" + req.WorkspaceID
 	}
 
-	stream := a.codexCLI.ChatCompletionStream(ctx, model, messages, nil, workdir, req.SessionID)
+	stream := a.codexCLI.ChatCompletionStream(ctx, model, messages, req.ImageURLs, workdir, req.SessionID)
 
 	start := time.Now()
 	var totalInput, totalOutput int
@@ -325,8 +325,9 @@ func toOpenAIMessages(msgs []agentkit.Message) []openai.Message {
 	out := make([]openai.Message, 0, len(msgs))
 	for _, m := range msgs {
 		msg := openai.Message{
-			Role:    m.Role,
-			Content: m.Content,
+			Role:      m.Role,
+			Content:   m.Content,
+			ImageURLs: m.ImageURLs,
 		}
 
 		// Convert tool calls from agentkit format.

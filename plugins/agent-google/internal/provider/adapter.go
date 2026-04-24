@@ -130,12 +130,15 @@ func (a *GeminiAdapter) StreamChat(ctx context.Context, req agentkit.ProviderReq
 		toolDefs = toGeminiFunctionDeclarations(req.Tools)
 	}
 
+	// Forward image URLs from the current user turn to the Gemini backend.
+	imageURLs := req.ImageURLs
+
 	// Call Gemini streaming API.
 	var stream <-chan gemini.StreamEvent
 	if len(toolDefs) > 0 {
-		stream = a.client.StreamChatCompletionWithTools(ctx, model, messages, toolDefs, nil)
+		stream = a.client.StreamChatCompletionWithTools(ctx, model, messages, toolDefs, imageURLs)
 	} else {
-		stream = a.client.StreamChatCompletion(ctx, model, messages, nil)
+		stream = a.client.StreamChatCompletion(ctx, model, messages, imageURLs)
 	}
 
 	var toolCalls []agentkit.ToolCall

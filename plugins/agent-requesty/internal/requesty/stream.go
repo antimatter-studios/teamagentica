@@ -61,13 +61,13 @@ type streamDelta struct {
 }
 
 type streamRequest struct {
-	Model         string      `json:"model"`
-	Messages      []Message   `json:"messages"`
-	Tools         []ToolDef   `json:"tools,omitempty"`
-	Stream        bool        `json:"stream"`
-	StreamOptions *streamOpts `json:"stream_options,omitempty"`
-	MaxTokens     int         `json:"max_tokens,omitempty"`
-	Temperature   *float64    `json:"temperature,omitempty"`
+	Model         string        `json:"model"`
+	Messages      []interface{} `json:"messages"`
+	Tools         []ToolDef     `json:"tools,omitempty"`
+	Stream        bool          `json:"stream"`
+	StreamOptions *streamOpts   `json:"stream_options,omitempty"`
+	MaxTokens     int           `json:"max_tokens,omitempty"`
+	Temperature   *float64      `json:"temperature,omitempty"`
 }
 
 type streamOpts struct {
@@ -90,7 +90,7 @@ func ChatCompletionStream(ctx context.Context, apiKey, model string, messages []
 
 		reqBody := streamRequest{
 			Model:    model,
-			Messages: messages,
+			Messages: buildAPIMessages(messages),
 			Stream:   true,
 			StreamOptions: &streamOpts{
 				IncludeUsage: true,

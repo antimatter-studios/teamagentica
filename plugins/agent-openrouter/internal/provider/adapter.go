@@ -196,7 +196,7 @@ func toOpenRouterMessages(msgs []agentkit.Message, systemPrompt string) []openro
 	}
 
 	for _, m := range msgs {
-		msg := openrouter.Message{Role: m.Role, Content: m.Content}
+		msg := openrouter.Message{Role: m.Role, Content: m.Content, ImageURLs: m.ImageURLs}
 
 		// Assistant messages with tool calls.
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {

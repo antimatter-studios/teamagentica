@@ -212,8 +212,9 @@ func toInceptionMessages(req agentkit.ProviderRequest) []inception.Message {
 
 	for _, m := range req.Messages {
 		msg := inception.Message{
-			Role:    m.Role,
-			Content: m.Content,
+			Role:      m.Role,
+			Content:   m.Content,
+			ImageURLs: m.ImageURLs,
 		}
 
 		// Skip system messages from conversation (we already prepended ours).

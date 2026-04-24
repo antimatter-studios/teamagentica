@@ -2,7 +2,7 @@ id: agent-google
 name: "Google Agent"
 description: "AI agent powered by Google Gemini models including Flash and Pro"
 group: agents
-version: "1.0.33"
+version: "1.0.35"
 image: "teamagentica-agent-google:latest"
 author: teamagentica
 tags: [chat, ai, agent, gemini, google]

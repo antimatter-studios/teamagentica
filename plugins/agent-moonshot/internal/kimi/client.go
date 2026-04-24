@@ -12,9 +12,11 @@ import (
 const baseURL = "https://api.moonshot.ai/v1"
 
 // Message is the standard role+content pair used by the handler layer.
+// ImageURLs (if any) trigger OpenAI-style multipart vision content.
 type Message struct {
 	Role             string     `json:"role"`
 	Content          string     `json:"content"`
+	ImageURLs        []string   `json:"-"`
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
@@ -110,6 +112,22 @@ func buildAPIMessages(messages []Message) []interface{} {
 				m["reasoning_content"] = msg.ReasoningContent
 			}
 			result = append(result, m)
+			continue
+		}
+		if len(msg.ImageURLs) > 0 {
+			content := []map[string]interface{}{
+				{"type": "text", "text": msg.Content},
+			}
+			for _, u := range msg.ImageURLs {
+				content = append(content, map[string]interface{}{
+					"type":      "image_url",
+					"image_url": map[string]string{"url": u},
+				})
+			}
+			result = append(result, map[string]interface{}{
+				"role":    msg.Role,
+				"content": content,
+			})
 			continue
 		}
 		result = append(result, map[string]interface{}{

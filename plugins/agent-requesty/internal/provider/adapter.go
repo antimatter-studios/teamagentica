@@ -220,7 +220,7 @@ func toRequestyMessages(msgs []agentkit.Message, systemPrompt string) []requesty
 	}
 
 	for _, m := range msgs {
-		msg := requesty.Message{Role: m.Role, Content: m.Content}
+		msg := requesty.Message{Role: m.Role, Content: m.Content, ImageURLs: m.ImageURLs}
 
 		// Map tool call results (role=tool).
 		if m.ToolResult != nil {

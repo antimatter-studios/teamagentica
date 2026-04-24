@@ -13,11 +13,66 @@ const baseURL = "https://openrouter.ai/api/v1"
 // Message is the standard role+content pair used by the handler layer.
 // For role="assistant" with tool calls, ToolCalls is populated.
 // For role="tool", ToolCallID identifies which call this result is for.
+// ImageURLs (if any) trigger OpenAI-style multipart vision content.
 type Message struct {
 	Role       string            `json:"role"`
 	Content    string            `json:"content,omitempty"`
+	ImageURLs  []string          `json:"-"`
 	ToolCalls  []ToolCallMessage `json:"tool_calls,omitempty"`
 	ToolCallID string            `json:"tool_call_id,omitempty"`
+}
+
+// buildAPIMessages converts Messages into the OpenAI API format.
+// Messages with ImageURLs emit multipart content arrays for vision.
+func buildAPIMessages(messages []Message) []interface{} {
+	result := make([]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		// Tool result message.
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			result = append(result, map[string]interface{}{
+				"role":         "tool",
+				"tool_call_id": msg.ToolCallID,
+				"content":      msg.Content,
+			})
+			continue
+		}
+
+		// Assistant message with tool calls.
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			m := map[string]interface{}{
+				"role":       "assistant",
+				"tool_calls": msg.ToolCalls,
+			}
+			if msg.Content != "" {
+				m["content"] = msg.Content
+			}
+			result = append(result, m)
+			continue
+		}
+
+		if len(msg.ImageURLs) > 0 {
+			content := []map[string]interface{}{
+				{"type": "text", "text": msg.Content},
+			}
+			for _, u := range msg.ImageURLs {
+				content = append(content, map[string]interface{}{
+					"type":      "image_url",
+					"image_url": map[string]string{"url": u},
+				})
+			}
+			result = append(result, map[string]interface{}{
+				"role":    msg.Role,
+				"content": content,
+			})
+			continue
+		}
+
+		result = append(result, map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		})
+	}
+	return result
 }
 
 // Usage holds token counts from the API response.

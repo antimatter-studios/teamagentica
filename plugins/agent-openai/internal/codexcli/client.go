@@ -386,8 +386,25 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, message
 		}
 		tThread := mark("thread")
 
-		// Build input.
-		input := []map[string]string{{"type": "text", "text": prompt}}
+		// Build input. Image parts come before the text part so the model sees
+		// them as context for the prompt.
+		input := []map[string]interface{}{}
+		var tempFiles []string
+		defer func() {
+			for _, p := range tempFiles {
+				_ = os.Remove(p)
+			}
+		}()
+		for _, u := range imageURLs {
+			path, derr := downloadImage(u)
+			if derr != nil {
+				log.Printf("[codex-cli] image download failed (%s): %v", u, derr)
+				continue
+			}
+			tempFiles = append(tempFiles, path)
+			input = append(input, map[string]interface{}{"type": "localImage", "path": path})
+		}
+		input = append(input, map[string]interface{}{"type": "text", "text": prompt})
 
 		// turn/start
 		firstToken := time.Time{}
