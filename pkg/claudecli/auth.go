@@ -71,7 +71,12 @@ func getAuthState(c *Client) *authState {
 }
 
 // IsAuthenticated checks if the Claude CLI has stored credentials.
+// Triggers a proactive refresh first so an expired access token doesn't
+// surface as logged-out when we still hold a valid refresh token.
 func (c *Client) IsAuthenticated() bool {
+	if err := c.EnsureFreshAuth(); err != nil {
+		log.Printf("[claude-cli] IsAuthenticated: refresh attempt failed: %v", err)
+	}
 	cmd := exec.Command(c.binary, "auth", "status", "--json")
 	cmd.Env = c.env()
 	out, err := cmd.Output()
@@ -95,6 +100,9 @@ func (c *Client) IsLoginInProgress() bool {
 
 // AuthStatusInfo returns structured auth status.
 func (c *Client) AuthStatusInfo() (*authStatus, error) {
+	if err := c.EnsureFreshAuth(); err != nil {
+		log.Printf("[claude-cli] AuthStatusInfo: refresh attempt failed: %v", err)
+	}
 	cmd := exec.Command(c.binary, "auth", "status", "--json")
 	cmd.Env = c.env()
 	out, err := cmd.Output()
@@ -106,6 +114,62 @@ func (c *Client) AuthStatusInfo() (*authStatus, error) {
 		return nil, fmt.Errorf("parse auth status: %w", err)
 	}
 	return &status, nil
+}
+
+// EnsureFreshAuth checks the stored credentials and refreshes the access
+// token if it's within the skew window of expiry. Safe to call concurrently
+// — refreshes are serialized by c.refreshMu.
+//
+// Returns nil when there are no credentials to refresh, when the token is
+// still valid, or when a refresh completes. Returns an error only if the
+// refresh HTTP call itself fails (e.g. network error or refresh token
+// revoked).
+func (c *Client) EnsureFreshAuth() error {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+
+	creds, err := c.readCredentials()
+	if err != nil {
+		return fmt.Errorf("read credentials: %w", err)
+	}
+	if creds == nil || creds.ClaudeAiOauth == nil {
+		return nil
+	}
+	oat := creds.ClaudeAiOauth
+	if oat.RefreshToken == "" {
+		return nil
+	}
+
+	// Refresh when within 60s of expiry or already expired.
+	const skewMillis = int64(60 * 1000)
+	now := time.Now().UnixMilli()
+	if oat.ExpiresAt > now+skewMillis {
+		return nil
+	}
+
+	log.Printf("[claude-cli] EnsureFreshAuth: access token near expiry (expiresAt=%d now=%d), refreshing", oat.ExpiresAt, now)
+	newTokens, err := c.refreshTokens(oat.RefreshToken)
+	if err != nil {
+		return fmt.Errorf("refresh tokens: %w", err)
+	}
+
+	updated := *oat
+	updated.AccessToken = newTokens.AccessToken
+	if newTokens.RefreshToken != "" {
+		updated.RefreshToken = newTokens.RefreshToken
+	}
+	if newTokens.ExpiresIn > 0 {
+		updated.ExpiresAt = time.Now().Add(time.Duration(newTokens.ExpiresIn) * time.Second).UnixMilli()
+	}
+	if newTokens.Scope != "" {
+		updated.Scopes = strings.Fields(newTokens.Scope)
+	}
+
+	if err := c.writeCredentialsAtomic(&updated); err != nil {
+		return fmt.Errorf("write refreshed credentials: %w", err)
+	}
+	log.Printf("[claude-cli] EnsureFreshAuth: refreshed, new expiresAt=%d", updated.ExpiresAt)
+	return nil
 }
 
 // StartLogin generates a PKCE authorization URL and returns it.
@@ -332,6 +396,81 @@ func (c *Client) fetchRoles(accessToken string) (*rolesResponse, error) {
 	}
 	log.Printf("[claude-cli] fetchRoles: subscriptionType=%s rateLimitTier=%s", roles.SubscriptionType, roles.RateLimitTier)
 	return &roles, nil
+}
+
+// readCredentials loads and parses ${claudeDir}/.credentials.json.
+// Returns (nil, nil) when the file doesn't exist.
+func (c *Client) readCredentials() (*credentialsFile, error) {
+	path := filepath.Join(c.claudeDir, ".credentials.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var creds credentialsFile
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return nil, err
+	}
+	return &creds, nil
+}
+
+// writeCredentialsAtomic writes oauth tokens via write-to-temp + rename so
+// a crash mid-write can't leave a partial credentials file.
+func (c *Client) writeCredentialsAtomic(oat *oauthTokens) error {
+	creds := credentialsFile{ClaudeAiOauth: oat}
+	data, err := json.MarshalIndent(creds, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(c.claudeDir, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(c.claudeDir, ".credentials.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// refreshTokens exchanges a refresh_token for a fresh access_token.
+func (c *Client) refreshTokens(refreshToken string) (*tokenResponse, error) {
+	body, _ := json.Marshal(map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+		"client_id":     claudeClientID,
+	})
+
+	log.Printf("[claude-cli] refreshTokens: POST %s", claudeTokenURL)
+	req, err := http.NewRequest(http.MethodPost, claudeTokenURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("refresh failed (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var tokens tokenResponse
+	if err := json.Unmarshal(respBody, &tokens); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	log.Printf("[claude-cli] refreshTokens: new tokens received (expires_in=%d)", tokens.ExpiresIn)
+	return &tokens, nil
 }
 
 func (c *Client) writeCredentials(tokens *tokenResponse, roles *rolesResponse) error {

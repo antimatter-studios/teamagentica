@@ -27,6 +27,10 @@ type Client struct {
 	// Process pool for persistent CLI subprocesses.
 	pool   *Pool
 	poolMu sync.Mutex
+
+	// Serializes OAuth refresh so concurrent pool workers don't
+	// race on the credentials file.
+	refreshMu sync.Mutex
 }
 
 // NewClient creates a new Claude CLI client.
@@ -262,13 +266,8 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 		pool := c.ensurePool(cfg)
 		convKey := conversationKey(opts)
 
-		proc, err := pool.Acquire(convKey)
-		if err != nil {
-			errMsg := fmt.Errorf("pool acquire: %w", err)
-			ch <- StreamEvent{Err: errMsg, ErrMsg: errMsg.Error()}
-			return
-		}
-		acquireMs := time.Since(start).Milliseconds()
+		const maxAttempts = 3
+		const retryDelay = 2 * time.Second
 
 		firstToken := time.Time{}
 		streamCb := func(ev StreamEvent) {
@@ -281,11 +280,53 @@ func (c *Client) ChatCompletionStream(ctx context.Context, model string, prompt 
 			}
 		}
 
-		_, err = proc.sendMessage(prompt, streamCb)
-		if err != nil {
+		var proc *process
+		var err error
+		var acquireMs int64
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			if attempt > 1 {
+				log.Printf("[claude-cli] retry %d/%d after process failure, waiting %v", attempt, maxAttempts, retryDelay)
+				select {
+				case <-time.After(retryDelay):
+				case <-ctx.Done():
+					ch <- StreamEvent{Err: ctx.Err(), ErrMsg: "request cancelled"}
+					return
+				}
+			}
+
+			proc, err = pool.Acquire(convKey)
+			if err != nil {
+				log.Printf("[claude-cli] pool acquire failed: %v", err)
+				continue
+			}
+			if attempt == 1 {
+				acquireMs = time.Since(start).Milliseconds()
+			}
+
 			if !proc.alive {
 				pool.MarkDead(convKey)
+				log.Printf("[claude-cli] acquired dead process, will retry")
+				continue
 			}
+
+			_, err = proc.sendMessage(prompt, streamCb)
+			if err != nil {
+				if !proc.alive {
+					pool.MarkDead(convKey)
+					log.Printf("[claude-cli] process died during send")
+					continue
+				}
+				// Process alive but errored — don't retry.
+				break
+			}
+
+			// Success.
+			err = nil
+			break
+		}
+
+		if err != nil {
 			ch <- StreamEvent{Err: err, ErrMsg: err.Error()}
 			return
 		}

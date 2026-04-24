@@ -160,15 +160,17 @@ func (p *Pool) Release(conversationID string) {
 	}
 }
 
-// MarkDead removes a dead process from the active map.
-// The session mapping is preserved so the session can be resumed.
+// MarkDead kills and removes a broken process from the active map.
+// The session mapping is also cleared so the next Acquire uses a fresh session
+// instead of trying to resume one whose lock file may not yet be released.
 func (p *Pool) MarkDead(conversationID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if entry, ok := p.active[conversationID]; ok {
-		if !entry.proc.alive {
-			delete(p.active, conversationID)
-		}
+		entry.proc.kill()
+		delete(p.active, conversationID)
+		delete(p.sessions, conversationID)
+		log.Printf("[pool] killed and removed process for %s (session %s discarded)", conversationID, entry.sessionID)
 	}
 }
 

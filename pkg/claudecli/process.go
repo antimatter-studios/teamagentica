@@ -47,6 +47,14 @@ type process struct {
 
 // startProcess spawns a new persistent Claude CLI subprocess.
 func (c *Client) startProcess(cfg processConfig) (*process, error) {
+	// Proactively refresh the OAuth access token if it's near expiry.
+	// A failure here isn't fatal — the CLI will surface a 401 and the
+	// caller can re-login; we still try to start the process so the
+	// existing error path reports upstream.
+	if err := c.EnsureFreshAuth(); err != nil {
+		log.Printf("[claude-cli] startProcess: refresh attempt failed (continuing): %v", err)
+	}
+
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
