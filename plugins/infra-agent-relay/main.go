@@ -998,16 +998,27 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 	var fullText string
 	var pendingChunk string
 	var chunksEmitted bool
+	var streamedAttachments []pluginsdk.AgentAttachment
 	const chunkMaxLen = 500
 	const chunkMinLen = 50
 	var finalResp agentChatResponse
 
 	emitChunk := func(text string) {
+		// Resolve any {{media:...}} / {{media_url:...}} markers into real
+		// attachments and strip them from the streamed text — otherwise the
+		// raw markers render as literal text in the messaging plugin.
+		cleaned, atts := resolveMediaMarkers(text)
+		if len(atts) > 0 {
+			streamedAttachments = append(streamedAttachments, atts...)
+		}
+		if cleaned == "" {
+			return
+		}
 		payload := map[string]interface{}{
 			"task_group_id": cb.TaskGroupID,
 			"channel_id":    cb.ChannelID,
 			"status":        "message_chunk",
-			"message":       strings.ReplaceAll(text, "@@", "@"),
+			"message":       strings.ReplaceAll(cleaned, "@@", "@"),
 			"responder":     cb.Responder,
 		}
 		data, _ := json.Marshal(payload)
@@ -1019,8 +1030,14 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 		if len(pendingChunk) < chunkMinLen {
 			return
 		}
-		emitChunk(pendingChunk)
-		pendingChunk = ""
+		// Hold back any unterminated `{{` tail so markers aren't split across
+		// chunks — the remainder will be emitted once `}}` arrives.
+		safe, held := splitAtPartialMarker(pendingChunk)
+		if safe == "" {
+			return
+		}
+		emitChunk(safe)
+		pendingChunk = held
 	}
 
 	for ev := range stream {
@@ -1065,6 +1082,18 @@ func (r *relay) callAgentStream(ctx context.Context, pluginID, model, message st
 	// If we got a done event, use that. Otherwise construct from accumulated text.
 	if finalResp.Response == "" {
 		finalResp.Response = fullText
+	}
+	// Resolve markers on the final response text too — covers both (a) the
+	// DoneEvent path where finalResp.Response was set directly, skipping the
+	// streaming chunks, and (b) any marker that was never flushed through
+	// emitChunk (short reply below chunkMinLen that went straight to fullText).
+	cleanedFinal, finalAtts := resolveMediaMarkers(finalResp.Response)
+	finalResp.Response = strings.TrimSpace(cleanedFinal)
+	if len(streamedAttachments) > 0 {
+		finalResp.Attachments = append(finalResp.Attachments, streamedAttachments...)
+	}
+	if len(finalAtts) > 0 {
+		finalResp.Attachments = append(finalResp.Attachments, finalAtts...)
 	}
 	finalResp.ChunksEmitted = chunksEmitted
 
@@ -1426,10 +1455,11 @@ func main() {
 		var detail struct {
 			Action string `json:"action"`
 			Alias  struct {
-				Name   string `json:"name"`
-				Type   string `json:"type"`
-				Plugin string `json:"plugin"`
-				Model  string `json:"model"`
+				Name         string   `json:"name"`
+				Type         string   `json:"type"`
+				Plugin       string   `json:"plugin"`
+				Model        string   `json:"model"`
+				Capabilities []string `json:"capabilities"`
 			} `json:"alias"`
 		}
 		if err := json.Unmarshal([]byte(event.Detail), &detail); err != nil {
@@ -1451,14 +1481,11 @@ func main() {
 				if detail.Alias.Model != "" {
 					target += ":" + detail.Alias.Model
 				}
-				var caps []string
-				switch detail.Alias.Type {
-				case "agent":
+				caps := detail.Alias.Capabilities
+				if len(caps) == 0 {
+					// Fallback for events from older registries that don't emit capabilities —
+					// default to chattable agent so routing still works.
 					caps = []string{"agent:chat"}
-				case "tool_agent":
-					caps = []string{"agent:tool"}
-				default:
-					caps = []string{"tool:mcp"}
 				}
 				am.Set(detail.Alias.Name, alias.TargetFromInfo(target, caps))
 				log.Printf("Alias %s: %s → %s", detail.Action, detail.Alias.Name, target)
@@ -1475,13 +1502,9 @@ func main() {
 
 	// Re-fetch aliases when any plugin is installed, uninstalled, or swapped.
 	// The alias DB can change indirectly (e.g. a rename migration) with no
-	// agent:update event, so lifecycle transitions are the safest trigger for
-	// a full refresh. Debounced so rapid register/unregister doesn't storm the registry.
-	aliasLifecycleDebouncer := pluginsdk.NewTimedDebouncer(500*time.Millisecond, func(event pluginsdk.EventCallback) {
-		refreshAliases()
-	})
-	sdkClient.Events().On("plugin:ready", aliasLifecycleDebouncer)
-	sdkClient.Events().On("plugin:stopped", aliasLifecycleDebouncer)
+	// agent:update event, so lifecycle transitions are the safest trigger
+	// for a full refresh. SDK handles the debounce (default 500ms).
+	sdkClient.OnPluginLifecycleSettled(refreshAliases)
 
 	sdkClient.Start(context.Background())
 
