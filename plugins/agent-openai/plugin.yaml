@@ -2,12 +2,20 @@ id: agent-openai
 name: "OpenAI Agent"
 description: "AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities"
 group: agents
-version: "1.0.70"
+version: "1.0.73"
 image: "teamagentica-agent-openai:latest"
 author: teamagentica
 tags: [chat, ai, agent, codex]
-capabilities: ["agent:openai", "agent:chat", "agent:completion"]
-dependencies: ["cost:tracking"]
+capabilities: ["agent:openai", "agent:chat", "agent:completion", "workspace:environment"]
+dependencies: ["cost:tracking", "storage:disk"]
+requested_scopes: ["memory.read", "memory.write", "relay.send", "persona.read", "workspace.create"]
+shared_disks:
+  - name: agent-openai
+    type: shared
+    target: /home/coder/.codex
+  - name: agent-openai-sidecar
+    type: shared
+    target: /sidecar-bin
 config_schema:
   OPENAI_BACKEND:
     type: select
@@ -41,6 +49,16 @@ config_schema:
     default: gpt-4o
     dynamic: true
     order: 3
+  CODEX_APPROVAL_MODE:
+    type: select
+    label: "Codex Approval Mode"
+    default: suggest
+    options: [suggest, auto-edit, full-auto]
+    help_text: "suggest: asks before everything. auto-edit: auto-approves file changes. full-auto: auto-approves everything (workspace terminal only)"
+    visible_when:
+      field: OPENAI_BACKEND
+      value: subscription
+    order: 10
   PLUGIN_DEBUG:
     type: boolean
     label: "Debug Mode"

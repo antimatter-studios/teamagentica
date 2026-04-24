@@ -49,6 +49,7 @@ COPY pkg/pluginsdk/ pkg/pluginsdk/
 COPY plugins/agent-openai/ plugins/agent-openai/
 WORKDIR /build/plugins/agent-openai
 RUN go mod download && CGO_ENABLED=1 go build -ldflags="-s -w" -o /agent-openai .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /codex-exec-server ./cmd/exec-server
 
 # ── Prod stage ──
 FROM alpine:3.19 AS prod
@@ -58,6 +59,7 @@ RUN apk add --no-cache ca-certificates \
 
 COPY --from=codex-installer /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=builder /agent-openai /usr/local/bin/agent-openai
+COPY --from=builder /codex-exec-server /usr/local/bin/codex-exec-server
 RUN mkdir -p /data/codex-workspace && chown -R teamagentica:teamagentica /data
 
 RUN mkdir -p /usr/local/etc/teamagentica

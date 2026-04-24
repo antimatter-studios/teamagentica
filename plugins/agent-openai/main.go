@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"log"
 	"os"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/codexcli"
+	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/exec"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/handlers"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-openai/internal/provider"
 )
@@ -234,6 +236,76 @@ func main() {
 	pricing := pluginsdk.NewPricingHandlerFromManifest(manifest, sdkClient)
 	router.GET("/pricing", gin.WrapF(pricing.HandleGet))
 	router.PUT("/pricing", gin.WrapF(pricing.HandlePut))
+
+	// --- Workspace environment mode ---
+	// When using the Codex subscription backend, start an ExecServer on :9100
+	// and register with workspace-manager so it can spawn workspace containers.
+	if backend == "subscription" {
+		wsCodexHome := dataPath + "/codex-home-ws"
+		if err := os.MkdirAll(wsCodexHome, 0755); err != nil {
+			log.Printf("WARNING: failed to create workspace codex home %s: %v", wsCodexHome, err)
+		}
+		wsCliClient := codexcli.NewClient(cliBinary, "/workspace", wsCodexHome, cliTimeout, debug)
+		if sdkCfg.TLSCA != "" {
+			wsCliClient.SetTLS(sdkCfg.TLSCA)
+		}
+		if err := wsCliClient.StartAppServer(); err != nil {
+			log.Printf("WARNING: workspace-mode codex app-server failed to start: %v", err)
+		} else {
+			execSrv := exec.NewServer(wsCliClient)
+			go execSrv.Start(":9100")
+		}
+
+		approvalMode := configOrDefault(pluginConfig, "CODEX_APPROVAL_MODE", "suggest")
+
+		registerWorkspaceEnv := func() {
+			payload := events.WorkspaceEnvironmentRegisterPayload{
+				PluginID:    manifest.ID,
+				DisplayName: "Codex Terminal",
+				Description: "Web terminal with OpenAI Codex CLI — AI-powered coding assistant",
+				Image:       "teamagentica-devbox-terminal:latest",
+				Port:        7681,
+				Icon:        `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" fill="#10A37F"/><path d="M12 6v12M8 10l4-4 4 4M8 14l4 4 4-4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+				Disks: []events.WorkspaceDiskSpec{
+					{Type: "workspace", Target: "/workspace"},
+					{Type: "shared", Name: "agent-openai", Target: "/home/coder/.codex"},
+					{Type: "shared", Name: "agent-openai-sidecar", Target: "/opt/agent-sidecar"},
+				},
+				EnvDefaults: map[string]string{
+					"DEVBOX_APP":          "codex",
+					"DEFAULT_WORKSPACE":   "/workspace",
+					"HOME":                "/home/coder",
+					"CODEX_APPROVAL_MODE": approvalMode,
+					"TACLI_KERNEL":        "http://teamagentica-kernel:8080",
+				},
+			}
+			b, _ := json.Marshal(payload)
+			sdkClient.PublishEvent("workspace:environment:register", string(b))
+			log.Printf("[workspace-env] registered workspace environment: %s", manifest.ID)
+		}
+
+		sdkClient.Events().On("workspace:manager:ready", pluginsdk.NewNullDebouncer(func(event pluginsdk.EventCallback) {
+			registerWorkspaceEnv()
+		}))
+
+		registerWorkspaceEnv()
+	}
+
+	// Copy sidecar binary to shared disk so workspace containers can run it.
+	if _, err := os.Stat("/sidecar-bin"); err == nil {
+		if src, err := os.ReadFile("/usr/local/bin/codex-exec-server"); err == nil {
+			dst := "/sidecar-bin/codex-exec-server"
+			tmp := dst + ".tmp"
+			if err := os.WriteFile(tmp, src, 0755); err != nil {
+				log.Printf("WARNING: failed to write sidecar binary temp: %v", err)
+			} else if err := os.Rename(tmp, dst); err != nil {
+				log.Printf("WARNING: failed to rename sidecar binary: %v", err)
+				os.Remove(tmp)
+			} else {
+				log.Printf("[sidecar] wrote exec-server binary to %s", dst)
+			}
+		}
+	}
 
 	sdkClient.ListenAndServe(defaultPort, router)
 }
