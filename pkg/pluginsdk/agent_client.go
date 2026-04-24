@@ -6,11 +6,43 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const agentChatPath = "/chat"
+
+// sseReadTimeout is how long the client waits for any data (including heartbeats)
+// before assuming the connection is dead. The server sends heartbeats every 15s,
+// so 45s allows for 3 missed heartbeats before giving up.
+const sseReadTimeout = 45 * time.Second
+
+// deadlineReader wraps an io.Reader with a per-read deadline using a timer.
+// Each successful Read resets the timer. If the timer fires before data arrives,
+// the underlying reader's context is cancelled, causing Read to return an error.
+type deadlineReader struct {
+	r      io.Reader
+	cancel context.CancelFunc
+	timer  *time.Timer
+}
+
+func newDeadlineReader(r io.Reader, cancel context.CancelFunc, timeout time.Duration) *deadlineReader {
+	return &deadlineReader{
+		r:      r,
+		cancel: cancel,
+		timer:  time.AfterFunc(timeout, cancel),
+	}
+}
+
+func (d *deadlineReader) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	if n > 0 {
+		d.timer.Reset(sseReadTimeout)
+	}
+	return n, err
+}
 
 // AgentChat sends a chat request to an agent plugin and collects the final
 // response. This is the simple "fire and collect" variant — it consumes
@@ -56,8 +88,12 @@ func (c *Client) AgentChat(ctx context.Context, pluginID string, req AgentChatRe
 // channel of stream events. The channel is closed when the stream ends.
 // The caller should read all events until the channel is closed.
 func (c *Client) AgentChatStream(ctx context.Context, pluginID string, req AgentChatRequest) (<-chan AgentStreamEvent, error) {
-	resp, err := c.agentStream(ctx, pluginID, req)
+	// Create a child context so the deadline reader can cancel reads on timeout.
+	readCtx, readCancel := context.WithCancel(ctx)
+
+	resp, err := c.agentStream(readCtx, pluginID, req)
 	if err != nil {
+		readCancel()
 		return nil, err
 	}
 
@@ -66,13 +102,20 @@ func (c *Client) AgentChatStream(ctx context.Context, pluginID string, req Agent
 	go func() {
 		defer close(ch)
 		defer resp.Body.Close()
+		defer readCancel()
 
-		scanner := newSSEScanner(resp.Body)
+		dr := newDeadlineReader(resp.Body, readCancel, sseReadTimeout)
+		scanner := newSSEScanner(dr)
 		// Track the last event type from "event:" lines.
 		var lastEventType string
 
 		for scanner.Scan() {
 			line := scanner.Text()
+
+			// Skip heartbeat comments (": heartbeat").
+			if strings.HasPrefix(line, ":") {
+				continue
+			}
 
 			// Track event type lines.
 			if strings.HasPrefix(line, "event: ") {
@@ -96,9 +139,12 @@ func (c *Client) AgentChatStream(ctx context.Context, pluginID string, req Agent
 		}
 
 		if err := scanner.Err(); err != nil {
-			ch <- AgentStreamEvent{
-				Type: "error",
-				Data: ErrorEvent{Error: fmt.Sprintf("reading stream: %v", err)},
+			// Don't emit error if the parent context was cancelled (normal shutdown).
+			if ctx.Err() == nil {
+				ch <- AgentStreamEvent{
+					Type: "error",
+					Data: ErrorEvent{Error: fmt.Sprintf("reading stream: %v", err)},
+				}
 			}
 		}
 	}()
@@ -122,7 +168,9 @@ func (c *Client) agentStream(ctx context.Context, pluginID string, req AgentChat
 }
 
 // newSSEScanner creates a bufio.Scanner configured for SSE parsing
-// with a 256KB line buffer for large tool call arguments.
+// with a 256KB line buffer for large tool call arguments. Binary
+// attachments (images, video) are delivered by reference as storage:// or
+// https:// URLs in AgentAttachment.URL, not inlined in the SSE stream.
 func newSSEScanner(r interface{ Read([]byte) (int, error) }) *bufio.Scanner {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)

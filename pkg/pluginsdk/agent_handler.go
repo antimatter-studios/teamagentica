@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+const sseHeartbeatInterval = 15 * time.Second
 
 // RegisterAgentChat registers POST /chat on the given router, wiring an
 // AgentProvider's streaming output to SSE. The SDK owns the SSE framing,
@@ -42,8 +45,25 @@ func agentChatHandler(provider AgentProvider) gin.HandlerFunc {
 		ctx := c.Request.Context()
 		stream := provider.ChatStream(ctx, req)
 
-		for ev := range stream {
-			writeAgentSSE(c.Writer, ev)
+		// Send heartbeat comments while waiting for events so the client
+		// can distinguish a slow agent from a dead connection.
+		ticker := time.NewTicker(sseHeartbeatInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case ev, ok := <-stream:
+				if !ok {
+					return
+				}
+				writeAgentSSE(c.Writer, ev)
+				ticker.Reset(sseHeartbeatInterval)
+			case <-ticker.C:
+				fmt.Fprintf(c.Writer, ": heartbeat\n\n")
+				c.Writer.Flush()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }

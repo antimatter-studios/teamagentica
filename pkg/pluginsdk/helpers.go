@@ -88,10 +88,9 @@ func (c *Client) EventHandler() http.HandlerFunc {
 		}
 
 		// Handle kernel lifecycle events (peer registry updates).
-		if c.handleLifecycleEvent(event) {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+		// Also dispatch to application handlers — plugins may listen for
+		// plugin:ready to trigger actions like MCP tool registration.
+		c.handleLifecycleEvent(event)
 
 		// Dispatch to application event handlers.
 		c.eventMu.RLock()
