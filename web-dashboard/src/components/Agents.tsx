@@ -2,7 +2,6 @@ import { useEffect, useMemo, useCallback } from "react";
 import { useAgentStore } from "../stores/agentStore";
 import AgentEntryForm from "./agents/PersonaForm";
 import AgentForm from "./agents/AgentForm";
-import ToolAgentForm from "./agents/ToolAgentForm";
 import ToolForm from "./agents/ToolForm";
 
 interface SidebarSection {
@@ -90,19 +89,10 @@ export default function Agents({ subpath, onNavigate }: Props) {
       if (route.action === "edit" && !item) {
         return <div className="agents-main-empty">Alias "{route.id}" not found.</div>;
       }
-      // Use the appropriate form based on alias type.
+      // Use the appropriate form based on alias type. Every alias is now
+      // either a chat-capable "agent" (including tool-style agents like
+      // image-gen, identified by capabilities) or a pure "tool".
       const aliasType = item?.type;
-      if (aliasType === "tool_agent") {
-        return (
-          <ToolAgentForm
-            key={route.action + (route.id || "new")}
-            alias={item}
-            plugins={pluginsByType.tool_agent}
-            onSave={handleSave}
-            onCancel={handleCancel}
-          />
-        );
-      }
       if (aliasType === "tool") {
         return (
           <ToolForm

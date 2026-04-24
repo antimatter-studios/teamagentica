@@ -4702,26 +4702,26 @@ body::after {
   line-height: 1;
 }
 
-.wss-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border-color);
-  padding: 0 16px;
-  gap: 0;
+.wss-section + .wss-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
 }
 
-.wss-tab {
-  padding: 10px 16px;
+.wss-section-title {
+  margin: 0 0 4px;
   font-size: 13px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--text-secondary);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
 }
 
-.wss-tab:hover { color: var(--text-primary); }
-.wss-tab-active { color: var(--text-primary); border-bottom-color: var(--accent-primary); }
+.wss-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 20px;
+}
 
 .wss-content {
   padding: 16px;

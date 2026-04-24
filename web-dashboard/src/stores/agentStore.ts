@@ -1,18 +1,24 @@
 import { create } from "zustand";
 import { apiClient } from "../api/client";
+import { parseCapabilities } from "@teamagentica/api-client";
 import type { RegistryAlias, AgentType, Plugin, AgentEntry } from "@teamagentica/api-client";
 
-const CAPABILITY_MAP: Record<string, string[]> = {
-  agent: ["agent:chat"],
-  tool_agent: ["agent:tool"],
+// Dashboard categorises plugins into two buckets: chat-capable agents (covers
+// both classic conversational agents and tool-style agents like image-gen),
+// and pure tools/infra. The legacy "tool_agent" category is gone — chattability
+// is derived from capabilities alone.
+const CAPABILITY_MAP: Record<"agent" | "tool", string[]> = {
+  agent: ["agent:chat", "agent:tool"],
   tool: ["tool:", "storage:", "infra:"],
 };
+
+type PluginBucket = "agent" | "tool";
 
 interface AgentStore {
   // Data
   aliases: RegistryAlias[];
   agents: AgentEntry[];
-  pluginsByType: Record<AgentType, Plugin[]>;
+  pluginsByType: Record<PluginBucket, Plugin[]>;
   loading: boolean;
   error: string | null;
 
@@ -29,16 +35,23 @@ interface AgentStore {
   updateAgent: (alias: string, req: Parameters<typeof apiClient.agentRegistry.update>[1]) => Promise<AgentEntry>;
   deleteAgent: (alias: string) => Promise<void>;
 
-  // Alias CRUD (agents, tool agents, tools)
+  // Alias CRUD (agents, tools)
   createAlias: (req: Parameters<typeof apiClient.agents.create>[0]) => Promise<RegistryAlias>;
   updateAlias: (name: string, req: Parameters<typeof apiClient.agents.update>[1]) => Promise<RegistryAlias>;
   deleteAlias: (name: string) => Promise<void>;
 }
 
+// An alias is chattable if any of its plugin's capabilities match agent:chat
+// or agent:tool:* (e.g. agent:tool:image-gen, agent:tool:video-gen).
+function isChatCapablePlugin(plugin: Plugin): boolean {
+  const caps = parseCapabilities(plugin);
+  return caps.some((c) => c === "agent:chat" || c.startsWith("agent:tool"));
+}
+
 export const useAgentStore = create<AgentStore>((set, get) => ({
   aliases: [],
   agents: [],
-  pluginsByType: { agent: [], tool_agent: [], tool: [] },
+  pluginsByType: { agent: [], tool: [] },
   loading: true,
   error: null,
 
@@ -46,8 +59,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   chatAliases: () => {
     const { aliases, pluginsByType } = get();
-    const agentPluginIds = new Set(pluginsByType.agent.map((p) => p.id));
-    return aliases.filter((a) => agentPluginIds.has(a.plugin) || a.type === "agent");
+    const chatPluginIds = new Set(pluginsByType.agent.map((p) => p.id));
+    return aliases.filter((a) => chatPluginIds.has(a.plugin) || a.type === "agent");
   },
 
   fetch: async () => {
@@ -67,19 +80,22 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   fetchPlugins: async () => {
-    const result: Record<AgentType, Plugin[]> = { agent: [], tool_agent: [], tool: [] };
+    const result: Record<PluginBucket, Plugin[]> = { agent: [], tool: [] };
     const errors: string[] = [];
-    for (const [type, caps] of Object.entries(CAPABILITY_MAP)) {
+    for (const [type, caps] of Object.entries(CAPABILITY_MAP) as [PluginBucket, string[]][]) {
       const seen = new Set<string>();
       for (const cap of caps) {
         try {
           const plugins = await apiClient.plugins.search(cap);
           for (const p of plugins) {
-            if (!seen.has(p.id)) { seen.add(p.id); result[type as AgentType].push(p); }
+            if (!seen.has(p.id)) { seen.add(p.id); result[type].push(p); }
           }
         } catch (e) { errors.push(`plugins(${cap}): ${e instanceof Error ? e.message : "failed"}`); }
       }
     }
+    // Safety net: ensure the agent bucket only contains plugins whose
+    // capabilities actually make them chat-capable (agent:chat or agent:tool:*).
+    result.agent = result.agent.filter(isChatCapablePlugin);
     set({ pluginsByType: result, error: errors.length ? [get().error, ...errors].filter(Boolean).join("; ") : get().error });
   },
 

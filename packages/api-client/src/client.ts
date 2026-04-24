@@ -41,6 +41,16 @@ export class HttpTransport {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
+  /** Format an HTTP error. Uses the backend's body.error as-is when present;
+   *  falls back to `<statusText> (<status> <path>)` for opaque failures. */
+  private async formatError(res: Response): Promise<string> {
+    const body = await res.json().catch(() => null) as { error?: string; message?: string } | null;
+    const detail = body?.error || body?.message;
+    if (detail) return detail;
+    const path = new URL(res.url).pathname;
+    return `${res.statusText || "Request failed"} (${res.status} ${path})`;
+  }
+
   /** Wrap fetch to turn network errors into actionable messages. */
   private async doFetch(url: string, init: RequestInit): Promise<Response> {
     try {
@@ -96,10 +106,7 @@ export class HttpTransport {
       throw new Error("Unauthorized");
     }
     if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }));
-      const detail = body.error || body.message || res.statusText;
-      const path = new URL(res.url).pathname;
-      throw new Error(`${detail} (${res.status} ${path})`);
+      throw new Error(await this.formatError(res));
     }
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
@@ -133,10 +140,7 @@ export class HttpTransport {
       throw new Error("Unauthorized");
     }
     if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }));
-      const detail = body.error || body.message || res.statusText;
-      const path = new URL(res.url).pathname;
-      throw new Error(`${detail} (${res.status} ${path})`);
+      throw new Error(await this.formatError(res));
     }
     return res.text();
   }
@@ -224,9 +228,7 @@ export class HttpTransport {
       body: formData,
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }));
-      const detail = body.error || res.statusText;
-      throw new Error(`${detail} (${res.status} ${path})`);
+      throw new Error(await this.formatError(res));
     }
     return res.json() as Promise<T>;
   }

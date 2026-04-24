@@ -83,7 +83,7 @@ export class WorkspacesAPI {
     name: string;
     environment_id: string;
     git_repo?: string;
-    disk_name?: string;
+    disk_id?: string;
   }): Promise<void> {
     return this.http.post(`${ROUTE}/workspaces`, data);
   }

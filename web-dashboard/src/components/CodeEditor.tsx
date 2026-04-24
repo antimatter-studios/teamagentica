@@ -228,7 +228,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
     return workspaceIframeSrc(ws.id);
   };
 
-  const handleLaunchDisk = async (diskName: string, envId: string) => {
+  const handleLaunchDisk = async (diskId: string, diskName: string, envId: string) => {
     setLaunching(true);
     setError(null);
     const slug = diskName.replace(/^ws-[a-f0-9]{8}-/, "") || diskName.replace(/^ws-/, "");
@@ -237,7 +237,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
       await apiClient.workspaces.createWorkspace({
         name: displayName,
         environment_id: envId,
-        disk_name: diskName,
+        disk_id: diskId,
       });
       setLaunchDisk(null);
       await fetchAll();
@@ -785,7 +785,7 @@ export default function CodeEditor({ initialWorkspace, onWorkspaceChange }: Code
                                 key={env.plugin_id}
                                 className="ws-disk-env-option"
                                 disabled={launching}
-                                onClick={() => handleLaunchDisk(v.name, env.plugin_id)}
+                                onClick={() => handleLaunchDisk(v.id, v.name, env.plugin_id)}
                               >
                                 {env.name}
                               </button>
