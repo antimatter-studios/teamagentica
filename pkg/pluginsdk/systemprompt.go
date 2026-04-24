@@ -70,10 +70,10 @@ func (c *Client) fetchAliasesWithTypes() ([]alias.AliasInfo, error) {
 
 	var result struct {
 		Aliases []struct {
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Plugin string `json:"plugin"`
-			Model  string `json:"model"`
+			Name         string   `json:"name"`
+			Plugin       string   `json:"plugin"`
+			Model        string   `json:"model"`
+			Capabilities []string `json:"capabilities"`
 		} `json:"aliases"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -87,15 +87,9 @@ func (c *Client) fetchAliasesWithTypes() ([]alias.AliasInfo, error) {
 			target = a.Plugin + ":" + a.Model
 		}
 
-		// Map alias type to capabilities for proper classification.
-		var caps []string
-		switch a.Type {
-		case "agent":
+		caps := a.Capabilities
+		if len(caps) == 0 {
 			caps = []string{"agent:chat"}
-		case "tool_agent":
-			caps = []string{"agent:tool:image"}
-		case "tool":
-			caps = []string{"tool:mcp"}
 		}
 
 		infos = append(infos, alias.AliasInfo{

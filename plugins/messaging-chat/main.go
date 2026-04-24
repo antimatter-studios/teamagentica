@@ -149,10 +149,10 @@ func main() {
 func convertRegistryAliases(detail string) []alias.AliasInfo {
 	var payload struct {
 		Aliases []struct {
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Plugin string `json:"plugin"`
-			Model  string `json:"model"`
+			Name         string   `json:"name"`
+			Plugin       string   `json:"plugin"`
+			Model        string   `json:"model"`
+			Capabilities []string `json:"capabilities"`
 		} `json:"aliases"`
 	}
 	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
@@ -164,14 +164,9 @@ func convertRegistryAliases(detail string) []alias.AliasInfo {
 		if e.Model != "" {
 			target = e.Plugin + ":" + e.Model
 		}
-		var caps []string
-		switch e.Type {
-		case "agent":
+		caps := e.Capabilities
+		if len(caps) == 0 {
 			caps = []string{"agent:chat"}
-		case "tool_agent":
-			caps = []string{"agent:tool"}
-		default:
-			caps = []string{"tool:mcp"}
 		}
 		infos = append(infos, alias.AliasInfo{
 			Name:         e.Name,

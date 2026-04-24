@@ -404,10 +404,10 @@ func parseAllowedUsers(raw string) map[int64]bool {
 func convertRegistryAliases(detail string) []alias.AliasInfo {
 	var payload struct {
 		Aliases []struct {
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Plugin string `json:"plugin"`
-			Model  string `json:"model"`
+			Name         string   `json:"name"`
+			Plugin       string   `json:"plugin"`
+			Model        string   `json:"model"`
+			Capabilities []string `json:"capabilities"`
 		} `json:"aliases"`
 	}
 	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
@@ -419,9 +419,9 @@ func convertRegistryAliases(detail string) []alias.AliasInfo {
 		if e.Model != "" {
 			target = e.Plugin + ":" + e.Model
 		}
-		caps := []string{"tool:mcp"}
-		if e.Type == "agent" {
-			caps = []string{"agent:chat", "tool:mcp"}
+		caps := e.Capabilities
+		if len(caps) == 0 {
+			caps = []string{"agent:chat"}
 		}
 		infos = append(infos, alias.AliasInfo{
 			Name:         e.Name,

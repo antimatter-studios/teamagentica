@@ -42,21 +42,52 @@ func (h *Handler) BroadcastReady() {
 // broadcastChange emits an agent:update event with alias-compatible
 // payload shape so that consumers (relay, messaging plugins) can patch their
 // alias maps and refresh agent caches from a single event.
+//
+// Capabilities are looked up from the kernel plugin registry and included in
+// the payload — this is the source of truth for downstream routing decisions
+// (whether an alias is chattable, whether it's image/video, etc.). Consumers
+// should use these capabilities directly instead of inferring from the type
+// field, which is retained only for backward compatibility.
 func (h *Handler) broadcastChange(action string, p *storage.Persona) {
 	if h.sdk == nil {
 		return
 	}
 	aliasPayload := map[string]interface{}{
-		"name":   p.Alias,
-		"type":   p.Type,
-		"plugin": p.Plugin,
-		"model":  p.Model,
+		"name":         p.Alias,
+		"type":         p.Type, // deprecated — use capabilities
+		"plugin":       p.Plugin,
+		"model":        p.Model,
+		"capabilities": h.lookupPluginCapabilities(p.Plugin),
 	}
 	detail, _ := json.Marshal(map[string]interface{}{
 		"action": action,
 		"alias":  aliasPayload,
 	})
 	h.sdk.PublishEvent("agent:update", string(detail))
+}
+
+// lookupPluginCapabilities fetches the declared capabilities for a plugin
+// from the kernel. Returns nil on any failure — consumers treat that as
+// "don't know, default to chat target" which is the safe fallback.
+func (h *Handler) lookupPluginCapabilities(pluginID string) []string {
+	if h.sdk == nil || pluginID == "" {
+		return nil
+	}
+	info, err := h.sdk.GetPlugin(pluginID)
+	if err != nil {
+		return nil
+	}
+	rawCaps, ok := info["capabilities"].([]interface{})
+	if !ok {
+		return nil
+	}
+	caps := make([]string, 0, len(rawCaps))
+	for _, c := range rawCaps {
+		if s, ok := c.(string); ok {
+			caps = append(caps, s)
+		}
+	}
+	return caps
 }
 
 // DB returns the underlying database (may be nil before init).
