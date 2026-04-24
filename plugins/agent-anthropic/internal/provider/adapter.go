@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"text/template"
@@ -14,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/antimatter-studios/teamagentica/pkg/claudecli"
+	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/agentkit"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/anthropic"
 	"github.com/antimatter-studios/teamagentica/plugins/agent-anthropic/internal/usage"
@@ -38,12 +40,22 @@ type AnthropicAdapter struct {
 	claudeCLI    *claudecli.Client
 	mcpConfig    string
 	workspaceDir string
-	execMode     string // "local" or "remote"
-	execWSURL    string
 	tracker      *usage.Tracker
+	sdk          *pluginsdk.Client
+
+	// Per-workspace WebSocket connections, keyed by container ID.
+	wsConns   map[string]*wsConn
+	wsConnsMu sync.Mutex
 
 	// emitEvent is an optional callback for publishing platform events.
 	emitEvent func(eventType, detail string)
+}
+
+// wsConn holds a WebSocket connection to a workspace exec-server.
+type wsConn struct {
+	mu       sync.Mutex
+	ws       *websocket.Conn
+	lastUsed time.Time
 }
 
 // AdapterConfig holds all parameters needed to construct the adapter.
@@ -52,8 +64,6 @@ type AdapterConfig struct {
 	Debug         bool
 	DefaultPrompt string
 	WorkspaceDir  string
-	ExecMode      string
-	ExecWSURL     string
 	Tracker       *usage.Tracker
 }
 
@@ -64,9 +74,8 @@ func NewAdapter(cfg AdapterConfig) *AnthropicAdapter {
 		debug:         cfg.Debug,
 		defaultPrompt: cfg.DefaultPrompt,
 		workspaceDir:  cfg.WorkspaceDir,
-		execMode:      cfg.ExecMode,
-		execWSURL:     cfg.ExecWSURL,
 		tracker:       cfg.Tracker,
+		wsConns:       make(map[string]*wsConn),
 	}
 }
 
@@ -95,6 +104,11 @@ func (a *AnthropicAdapter) SetMCPConfig(path string) {
 // SetEmitEvent sets the event emission callback.
 func (a *AnthropicAdapter) SetEmitEvent(fn func(string, string)) {
 	a.emitEvent = fn
+}
+
+// SetSDK sets the plugin SDK client for cross-plugin calls.
+func (a *AnthropicAdapter) SetSDK(client *pluginsdk.Client) {
+	a.sdk = client
 }
 
 // CyclePool cycles the CLI process pool.
@@ -132,15 +146,23 @@ func (a *AnthropicAdapter) ApplyConfig(config map[string]string) {
 // The req.Tools field is ignored since tools are discovered by the CLI directly.
 func (a *AnthropicAdapter) StreamChat(ctx context.Context, req agentkit.ProviderRequest, sink agentkit.EventSink) (agentkit.ProviderResult, error) {
 	a.mu.RLock()
-	execMode := a.execMode
-	execWSURL := a.execWSURL
 	mcpConfig := a.mcpConfig
 	debug := a.debug
 	a.mu.RUnlock()
 
-	if execMode == "remote" && execWSURL != "" {
-		return a.streamRemote(ctx, req, sink, execWSURL, mcpConfig, debug)
+	// Per-conversation workspace routing: resolve workspace to container exec URL.
+	if req.WorkspaceID != "" && a.sdk != nil {
+		containerID, status, err := a.resolveWorkspace(ctx, req.WorkspaceID)
+		if err != nil {
+			return agentkit.ProviderResult{}, fmt.Errorf("workspace resolution failed: %w", err)
+		}
+		if status != "running" {
+			return agentkit.ProviderResult{}, fmt.Errorf("workspace %s is not running (status: %s)", req.WorkspaceID, status)
+		}
+		wsURL := fmt.Sprintf("ws://teamagentica-mc-%s:9100/exec", containerID)
+		return a.streamWorkspace(ctx, req, sink, containerID, wsURL, mcpConfig, debug)
 	}
+
 	return a.streamCLI(ctx, req, sink, mcpConfig, debug)
 }
 
@@ -164,13 +186,19 @@ func (a *AnthropicAdapter) streamCLI(ctx context.Context, req agentkit.ProviderR
 		prompt = buildPromptWithSystem(messages, systemPrompt)
 	}
 
-	// Extract extra options from the request context (workspace, session, max_turns).
-	// These are passed via message metadata when available.
+	// Attach image URLs. For the local CLI backend we download each URL to a
+	// temp file and @-mention the path so Claude CLI loads it as an image
+	// attachment (its native mechanism for vision input).
+	imageURLs := collectImageURLs(req, messages)
+	var tempFiles []string
+	prompt, tempFiles = attachLocalImages(prompt, imageURLs)
+	defer func() {
+		for _, p := range tempFiles {
+			_ = os.Remove(p)
+		}
+	}()
+
 	var opts *claudecli.ChatOptions
-	// Note: workspace/session info was previously extracted from AgentChatRequest
-	// fields. In agentkit mode, these aren't directly available in ProviderRequest.
-	// The agentkit runtime passes only conversation messages. This is a known
-	// limitation — workspace-scoped sessions require a future agentkit extension.
 
 	maxTurns := 0
 
@@ -259,15 +287,6 @@ func (a *AnthropicAdapter) streamCLI(ctx context.Context, req agentkit.ProviderR
 
 // --- Remote exec backend ---
 
-type remoteProxyConn struct {
-	mu   sync.Mutex
-	ws   *websocket.Conn
-	url  string
-	init bool
-}
-
-var remoteConn remoteProxyConn
-
 type remoteUserMessage struct {
 	Type           string `json:"type"`
 	Prompt         string `json:"prompt"`
@@ -281,8 +300,31 @@ type remoteInitMessage struct {
 	MaxTurns     int    `json:"max_turns"`
 }
 
-// streamRemote handles the remote WebSocket exec server backend.
-func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.ProviderRequest, sink agentkit.EventSink, execWSURL, mcpConfig string, debug bool) (agentkit.ProviderResult, error) {
+// resolveWorkspace calls workspace-manager to look up a workspace's container ID and status.
+func (a *AnthropicAdapter) resolveWorkspace(ctx context.Context, workspaceID string) (containerID, status string, err error) {
+	data, err := a.sdk.RouteToPlugin(ctx, "workspace-manager", "GET", "/workspaces/"+workspaceID, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("workspace lookup: %w", err)
+	}
+	var ws struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &ws); err != nil {
+		return "", "", fmt.Errorf("decode workspace: %w", err)
+	}
+	return ws.ID, ws.Status, nil
+}
+
+// streamWorkspace handles per-conversation workspace connections via the exec-server
+// running inside the workspace container. Each container gets its own pooled WebSocket.
+func (a *AnthropicAdapter) streamWorkspace(ctx context.Context, req agentkit.ProviderRequest, sink agentkit.EventSink, containerID, wsURL, mcpConfig string, debug bool) (agentkit.ProviderResult, error) {
+	return a.streamRemoteWith(ctx, req, sink, containerID, wsURL, mcpConfig, debug, "workspace")
+}
+
+// streamRemoteWith is the shared implementation for remote exec streaming.
+// connKey identifies the connection in the pool (container ID or "legacy").
+func (a *AnthropicAdapter) streamRemoteWith(ctx context.Context, req agentkit.ProviderRequest, sink agentkit.EventSink, connKey, wsURL, mcpConfig string, debug bool, backend string) (agentkit.ProviderResult, error) {
 	model := req.Model
 
 	systemPrompt := req.SystemPrompt
@@ -296,19 +338,36 @@ func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.Provid
 		prompt = buildPromptWithSystem(messages, systemPrompt)
 	}
 
-	ws, err := a.ensureRemoteConn(execWSURL, model, systemPrompt, mcpConfig)
-	if err != nil {
-		return agentkit.ProviderResult{}, fmt.Errorf("remote connect: %w", err)
-	}
+	// Remote backend: local file paths from this container are invisible inside
+	// the workspace, so annotate the prompt with the raw URLs. The CLI running
+	// on the other side can fetch via WebFetch or MCP tools.
+	imageURLs := collectImageURLs(req, messages)
+	prompt = annotateRemoteImages(prompt, imageURLs)
 
 	msg := remoteUserMessage{
-		Type:   "message",
-		Prompt: prompt,
+		Type:           "message",
+		Prompt:         prompt,
+		ConversationID: req.SessionID,
 	}
 	data, _ := json.Marshal(msg)
-	if err := ws.WriteMessage(websocket.TextMessage, data); err != nil {
-		a.resetRemoteConn()
-		return agentkit.ProviderResult{}, fmt.Errorf("remote write: %w", err)
+
+	// Connect and send, with one retry on dead connection.
+	var ws *websocket.Conn
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		ws, err = a.ensureConn(connKey, wsURL, model, systemPrompt, mcpConfig)
+		if err != nil {
+			return agentkit.ProviderResult{}, fmt.Errorf("%s connect: %w", backend, err)
+		}
+		if err = ws.WriteMessage(websocket.TextMessage, data); err == nil {
+			break
+		}
+		// Write failed — connection dead, reconnect.
+		log.Printf("[%s] write failed, reconnecting to %s", backend, connKey)
+		a.resetConn(connKey)
+	}
+	if err != nil {
+		return agentkit.ProviderResult{}, fmt.Errorf("%s write: %w", backend, err)
 	}
 
 	start := time.Now()
@@ -321,8 +380,8 @@ func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.Provid
 	for {
 		_, rawMsg, err := ws.ReadMessage()
 		if err != nil {
-			a.resetRemoteConn()
-			return agentkit.ProviderResult{}, fmt.Errorf("remote read: %w", err)
+			a.resetConn(connKey)
+			return agentkit.ProviderResult{}, fmt.Errorf("%s read: %w", backend, err)
 		}
 
 		var ev claudecli.StreamEvent
@@ -331,8 +390,8 @@ func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.Provid
 		}
 
 		if ev.ErrMsg != "" {
-			log.Printf("[remote] error: %s", ev.ErrMsg)
-			return agentkit.ProviderResult{}, fmt.Errorf("remote: %s", ev.ErrMsg)
+			log.Printf("[%s] error: %s", backend, ev.ErrMsg)
+			return agentkit.ProviderResult{}, fmt.Errorf("%s: %s", backend, ev.ErrMsg)
 		}
 
 		if ev.Text != "" {
@@ -375,17 +434,17 @@ func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.Provid
 			TotalTokens:  totalInput + totalOutput,
 			CachedTokens: cachedTokens,
 			DurationMs:   elapsed.Milliseconds(),
-			Backend:      "remote",
+			Backend:      backend,
 		})
 	}
 
 	if a.emitEvent != nil {
 		if debug {
-			a.emitEvent("chat_response", fmt.Sprintf("backend=remote model=%s tokens=%d+%d cost=$%.4f time=%dms turns=%d response=%s",
-				respModel, totalInput, totalOutput, costUSD, elapsed.Milliseconds(), numTurns, truncate(fullResponse, 200)))
+			a.emitEvent("chat_response", fmt.Sprintf("backend=%s model=%s tokens=%d+%d cost=$%.4f time=%dms turns=%d response=%s",
+				backend, respModel, totalInput, totalOutput, costUSD, elapsed.Milliseconds(), numTurns, truncate(fullResponse, 200)))
 		} else {
-			a.emitEvent("chat_response", fmt.Sprintf("backend=remote model=%s tokens=%d+%d cost=$%.4f time=%dms turns=%d len=%d",
-				respModel, totalInput, totalOutput, costUSD, elapsed.Milliseconds(), numTurns, len(fullResponse)))
+			a.emitEvent("chat_response", fmt.Sprintf("backend=%s model=%s tokens=%d+%d cost=$%.4f time=%dms turns=%d len=%d",
+				backend, respModel, totalInput, totalOutput, costUSD, elapsed.Milliseconds(), numTurns, len(fullResponse)))
 		}
 	}
 
@@ -399,15 +458,18 @@ func (a *AnthropicAdapter) streamRemote(ctx context.Context, req agentkit.Provid
 	}, nil
 }
 
-func (a *AnthropicAdapter) ensureRemoteConn(wsURL, model, systemPrompt, mcpConfig string) (*websocket.Conn, error) {
-	remoteConn.mu.Lock()
-	defer remoteConn.mu.Unlock()
+// ensureConn returns (or creates) a WebSocket connection to a workspace exec-server.
+// Connections are pooled by key (container ID or "legacy" for static mode).
+func (a *AnthropicAdapter) ensureConn(key, wsURL, model, systemPrompt, mcpConfig string) (*websocket.Conn, error) {
+	a.wsConnsMu.Lock()
+	defer a.wsConnsMu.Unlock()
 
-	if remoteConn.ws != nil && remoteConn.init {
-		return remoteConn.ws, nil
+	if conn, ok := a.wsConns[key]; ok && conn.ws != nil {
+		conn.lastUsed = time.Now()
+		return conn.ws, nil
 	}
 
-	log.Printf("[remote] connecting to %s", wsURL)
+	log.Printf("[workspace] connecting to %s (%s)", key, wsURL)
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", wsURL, err)
@@ -433,21 +495,36 @@ func (a *AnthropicAdapter) ensureRemoteConn(wsURL, model, systemPrompt, mcpConfi
 		return nil, fmt.Errorf("unexpected status: %v", resp)
 	}
 
-	remoteConn.ws = ws
-	remoteConn.url = wsURL
-	remoteConn.init = true
-
-	log.Printf("[remote] connected to workspace exec server")
+	a.wsConns[key] = &wsConn{ws: ws, lastUsed: time.Now()}
+	log.Printf("[workspace] connected to %s", key)
 	return ws, nil
 }
 
-func (a *AnthropicAdapter) resetRemoteConn() {
-	remoteConn.mu.Lock()
-	defer remoteConn.mu.Unlock()
-	if remoteConn.ws != nil {
-		remoteConn.ws.Close()
-		remoteConn.ws = nil
-		remoteConn.init = false
+// resetConn closes and removes a pooled WebSocket connection.
+func (a *AnthropicAdapter) resetConn(key string) {
+	a.wsConnsMu.Lock()
+	defer a.wsConnsMu.Unlock()
+	if conn, ok := a.wsConns[key]; ok {
+		if conn.ws != nil {
+			conn.ws.Close()
+		}
+		delete(a.wsConns, key)
+	}
+}
+
+// CleanIdleConns closes WebSocket connections idle longer than maxIdle.
+func (a *AnthropicAdapter) CleanIdleConns(maxIdle time.Duration) {
+	a.wsConnsMu.Lock()
+	defer a.wsConnsMu.Unlock()
+	now := time.Now()
+	for key, conn := range a.wsConns {
+		if now.Sub(conn.lastUsed) > maxIdle {
+			log.Printf("[workspace] closing idle connection to %s", key)
+			if conn.ws != nil {
+				conn.ws.Close()
+			}
+			delete(a.wsConns, key)
+		}
 	}
 }
 
@@ -456,9 +533,93 @@ func (a *AnthropicAdapter) resetRemoteConn() {
 func toAnthropicMessages(msgs []agentkit.Message) []anthropic.Message {
 	out := make([]anthropic.Message, len(msgs))
 	for i, m := range msgs {
-		out[i] = anthropic.Message{Role: m.Role, Content: m.Content}
+		out[i] = anthropic.Message{
+			Role:      m.Role,
+			Content:   m.Content,
+			ImageURLs: append([]string(nil), m.ImageURLs...),
+		}
 	}
 	return out
+}
+
+// collectImageURLs returns the union of top-level request image URLs and
+// any ImageURLs attached to user messages. agentkit's convertSDKMessages
+// attaches req.ImageURLs onto the last user Message, so in practice these
+// overlap — we de-duplicate here so callers can use either entry point.
+func collectImageURLs(req agentkit.ProviderRequest, messages []anthropic.Message) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(u string) {
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	for _, u := range req.ImageURLs {
+		add(u)
+	}
+	for _, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		for _, u := range m.ImageURLs {
+			add(u)
+		}
+	}
+	return out
+}
+
+// attachLocalImages downloads each URL to a temp file and returns:
+//   - the prompt with `@<path>` mentions appended (Claude CLI treats these
+//     as local-file attachments and reads them before responding)
+//   - the list of temp paths the caller must clean up once the stream ends
+//
+// Any URL that fails to download is logged and falls through to a bracketed
+// URL note so the model still knows an image was attached.
+func attachLocalImages(prompt string, urls []string) (string, []string) {
+	if len(urls) == 0 {
+		return prompt, nil
+	}
+	var mentions []string
+	var notes []string
+	var tempFiles []string
+	for _, u := range urls {
+		path, err := anthropic.DownloadImage(u)
+		if err != nil {
+			log.Printf("[anthropic] image download failed (%s): %v", u, err)
+			notes = append(notes, fmt.Sprintf("[attached image URL: %s]", u))
+			continue
+		}
+		tempFiles = append(tempFiles, path)
+		mentions = append(mentions, "@"+path)
+	}
+	parts := []string{prompt}
+	if len(mentions) > 0 {
+		parts = append(parts, strings.Join(mentions, " "))
+	}
+	if len(notes) > 0 {
+		parts = append(parts, strings.Join(notes, "\n"))
+	}
+	return strings.Join(parts, "\n\n"), tempFiles
+}
+
+// annotateRemoteImages appends bracketed URL notes to the prompt for remote
+// (workspace) backends. Local file paths from the agent container are not
+// accessible inside the workspace container, so we hand the model the raw
+// URL and let its tools (WebFetch/Read) pull the content.
+func annotateRemoteImages(prompt string, urls []string) string {
+	if len(urls) == 0 {
+		return prompt
+	}
+	notes := make([]string, 0, len(urls))
+	for _, u := range urls {
+		notes = append(notes, fmt.Sprintf("[attached image URL: %s]", u))
+	}
+	return prompt + "\n\n" + strings.Join(notes, "\n")
 }
 
 func lastUserMessage(messages []anthropic.Message) string {

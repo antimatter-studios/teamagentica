@@ -2,7 +2,7 @@ id: agent-anthropic
 name: "Anthropic Agent"
 description: "AI agent powered by Anthropic Claude models with CLI and API backends, workspace support, and MCP integration"
 group: agents
-version: "1.0.81"
+version: "1.0.91"
 image: "teamagentica-agent-anthropic:latest"
 author: teamagentica
 tags: [chat, ai, agent, claude, anthropic]

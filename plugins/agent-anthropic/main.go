@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -65,8 +66,6 @@ func main() {
 	dataPath := configOrDefault(pluginConfig, "CLAUDE_DATA_PATH", "/data")
 	cliBinary := configOrDefault(pluginConfig, "CLAUDE_CLI_BINARY", "/usr/local/bin/claude")
 	workspaceDir := configOrDefault(pluginConfig, "WORKSPACE_DIR", "/workspaces")
-	execMode := configOrDefault(pluginConfig, "CLAUDE_EXEC_MODE", "local")
-	execWSURL := pluginConfig["CLAUDE_EXEC_WS_URL"]
 	debug := pluginConfig["PLUGIN_DEBUG"] == "true"
 
 	cliTimeout := 600
@@ -109,17 +108,11 @@ func main() {
 		Debug:         debug,
 		DefaultPrompt: defaultSystemPrompt,
 		WorkspaceDir:  workspaceDir,
-		ExecMode:      execMode,
-		ExecWSURL:     execWSURL,
 		Tracker:       h.Tracker(),
 	})
 
-	if execMode == "remote" {
-		log.Printf("[remote] exec mode enabled: %s", execWSURL)
-	}
-
-	// Initialise the CLI backend if configured (skip in remote mode — CLI runs in workspace).
-	if backend == "cli" && execMode != "remote" {
+	// Initialise the CLI backend if configured.
+	if backend == "cli" {
 		log.Println("[cli] initialising Claude CLI backend")
 		workdir := dataPath + "/claude-workspace"
 		claudeDir := configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude")
@@ -165,11 +158,21 @@ func main() {
 
 	router := gin.Default()
 
-	// Wire event emission from the adapter to the SDK.
+	// Wire SDK and event emission into the adapter.
 	h.SetSDK(sdkClient)
+	adapter.SetSDK(sdkClient)
 	adapter.SetEmitEvent(func(eventType, detail string) {
 		sdkClient.PublishEvent(eventType, detail)
 	})
+
+	// Periodically clean up idle workspace connections.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			adapter.CleanIdleConns(10 * time.Minute)
+		}
+	}()
 
 	// Register core agent routes via agentkit (/chat, /health, /mcp).
 	agentkit.RegisterAgentChat(router, sdkClient, adapter, defaultSystemPrompt,
@@ -281,7 +284,7 @@ func main() {
 	// --- Workspace environment mode ---
 	// When running as a workspace environment, start the ExecServer on :9100
 	// and register with workspace-manager so it can spawn workspace containers.
-	if backend == "cli" && execMode != "remote" {
+	if backend == "cli" {
 		skipPerms := pluginConfig["CLAUDE_SKIP_PERMISSIONS"] == "true"
 		wsCliClient := claudecli.NewClient(cliBinary, workspaceDir, configOrDefault(pluginConfig, "CLAUDE_CONFIG_DIR", "/home/coder/.claude"), cliTimeout, debug)
 		wsCliClient.SetPoolMax(1)
