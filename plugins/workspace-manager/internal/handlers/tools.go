@@ -154,6 +154,7 @@ func (h *Handler) Tools(c *gin.Context) {
 }
 
 // ToolListEnvironments handles POST /mcp/list_environments.
+// Hides environments whose owning plugin is currently disabled.
 func (h *Handler) ToolListEnvironments(c *gin.Context) {
 	recs, err := h.db.ListEnvironments()
 	if err != nil {
@@ -161,8 +162,22 @@ func (h *Handler) ToolListEnvironments(c *gin.Context) {
 		return
 	}
 
+	enabled := map[string]bool{}
+	if plugins, err := h.sdk.SearchPlugins("workspace:environment"); err == nil {
+		for _, p := range plugins {
+			enabled[p.ID] = true
+		}
+	} else {
+		for _, r := range recs {
+			enabled[r.PluginID] = true
+		}
+	}
+
 	envs := make([]gin.H, 0, len(recs))
 	for _, r := range recs {
+		if !enabled[r.PluginID] {
+			continue
+		}
 		envs = append(envs, gin.H{
 			"environment_id": r.PluginID,
 			"name":           r.DisplayName,

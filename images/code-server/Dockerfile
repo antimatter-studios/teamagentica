@@ -11,6 +11,7 @@ USER root
 
 # Dev tools: git, neovim, jq, tmux (code-server base already has node/npm/curl)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
     neovim \
     jq \
     tmux \

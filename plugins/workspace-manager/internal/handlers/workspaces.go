@@ -180,7 +180,9 @@ type environmentInfo struct {
 	Icon        string `json:"icon,omitempty"`
 }
 
-// ListEnvironments returns all registered workspace environments from the local DB.
+// ListEnvironments returns all registered workspace environments from the local DB,
+// filtered to only those whose owning plugin is currently enabled. Env records for
+// disabled (or uninstalled) plugins remain in the DB but are hidden from the list.
 func (h *Handler) ListEnvironments(c *gin.Context) {
 	recs, err := h.db.ListEnvironments()
 	if err != nil {
@@ -189,8 +191,23 @@ func (h *Handler) ListEnvironments(c *gin.Context) {
 		return
 	}
 
+	enabled := map[string]bool{}
+	if plugins, err := h.sdk.SearchPlugins("workspace:environment"); err == nil {
+		for _, p := range plugins {
+			enabled[p.ID] = true
+		}
+	} else {
+		log.Printf("workspace:environment plugin search failed, skipping enabled filter: %v", err)
+		for _, r := range recs {
+			enabled[r.PluginID] = true
+		}
+	}
+
 	envs := make([]environmentInfo, 0, len(recs))
 	for _, r := range recs {
+		if !enabled[r.PluginID] {
+			continue
+		}
 		envs = append(envs, environmentInfo{
 			PluginID:    r.PluginID,
 			Name:        r.DisplayName,
@@ -386,21 +403,6 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		}
 	}
 
-	// Git clone into workspace disk if requested (only for new disks).
-	if req.GitRepo != "" && req.DiskID == "" && workspaceDiskPath != "" {
-		cmd := exec.CommandContext(ctx, "git", "clone", req.GitRepo, ".")
-		cmd.Dir = workspaceDiskPath
-		if out, err := cmd.CombinedOutput(); err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "git clone failed: " + string(out)})
-			return
-		}
-		if req.GitRef != "" {
-			checkout := exec.CommandContext(ctx, "git", "checkout", req.GitRef)
-			checkout.Dir = workspaceDiskPath
-			checkout.CombinedOutput()
-		}
-	}
-
 	// Run workspace-type-specific setup scripts.
 	for _, script := range ws.SetupScripts {
 		switch script {
@@ -415,6 +417,14 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	env := make(map[string]string)
 	for k, v := range ws.EnvDefaults {
 		env[k] = v
+	}
+	// Entrypoint clones on first start if /workspace is empty; failures leave a
+	// .git-clone-error marker inside the workspace so the user can fix manually.
+	if req.GitRepo != "" && req.DiskID == "" {
+		env["GIT_REPO"] = req.GitRepo
+		if req.GitRef != "" {
+			env["GIT_REF"] = req.GitRef
+		}
 	}
 
 	// Build cmd: base cmd + extra args from schema.
