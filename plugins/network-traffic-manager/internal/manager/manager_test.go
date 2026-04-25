@@ -86,6 +86,63 @@ func TestStop_UnknownTunnel(t *testing.T) {
 	}
 }
 
+func TestAddOrReplace_RequiresNameAndDriver(t *testing.T) {
+	m := New()
+	if _, err := m.AddOrReplace(context.Background(), Spec{Driver: "ngrok"}); err == nil {
+		t.Error("expected error with empty name")
+	}
+	if _, err := m.AddOrReplace(context.Background(), Spec{Name: "a"}); err == nil {
+		t.Error("expected error with empty driver")
+	}
+}
+
+func TestAddOrReplace_InsertsWithoutAutoStart(t *testing.T) {
+	m := New()
+	view, err := m.AddOrReplace(context.Background(), Spec{Name: "t1", Driver: "ngrok", Target: "host:1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if view.Spec.Name != "t1" {
+		t.Errorf("view.Spec.Name=%q", view.Spec.Name)
+	}
+	if list := m.List(); len(list) != 1 {
+		t.Errorf("expected 1 tunnel, got %d", len(list))
+	}
+}
+
+func TestAddOrReplace_ReplacesSameName(t *testing.T) {
+	m := New()
+	if _, err := m.AddOrReplace(context.Background(), Spec{Name: "t1", Driver: "ngrok", Target: "old:1"}); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if _, err := m.AddOrReplace(context.Background(), Spec{Name: "t1", Driver: "ngrok", Target: "new:2"}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	v, ok := m.Get("t1")
+	if !ok || v.Spec.Target != "new:2" {
+		t.Errorf("expected replaced target, got %+v ok=%v", v, ok)
+	}
+	if list := m.List(); len(list) != 1 {
+		t.Errorf("expected still 1 tunnel after replace, got %d", len(list))
+	}
+}
+
+func TestRemove_Idempotent(t *testing.T) {
+	m := New()
+	if err := m.Remove(context.Background(), "nope"); err != nil {
+		t.Errorf("Remove unknown should be nil, got %v", err)
+	}
+	if _, err := m.AddOrReplace(context.Background(), Spec{Name: "t1", Driver: "ngrok", Target: "h:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Remove(context.Background(), "t1"); err != nil {
+		t.Errorf("Remove: %v", err)
+	}
+	if list := m.List(); len(list) != 0 {
+		t.Errorf("expected 0 tunnels after remove, got %d", len(list))
+	}
+}
+
 func TestSpecsEqual(t *testing.T) {
 	a := Spec{Name: "x", Driver: "ngrok", Config: map[string]string{"k": "v"}}
 	b := Spec{Name: "x", Driver: "ngrok", Config: map[string]string{"k": "v"}}

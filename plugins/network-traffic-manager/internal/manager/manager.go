@@ -182,6 +182,67 @@ func (m *Manager) Start(ctx context.Context, name string) (drivers.Status, error
 	return st, nil
 }
 
+// AddOrReplace inserts (or replaces) a single tunnel spec at runtime. If a
+// tunnel with the same name already exists and its spec differs, the old
+// driver is stopped first. If AutoStart is true the new tunnel is started
+// immediately; otherwise it stays stopped until Start is called.
+func (m *Manager) AddOrReplace(ctx context.Context, spec Spec) (TunnelView, error) {
+	if spec.Name == "" {
+		return TunnelView{}, fmt.Errorf("spec.name required")
+	}
+	if spec.Driver == "" {
+		return TunnelView{}, fmt.Errorf("spec.driver required")
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.tunnels[spec.Name]; ok {
+		if specsEqual(existing.spec, spec) {
+			m.mu.Unlock()
+			if spec.AutoStart {
+				if _, err := m.Start(ctx, spec.Name); err != nil {
+					log.Printf("[tunnel-manager] start %q: %v", spec.Name, err)
+				}
+			}
+			v, _ := m.Get(spec.Name)
+			return v, nil
+		}
+		if existing.driver != nil {
+			_ = existing.driver.Stop(ctx)
+		}
+		delete(m.tunnels, spec.Name)
+	}
+	m.tunnels[spec.Name] = &tunnel{spec: spec}
+	m.order = orderedNamesFromMap(m.tunnels)
+	m.mu.Unlock()
+
+	if spec.AutoStart {
+		if _, err := m.Start(ctx, spec.Name); err != nil {
+			return TunnelView{}, fmt.Errorf("start %q: %w", spec.Name, err)
+		}
+	}
+	v, _ := m.Get(spec.Name)
+	return v, nil
+}
+
+// Remove stops and deletes the named tunnel. Idempotent: returns nil if the
+// tunnel doesn't exist.
+func (m *Manager) Remove(ctx context.Context, name string) error {
+	m.mu.Lock()
+	t, ok := m.tunnels[name]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	driver := t.driver
+	delete(m.tunnels, name)
+	m.order = orderedNamesFromMap(m.tunnels)
+	m.mu.Unlock()
+	if driver != nil {
+		return driver.Stop(ctx)
+	}
+	return nil
+}
+
 // Stop stops the named tunnel. Idempotent: if already stopped, returns nil.
 func (m *Manager) Stop(ctx context.Context, name string) error {
 	m.mu.RLock()
@@ -312,11 +373,23 @@ func orderedNames(specs map[string]Spec) []string {
 	for name := range specs {
 		out = append(out, name)
 	}
-	// Stable order: alphabetical — keeps List() deterministic.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
+	sortStrings(out)
+	return out
+}
+
+func orderedNamesFromMap(m map[string]*tunnel) []string {
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	sortStrings(out)
+	return out
+}
+
+func sortStrings(a []string) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j-1] > a[j]; j-- {
+			a[j-1], a[j] = a[j], a[j-1]
 		}
 	}
-	return out
 }

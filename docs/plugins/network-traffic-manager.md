@@ -35,6 +35,17 @@
 - `authtoken` *(required)* — ngrok auth token
 - `domain` *(optional)* — static/reserved domain
 
+**ssh-reverse** — reverse port-forward (`ssh -R` semantics) through a user-owned public SSH bastion. The bastion accepts inbound connections on a remote port and pipes them back to the tunnel's target over the SSH session.
+- `host` *(required)* — bastion hostname/IP
+- `port` *(default 22)* — SSH port
+- `user` *(required)* — bastion SSH user
+- `private_key` or `password` *(one required)* — OpenSSH PEM key preferred
+- `remote_bind_host` *(default 0.0.0.0)* — bastion bind host
+- `remote_bind_port` *(default 0 = bastion-assigned)* — stable port on bastion
+- `known_hosts` *(optional)* — pinned host keys in authorized_keys format (empty = accept any, insecure)
+
+> Bastion must have `GatewayPorts yes` if you want the remote forward reachable from outside the bastion's loopback.
+
 ### Parity with old network-ngrok-ingress
 
 ```json

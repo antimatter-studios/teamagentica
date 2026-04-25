@@ -13,6 +13,8 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk/events"
 	"github.com/antimatter-studios/teamagentica/plugins/network-traffic-manager/internal/drivers"
 	_ "github.com/antimatter-studios/teamagentica/plugins/network-traffic-manager/internal/drivers/ngrok"
+	_ "github.com/antimatter-studios/teamagentica/plugins/network-traffic-manager/internal/drivers/sshjumphost"
+	_ "github.com/antimatter-studios/teamagentica/plugins/network-traffic-manager/internal/drivers/sshreverse"
 	"github.com/antimatter-studios/teamagentica/plugins/network-traffic-manager/internal/manager"
 )
 
@@ -119,6 +121,27 @@ func main() {
 		}
 		writeJSON(w, http.StatusOK, t)
 	})
+	mux.HandleFunc("POST /tunnels", func(w http.ResponseWriter, r *http.Request) {
+		var spec manager.Spec
+		if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		view, err := mgr.AddOrReplace(r.Context(), spec)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	})
+	mux.HandleFunc("DELETE /tunnels/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if err := mgr.Remove(r.Context(), name); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"state": "removed"})
+	})
 	mux.HandleFunc("POST /tunnels/{name}/start", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		st, err := mgr.Start(r.Context(), name)
@@ -180,9 +203,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func getConfigSchema() map[string]pluginsdk.ConfigSchemaField {
 	return map[string]pluginsdk.ConfigSchemaField{
 		"TUNNELS": {
-			Type:     "string",
-			Label:    "Tunnels (JSON array)",
-			HelpText: `JSON array: [{"name":"ingress","driver":"ngrok","auto_start":true,"role":"ingress","target":"webhook","config":{"authtoken":"...","domain":"..."}}]`,
+			Type:     "tunnels",
+			Label:    "Tunnels",
+			HelpText: "Named tunnels managed by this plugin. Add a tunnel, pick a driver (ngrok or ssh-reverse), and fill in its config.",
 		},
 		"HTTP_PORT": {
 			Type:     "number",
