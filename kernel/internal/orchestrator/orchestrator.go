@@ -239,9 +239,9 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 	// Stop existing container and clear stale registration data before starting
 	// the new container. Clearing host/last_seen here (not after StartPlugin)
 	// prevents a race where the new container registers before the DB update runs.
-	if plugin.ContainerID != "" {
-		o.emit("stop", plugin.ID, fmt.Sprintf("stopping old container=%s", plugin.ContainerID[:12]))
-		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
+	if plugin.ContainerID != "" || len(plugin.GetContainerIDs()) > 0 {
+		o.emit("stop", plugin.ID, fmt.Sprintf("stopping old pod for plugin=%s", plugin.ID))
+		_ = o.runtime.StopPluginPod(ctx, plugin)
 	}
 	o.db().Model(plugin).Updates(map[string]interface{}{
 		"container_id": "",
@@ -291,7 +291,10 @@ func (o *Orchestrator) startPlugin(ctx context.Context, plugin *models.Plugin) {
 		return
 	}
 
-	o.db().Model(plugin).Update("container_id", containerID)
+	o.db().Model(plugin).Updates(map[string]interface{}{
+		"container_id":  containerID,
+		"container_ids": plugin.ContainerIDs,
+	})
 
 	log.Printf("orchestrator: started plugin %s (container=%s)", plugin.ID, containerID[:12])
 	o.emit("start", plugin.ID, fmt.Sprintf("running container=%s", containerID[:12]))
@@ -465,10 +468,10 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 
 	o.emit("restart", pluginID, "auto-restart triggered")
 
-	// Stop existing container if still around.
-	if plugin.ContainerID != "" {
-		o.emit("stop", pluginID, fmt.Sprintf("stopping container=%s", plugin.ContainerID[:12]))
-		_ = o.runtime.StopPlugin(ctx, plugin.ContainerID)
+	// Stop existing pod (api + sidecars) if still around.
+	if plugin.ContainerID != "" || len(plugin.GetContainerIDs()) > 0 {
+		o.emit("stop", pluginID, "stopping pod for plugin="+pluginID)
+		_ = o.runtime.StopPluginPod(ctx, &plugin)
 	}
 
 	env := map[string]string{
@@ -506,10 +509,11 @@ func (o *Orchestrator) RestartPlugin(ctx context.Context, pluginID string) error
 	}
 
 	o.db().Model(&plugin).Updates(map[string]interface{}{
-		"container_id": containerID,
-		"status":       "running",
-		"host":         "",
-		"last_seen":    time.Time{},
+		"container_id":  containerID,
+		"container_ids": plugin.ContainerIDs,
+		"status":        "running",
+		"host":          "",
+		"last_seen":     time.Time{},
 	})
 
 	log.Printf("orchestrator: auto-restarted plugin %s (container=%s)", pluginID, containerID[:12])
@@ -677,9 +681,9 @@ func (o *Orchestrator) StopAllPlugins(ctx context.Context) error {
 			continue
 		}
 
-		o.emit("stop", plugin.ID, fmt.Sprintf("stopping container=%s", plugin.ContainerID[:12]))
-		if err := o.runtime.StopPlugin(ctx, plugin.ContainerID); err != nil {
-			log.Printf("orchestrator: failed to stop plugin %s: %v", plugin.ID, err)
+		o.emit("stop", plugin.ID, "stopping pod for plugin="+plugin.ID)
+		if err := o.runtime.StopPluginPod(ctx, plugin); err != nil {
+			log.Printf("orchestrator: failed to stop pod for plugin %s: %v", plugin.ID, err)
 			o.emit("error", plugin.ID, fmt.Sprintf("stop failed: %v", err))
 			continue
 		}

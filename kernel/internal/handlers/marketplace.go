@@ -768,6 +768,56 @@ func applyManifest(plugin *models.Plugin, manifest map[string]interface{}, db *g
 			updates["shared_disks"] = plugin.SharedDisks
 		}
 	}
+	if dl, ok := manifest["docker_labels"]; ok && dl != nil {
+		// Accept either a flat map or a nested {"labels": {...}} shape under a
+		// top-level "docker" key. Here we expect "docker_labels" already flattened
+		// by the provider; otherwise inspect "docker.labels" below.
+		if b, err := json.Marshal(dl); err == nil {
+			plugin.DockerLabels = models.JSONRawString(b)
+			updates["docker_labels"] = plugin.DockerLabels
+		}
+	} else if dock, ok := manifest["docker"].(map[string]interface{}); ok {
+		if labels, ok := dock["labels"]; ok && labels != nil {
+			if b, err := json.Marshal(labels); err == nil {
+				plugin.DockerLabels = models.JSONRawString(b)
+				updates["docker_labels"] = plugin.DockerLabels
+			}
+		}
+	}
+	if ep, ok := manifest["extra_ports"]; ok && ep != nil {
+		if b, err := json.Marshal(ep); err == nil {
+			plugin.ExtraPorts = models.JSONRawString(b)
+			updates["extra_ports"] = plugin.ExtraPorts
+		}
+	}
+	// Multi-container plugin support. The `containers:` array lets a single
+	// plugin own a pod of containers (api + sidecars). Legacy single-container
+	// plugins omit this field and the runtime synthesizes a default container
+	// from the top-level image/labels/extra_ports.
+	if cs, ok := manifest["containers"]; ok && cs != nil {
+		raw, err := json.Marshal(cs)
+		if err == nil {
+			var specs []models.ContainerSpec
+			if err := json.Unmarshal(raw, &specs); err == nil && len(specs) > 0 {
+				apiCount := 0
+				for i := range specs {
+					if specs[i].Name == "" {
+						return fmt.Errorf("plugin %s: container at index %d missing name", plugin.ID, i)
+					}
+					if specs[i].Role == "api" {
+						apiCount++
+					} else if specs[i].Role != "sidecar" && specs[i].Role != "" {
+						return fmt.Errorf("plugin %s: container %q has invalid role %q (must be api or sidecar)", plugin.ID, specs[i].Name, specs[i].Role)
+					}
+				}
+				if apiCount != 1 {
+					return fmt.Errorf("plugin %s: must have exactly one container with role: api (found %d)", plugin.ID, apiCount)
+				}
+				plugin.SetContainers(specs)
+				updates["containers"] = plugin.Containers
+			}
+		}
+	}
 	if rs, ok := manifest["requested_scopes"].([]interface{}); ok {
 		var scopeStrings []string
 		for _, s := range rs {

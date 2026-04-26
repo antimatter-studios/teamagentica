@@ -203,6 +203,15 @@ func (c *Client) RestartPlugin(id string) error {
 	return err
 }
 
+// SetPluginDevMode calls POST /api/plugins/:id/dev-mode and toggles the
+// kernel into using each container's dev_image + dev_bind_mounts (or back).
+// The kernel restarts the plugin's pod so the new variant takes effect.
+func (c *Client) SetPluginDevMode(id string, enabled bool) error {
+	body := []byte(`{"enabled":` + map[bool]string{true: "true", false: "false"}[enabled] + `}`)
+	_, err := c.postJSON("/api/plugins/"+id+"/dev-mode", body)
+	return err
+}
+
 // UninstallPlugin calls DELETE /api/plugins/:id.
 func (c *Client) UninstallPlugin(id string) error {
 	return c.doSimple("DELETE", "/api/plugins/"+id)

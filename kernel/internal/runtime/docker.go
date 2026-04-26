@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/go-connections/nat"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -240,24 +242,110 @@ func (d *DockerRuntime) PullImage(ctx context.Context, imageRef string) error {
 	return nil
 }
 
-// StartPlugin creates and starts a container for the given plugin.
-// diskPaths maps disk names to host-side paths (resolved by the orchestrator via storage-disk API).
+// StartPlugin creates and starts the plugin's pod of containers. Returns the
+// api container's Docker ID (kernel uses it as the canonical ContainerID for
+// back-compat with single-container code paths). All container IDs are also
+// persisted on the plugin via SetContainerIDs.
+//
+// Multi-container plugins are described by plugin.GetEffectiveContainers().
+// Legacy single-container plugins synthesize a single api container from the
+// top-level Image / DockerLabels / ExtraPorts fields, so this path handles
+// both shapes uniformly.
+//
+// TODO: K8s adapter — a teamagentica plugin maps 1:1 to a native pod, so the
+// adapter should translate ContainerSpec[] into pod.spec.containers[] and the
+// kernel-managed network membership into pod metadata only.
 func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, env map[string]string, diskPaths map[string]string) (string, error) {
-	containerName := "teamagentica-plugin-" + plugin.ID
+	specs := plugin.GetEffectiveContainers()
+	if len(specs) == 0 {
+		return "", fmt.Errorf("plugin %s has no container specs", plugin.ID)
+	}
+
+	// Pre-compute the api container name so we know which one carries the env
+	// vars (mTLS certs, AGENT_*, etc.) and whose ID gets returned.
+	apiName := plugin.APIContainerName()
+
+	// Stop+remove any stale containers for this plugin (crashed, orphaned, etc.)
+	// before starting fresh ones. Iterate over all known names.
+	for _, s := range specs {
+		stale := podContainerName(plugin.ID, s.Name)
+		d.client.ContainerRemove(ctx, stale, container.RemoveOptions{Force: true})
+	}
+
+	createdIDs := map[string]string{}
+	var apiContainerID string
+
+	// Start order: declaration order. Sidecars typically need the api or a
+	// shared service to come up — we don't sequence by role because plugin
+	// authors should declare them in dependency order.
+	for _, spec := range specs {
+		isAPI := spec.Name == apiName
+		// Only the api container gets the kernel env (mTLS certs, AGENT_*, etc.).
+		// Sidecars receive a minimal env with the api container's hostname so
+		// they can call the api by name on the shared docker network.
+		var cEnv map[string]string
+		if isAPI {
+			cEnv = env
+		} else {
+			cEnv = map[string]string{
+				"PLUGIN_ID":          plugin.ID,
+				"PLUGIN_API_HOST":    podContainerName(plugin.ID, apiName),
+				"PLUGIN_CONTAINER":   spec.Name,
+			}
+			for k, v := range d.rtCfg.PluginEnv {
+				cEnv[k] = v
+			}
+		}
+
+		id, err := d.startContainerInPod(ctx, plugin, spec, isAPI, cEnv, diskPaths)
+		if err != nil {
+			// Roll back anything we already started.
+			for _, started := range createdIDs {
+				_ = d.client.ContainerRemove(ctx, started, container.RemoveOptions{Force: true})
+			}
+			return "", fmt.Errorf("start container %s/%s: %w", plugin.ID, spec.Name, err)
+		}
+		createdIDs[spec.Name] = id
+		if isAPI {
+			apiContainerID = id
+		}
+		log.Printf("plugin %s: started container %s (id=%s, role=%s)", plugin.ID, spec.Name, id[:12], spec.Role)
+	}
+
+	// Persist the per-container ID map. The api container ID is also returned
+	// (the caller writes it into Plugin.ContainerID for back-compat).
+	plugin.SetContainerIDs(createdIDs)
+
+	return apiContainerID, nil
+}
+
+// startContainerInPod creates and starts a single container belonging to a
+// plugin pod. The api container receives mTLS certs + agent env; sidecars
+// receive only the minimal cEnv passed in.
+func (d *DockerRuntime) startContainerInPod(ctx context.Context, plugin *models.Plugin, spec models.ContainerSpec, isAPI bool, env map[string]string, diskPaths map[string]string) (string, error) {
+	containerName := podContainerName(plugin.ID, spec.Name)
 
 	// Remove any stale container with the same name (crashed, orphaned, etc.).
 	d.client.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
 
-	// If cert manager is available, generate plugin certs and inject via env + mount.
+	// Pick image: dev variant when DevMode is on AND the spec defines one.
+	imageRef := spec.Image
+	if plugin.DevMode && spec.DevImage != "" {
+		imageRef = spec.DevImage
+		log.Printf("plugin %s: container %s using dev image %s", plugin.ID, spec.Name, imageRef)
+	}
+
+	// --- env injection ---
+	// Only the api container gets cert mounts and agent identity vars. Sidecars
+	// get whatever env the caller built for them.
 	var certMount *mount.Mount
-	if d.certManager != nil {
+	if isAPI && d.certManager != nil {
 		_, _, _, err := d.certManager.GeneratePluginCert(plugin.ID)
 		if err != nil {
 			return "", fmt.Errorf("generate plugin cert: %w", err)
 		}
 
 		certDir := d.certManager.GetPluginCertDir(plugin.ID)
-		// Translate container-internal path to host path for Docker bind mount.
 		hostCertDir := strings.Replace(certDir, "/data", d.dataDir, 1)
 
 		env["TEAMAGENTICA_TLS_CERT"] = filepath.Join("/certs", plugin.ID+".crt")
@@ -272,32 +360,31 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		}
 	}
 
-	// Inject agent identity env vars for RBAC.
-	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
-	env["AGENT_PLUGIN_ID"] = plugin.ID
-	env["AGENT_PROJECT_ID"] = "default"
-	env["AGENT_INSTANCE_ID"] = containerName
-	env["AGENT_PRINCIPAL"] = "agent:default:" + containerName
-	env["AGENT_TYPE"] = deriveAgentType(plugin.GetCapabilities())
-	env["AGENT_SESSION_ID"] = sessionID
+	if isAPI {
+		sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
+		env["AGENT_PLUGIN_ID"] = plugin.ID
+		env["AGENT_PROJECT_ID"] = "default"
+		env["AGENT_INSTANCE_ID"] = containerName
+		env["AGENT_PRINCIPAL"] = "agent:default:" + containerName
+		env["AGENT_TYPE"] = deriveAgentType(plugin.GetCapabilities())
+		env["AGENT_SESSION_ID"] = sessionID
 
-	// Inject extra env vars from runtime config (e.g. Go cache paths in dev).
-	for k, v := range d.rtCfg.PluginEnv {
-		env[k] = v
+		for k, v := range d.rtCfg.PluginEnv {
+			env[k] = v
+		}
 	}
 
-	// Group plugin containers with the kernel in Docker Desktop.
+	// Group containers under the kernel in Docker Desktop. Each container in
+	// a pod still shares the same compose project so they cluster together.
 	labels := map[string]string{
 		"com.docker.compose.project": "teamagentica",
-		"com.docker.compose.service": plugin.ID,
+		"com.docker.compose.service": plugin.ID + "-" + spec.Name,
 	}
 
-	// Assign a public subdomain for plugins that need direct browser access
-	// (e.g. code-server iframes that can't work behind a sub-path proxy).
-	if hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:editor") && d.baseDomain != "" {
+	// Workspace-editor public subdomain wiring — only on api container.
+	if isAPI && hasCapabilityPrefix(plugin.GetCapabilities(), "workspace:editor") && d.baseDomain != "" {
 		subdomain := "code." + d.baseDomain
 		proxyName := "teamagentica-" + plugin.ID
-		// Use the plugin's configured port from env, fall back to 8092.
 		pluginPort := env["INFRA_CODE_SERVER_PORT"]
 		if pluginPort == "" {
 			pluginPort = "8092"
@@ -308,81 +395,139 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 		env["TEAMAGENTICA_BASE_DOMAIN"] = d.baseDomain
 	}
 
-	// Build env slice (after all env mutations).
 	var envSlice []string
 	for k, v := range env {
 		envSlice = append(envSlice, k+"="+v)
 	}
 
+	// Container-spec docker labels (with ${ENV_VAR} substitution).
+	for k, v := range spec.DockerLabels {
+		resolvedKey := substituteEnvVars(k)
+		resolvedVal := substituteEnvVars(v)
+		if _, exists := labels[resolvedKey]; exists {
+			log.Printf("plugin %s container %s: docker label %q conflicts with kernel-internal label, skipping plugin value", plugin.ID, spec.Name, resolvedKey)
+			continue
+		}
+		labels[resolvedKey] = resolvedVal
+	}
+
 	cfg := &container.Config{
-		Image:    plugin.Image,
+		Image:    imageRef,
 		Hostname: containerName,
 		Env:      envSlice,
 		Labels:   labels,
 	}
 
-	// Build template vars for config resolution.
-	vars := d.templateVars(plugin.ID, pluginDir(plugin.Image))
-
-	// Data mount — strategy (bind vs volume) comes from runtime config.
-	// Every plugin gets its own /data directory for private storage.
-	dataSource := runtimecfg.Resolve(d.rtCfg.DataMount.Source, vars)
-	ensureBindDir(d.rtCfg.DataMount.Type, dataSource, d.dataDir)
-	dataMount := resolveMount(
-		runtimecfg.MountSpec{Type: d.rtCfg.DataMount.Type},
-		dataSource, "/data", "",
-	)
-
-	mounts := []mount.Mount{dataMount}
-	if certMount != nil {
-		mounts = append(mounts, *certMount)
-	}
-
-	// Extra mounts from runtime config (source code, SDK, Go caches in dev; empty in prod).
-	for _, pm := range d.rtCfg.PluginMounts {
-		src := runtimecfg.Resolve(pm.Source, vars)
-		tgt := pm.Target
-		sub := runtimecfg.Resolve(pm.Subpath, vars)
-		mounts = append(mounts, resolveMount(pm, src, tgt, sub))
-	}
-	if len(d.rtCfg.PluginMounts) > 0 {
-		log.Printf("mounting %d extra mount(s) for plugin %s", len(d.rtCfg.PluginMounts), plugin.ID)
-	}
-
-	// Shared disk mounts declared in plugin.yaml.
-	// Paths are resolved by the orchestrator via storage-disk's API — the kernel
-	// translates the storage-disk internal path to a host-side bind mount.
-	for _, sd := range plugin.GetSharedDisks() {
-		if sd.Name == "" || sd.Target == "" {
-			continue
+	// Container-spec extra ports.
+	var portBindings nat.PortMap
+	if len(spec.Ports) > 0 {
+		cfg.ExposedPorts = nat.PortSet{}
+		portBindings = nat.PortMap{}
+		for _, ep := range spec.Ports {
+			if ep.Internal <= 0 {
+				log.Printf("plugin %s container %s: port entry has invalid internal port %d, skipping", plugin.ID, spec.Name, ep.Internal)
+				continue
+			}
+			natPort, err := nat.NewPort("tcp", fmt.Sprintf("%d", ep.Internal))
+			if err != nil {
+				log.Printf("plugin %s container %s: invalid port %d: %v", plugin.ID, spec.Name, ep.Internal, err)
+				continue
+			}
+			cfg.ExposedPorts[natPort] = struct{}{}
+			binding := nat.PortBinding{HostIP: "0.0.0.0"}
+			if ep.External > 0 {
+				binding.HostPort = fmt.Sprintf("%d", ep.External)
+			}
+			portBindings[natPort] = []nat.PortBinding{binding}
 		}
-		hostPath, ok := diskPaths[sd.Name]
-		if !ok {
-			return "", fmt.Errorf("shared disk %q declared by plugin %s could not be resolved — storage-disk may be unavailable", sd.Name, plugin.ID)
-		}
-		mounts = append(mounts, mount.Mount{
-			Type:   mount.TypeBind,
-			Source: hostPath,
-			Target: sd.Target,
-		})
-		log.Printf("mounting shared disk %s into plugin %s at %s (host=%s)", sd.Name, plugin.ID, sd.Target, hostPath)
 	}
 
-	// Plugins with build:docker capability get access to the Docker socket.
-	if hasCapabilityPrefix(plugin.GetCapabilities(), "build:docker") {
-		mounts = append(mounts, mount.Mount{
-			Type:   mount.TypeBind,
-			Source: "/var/run/docker.sock",
-			Target: "/var/run/docker.sock",
-		})
-		log.Printf("mounting docker.sock into plugin %s (build:docker capability)", plugin.ID)
+	vars := d.templateVars(plugin.ID, pluginDir(imageRef))
+
+	mounts := []mount.Mount{}
+	// Data mount + cert + plugin runtime mounts only attach to the api container.
+	// Sidecars get a minimal filesystem; they can mount via shared_disks if needed.
+	if isAPI {
+		dataSource := runtimecfg.Resolve(d.rtCfg.DataMount.Source, vars)
+		ensureBindDir(d.rtCfg.DataMount.Type, dataSource, d.dataDir)
+		dataMount := resolveMount(
+			runtimecfg.MountSpec{Type: d.rtCfg.DataMount.Type},
+			dataSource, "/data", "",
+		)
+		mounts = append(mounts, dataMount)
+		if certMount != nil {
+			mounts = append(mounts, *certMount)
+		}
+
+		for _, pm := range d.rtCfg.PluginMounts {
+			src := runtimecfg.Resolve(pm.Source, vars)
+			tgt := pm.Target
+			sub := runtimecfg.Resolve(pm.Subpath, vars)
+			mounts = append(mounts, resolveMount(pm, src, tgt, sub))
+		}
+		if len(d.rtCfg.PluginMounts) > 0 {
+			log.Printf("mounting %d extra mount(s) for plugin %s api container", len(d.rtCfg.PluginMounts), plugin.ID)
+		}
+
+		for _, sd := range plugin.GetSharedDisks() {
+			if sd.Name == "" || sd.Target == "" {
+				continue
+			}
+			hostPath, ok := diskPaths[sd.Name]
+			if !ok {
+				return "", fmt.Errorf("shared disk %q declared by plugin %s could not be resolved — storage-disk may be unavailable", sd.Name, plugin.ID)
+			}
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: hostPath,
+				Target: sd.Target,
+			})
+			log.Printf("mounting shared disk %s into plugin %s at %s (host=%s)", sd.Name, plugin.ID, sd.Target, hostPath)
+		}
+
+		if hasCapabilityPrefix(plugin.GetCapabilities(), "build:docker") {
+			mounts = append(mounts, mount.Mount{
+				Type:   mount.TypeBind,
+				Source: "/var/run/docker.sock",
+				Target: "/var/run/docker.sock",
+			})
+			log.Printf("mounting docker.sock into plugin %s (build:docker capability)", plugin.ID)
+		}
+	}
+
+	// Dev bind mounts: substitute {{TEAMAGENTICA_REPO}} and validate host paths
+	// exist before letting Docker auto-create empty dirs as root.
+	if plugin.DevMode && len(spec.DevBindMounts) > 0 {
+		repo := os.Getenv("TEAMAGENTICA_REPO")
+		if repo == "" {
+			log.Printf("plugin %s container %s: dev_bind_mounts requested but TEAMAGENTICA_REPO is not set — skipping dev mounts", plugin.ID, spec.Name)
+		} else {
+			for _, bm := range spec.DevBindMounts {
+				host := strings.ReplaceAll(bm.Host, "{{TEAMAGENTICA_REPO}}", repo)
+				if _, err := os.Stat(host); err != nil {
+					return "", fmt.Errorf("dev bind mount host path %q does not exist: %w (refusing to let docker create as root)", host, err)
+				}
+				mounts = append(mounts, mount.Mount{
+					Type:     mount.TypeBind,
+					Source:   host,
+					Target:   bm.Container,
+					ReadOnly: bm.ReadOnly,
+				})
+				log.Printf("plugin %s container %s: dev bind %s -> %s", plugin.ID, spec.Name, host, bm.Container)
+			}
+		}
 	}
 
 	hostCfg := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 		Mounts:        mounts,
 	}
+	if len(portBindings) > 0 {
+		hostCfg.PortBindings = portBindings
+	}
 
+	// All containers in a pod join the same kernel-managed bridge network so
+	// they can resolve each other by container name (e.g. http://api:8080).
 	netCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			d.network: {},
@@ -393,12 +538,22 @@ func (d *DockerRuntime) StartPlugin(ctx context.Context, plugin *models.Plugin, 
 	if err != nil {
 		return "", fmt.Errorf("create container %s: %w", containerName, err)
 	}
-
 	if err := d.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("start container %s: %w", containerName, err)
 	}
-
 	return resp.ID, nil
+}
+
+// podContainerName builds the deterministic Docker container name for a
+// container inside a plugin pod. Single-container plugins use container name
+// "default" so the resulting name stays compatible with the legacy
+// "teamagentica-plugin-<id>" convention via a suffix.
+func podContainerName(pluginID, containerName string) string {
+	if containerName == "" || containerName == "default" {
+		// Backward compat: legacy single-container plugins kept this name.
+		return "teamagentica-plugin-" + pluginID
+	}
+	return "teamagentica-plugin-" + pluginID + "-" + containerName
 }
 
 // StartCandidatePlugin starts a candidate container alongside the primary.
@@ -412,6 +567,41 @@ func (d *DockerRuntime) StartCandidatePlugin(ctx context.Context, plugin *models
 	defer func() { plugin.ID = origID }()
 
 	return d.StartPlugin(ctx, plugin, env, diskPaths)
+}
+
+// StopPluginPod stops every container in a plugin's pod (api + sidecars) in
+// reverse declaration order so sidecars depending on the api shut down first.
+// Containers that don't exist (already removed/crashed) are treated as success.
+//
+// TODO: K8s adapter — pod deletion is a single API call.
+func (d *DockerRuntime) StopPluginPod(ctx context.Context, plugin *models.Plugin) error {
+	specs := plugin.GetEffectiveContainers()
+	if len(specs) == 0 {
+		// Fall back to ContainerID for plugins with no spec (defensive).
+		if plugin.ContainerID != "" {
+			return d.StopPlugin(ctx, plugin.ContainerID)
+		}
+		return nil
+	}
+	var firstErr error
+	// Reverse order: stop sidecars first, then the api container last.
+	for i := len(specs) - 1; i >= 0; i-- {
+		name := podContainerName(plugin.ID, specs[i].Name)
+		if err := d.client.ContainerStop(ctx, name, container.StopOptions{}); err != nil {
+			if !errdefs.IsNotFound(err) {
+				log.Printf("warning: container stop %s: %v", name, err)
+			}
+		}
+		if err := d.client.ContainerRemove(ctx, name, container.RemoveOptions{Force: true}); err != nil {
+			if !errdefs.IsNotFound(err) {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("remove container %s: %w", name, err)
+				}
+			}
+		}
+	}
+	plugin.SetContainerIDs(nil)
+	return firstErr
 }
 
 // StopPlugin stops and removes a container but keeps its data volume.
@@ -587,6 +777,27 @@ func (d *DockerRuntime) ContainerLogs(ctx context.Context, containerID string, t
 	}
 
 	return strings.TrimRight(buf.String(), "\n"), nil
+}
+
+// envVarRefRe matches ${VAR_NAME} references in label keys/values.
+var envVarRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// substituteEnvVars replaces ${VAR} references in s with values from the
+// kernel's process env. Missing vars are best-effort: replaced with the empty
+// string and a warning is logged.
+func substituteEnvVars(s string) string {
+	if !strings.Contains(s, "${") {
+		return s
+	}
+	return envVarRefRe.ReplaceAllStringFunc(s, func(match string) string {
+		name := match[2 : len(match)-1]
+		val, ok := os.LookupEnv(name)
+		if !ok {
+			log.Printf("docker labels: env var %q referenced but not set, substituting empty string", name)
+			return ""
+		}
+		return val
+	})
 }
 
 // hasCapabilityPrefix checks if any capability starts with the given prefix.

@@ -11,6 +11,18 @@ type Plugin struct {
 	Version      string    `json:"version" gorm:"not null"`
 	Image        string    `json:"image"`
 	ContainerID  string    `json:"-"`
+	// ContainerIDs is a JSON map of container_name → docker container ID for
+	// multi-container plugins. The api role container's ID is also mirrored
+	// into ContainerID for backward compat.
+	ContainerIDs JSONRawString `json:"-" gorm:"type:json"`
+	// DevMode toggles use of dev_image / dev_bind_mounts for each container spec.
+	DevMode      bool          `json:"dev_mode" gorm:"default:false"`
+	// Containers is an explicit JSON array of ContainerSpec for multi-container
+	// plugins (a "pod" of containers). When non-empty it takes precedence over
+	// the legacy top-level Image / DockerLabels / ExtraPorts fields. When empty,
+	// GetEffectiveContainers() synthesizes a single-container spec from those
+	// legacy fields so old single-container plugins keep working unchanged.
+	Containers   JSONRawString `json:"containers,omitempty" gorm:"type:json"`
 	Status       string    `json:"status" gorm:"not null;default:'stopped'"`
 	Host         string    `json:"host"`
 	GRPCPort     int       `json:"grpc_port"`
@@ -50,6 +62,16 @@ type Plugin struct {
 	// the disk directory and bind-mounts it into the plugin container.
 	SharedDisks JSONRawString `json:"shared_disks,omitempty" gorm:"type:json"`
 
+	// DockerLabels is a JSON map of label key/value pairs the plugin wants
+	// applied to its container. Values may reference ${ENV_VAR} which will be
+	// substituted from the kernel's process env at container-create time.
+	DockerLabels JSONRawString `json:"docker_labels,omitempty" gorm:"type:json"`
+
+	// ExtraPorts is a JSON array of additional ports the plugin wants opened
+	// on its container, beyond the kernel-managed REST API port. The kernel
+	// publishes them on the host but does not route or health-check them.
+	ExtraPorts JSONRawString `json:"extra_ports,omitempty" gorm:"type:json"`
+
 	// RequestedScopes is a JSON array of authorization scopes the plugin needs.
 	RequestedScopes JSONStringList `json:"requested_scopes,omitempty" gorm:"type:json"`
 
@@ -68,7 +90,18 @@ type Plugin struct {
 // not be started as a container. Such plugins exist purely as discoverable
 // metadata (e.g. workspace environment definitions).
 func (p *Plugin) IsMetadataOnly() bool {
-	return p.Image == ""
+	if p.Image != "" {
+		return false
+	}
+	// Multi-container plugins have empty top-level Image but a non-empty
+	// Containers array. As long as at least one container has an image, the
+	// plugin has something to run.
+	for _, c := range p.GetContainers() {
+		if c.Image != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // HasCandidate returns true when a candidate container is deployed.
@@ -196,6 +229,60 @@ func (p *Plugin) SetSharedDisks(disks []SharedDiskEntry) {
 	p.SharedDisks = JSONRawString(data)
 }
 
+// GetDockerLabels parses the stored JSON docker labels into a flat map.
+func (p *Plugin) GetDockerLabels() map[string]string {
+	if string(p.DockerLabels) == "" {
+		return nil
+	}
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(p.DockerLabels), &labels); err != nil {
+		return nil
+	}
+	return labels
+}
+
+// SetDockerLabels serializes a label map to JSON for storage.
+func (p *Plugin) SetDockerLabels(labels map[string]string) {
+	if len(labels) == 0 {
+		p.DockerLabels = JSONRawString("")
+		return
+	}
+	data, _ := json.Marshal(labels)
+	p.DockerLabels = JSONRawString(data)
+}
+
+// ExtraPortSpec describes an additional container port the plugin wants opened.
+// Internal is the port inside the container (required).
+// External is the host port to publish to (0 = let Docker pick a host port).
+// Name is a human-readable identifier (optional).
+type ExtraPortSpec struct {
+	Name     string `json:"name,omitempty"`
+	Internal int    `json:"internal"`
+	External int    `json:"external,omitempty"`
+}
+
+// GetExtraPorts parses the stored JSON extra ports list.
+func (p *Plugin) GetExtraPorts() []ExtraPortSpec {
+	if string(p.ExtraPorts) == "" {
+		return nil
+	}
+	var ports []ExtraPortSpec
+	if err := json.Unmarshal([]byte(p.ExtraPorts), &ports); err != nil {
+		return nil
+	}
+	return ports
+}
+
+// SetExtraPorts serializes the extra ports list to JSON for storage.
+func (p *Plugin) SetExtraPorts(ports []ExtraPortSpec) {
+	if len(ports) == 0 {
+		p.ExtraPorts = JSONRawString("")
+		return
+	}
+	data, _ := json.Marshal(ports)
+	p.ExtraPorts = JSONRawString(data)
+}
+
 // GetCapabilities returns the capabilities as a string slice.
 func (p *Plugin) GetCapabilities() []string {
 	if p.Capabilities == nil {
@@ -233,4 +320,100 @@ func (p *Plugin) GetDependencies() []string {
 // SetDependencies stores required capability strings.
 func (p *Plugin) SetDependencies(deps []string) {
 	p.Dependencies = JSONStringList(deps)
+}
+
+// BindMount describes a host-to-container bind mount used in dev mode.
+type BindMount struct {
+	Host      string `json:"host" yaml:"host"`
+	Container string `json:"container" yaml:"container"`
+	ReadOnly  bool   `json:"read_only,omitempty" yaml:"read_only,omitempty"`
+}
+
+// ContainerSpec describes a single container in a multi-container plugin pod.
+// Role must be one of "api" (exactly one per plugin) or "sidecar".
+type ContainerSpec struct {
+	Name          string            `json:"name" yaml:"name"`
+	Image         string            `json:"image" yaml:"image"`
+	Role          string            `json:"role" yaml:"role"`
+	Ports         []ExtraPortSpec   `json:"ports,omitempty" yaml:"ports,omitempty"`
+	DockerLabels  map[string]string `json:"docker_labels,omitempty" yaml:"docker_labels,omitempty"`
+	DevImage      string            `json:"dev_image,omitempty" yaml:"dev_image,omitempty"`
+	DevBindMounts []BindMount       `json:"dev_bind_mounts,omitempty" yaml:"dev_bind_mounts,omitempty"`
+}
+
+// GetContainers returns the explicit container specs (may be empty / nil).
+func (p *Plugin) GetContainers() []ContainerSpec {
+	if string(p.Containers) == "" {
+		return nil
+	}
+	var specs []ContainerSpec
+	if err := json.Unmarshal([]byte(p.Containers), &specs); err != nil {
+		return nil
+	}
+	return specs
+}
+
+// SetContainers serializes container specs to JSON for storage.
+func (p *Plugin) SetContainers(specs []ContainerSpec) {
+	if len(specs) == 0 {
+		p.Containers = JSONRawString("")
+		return
+	}
+	data, _ := json.Marshal(specs)
+	p.Containers = JSONRawString(data)
+}
+
+// GetEffectiveContainers returns the container specs the runtime should
+// iterate over. If explicit Containers are set, they win. Otherwise a single
+// "default" api container is synthesized from the legacy top-level fields
+// (Image / HTTPPort / DockerLabels / ExtraPorts) so single-container plugins
+// keep working with no manifest changes.
+func (p *Plugin) GetEffectiveContainers() []ContainerSpec {
+	if explicit := p.GetContainers(); len(explicit) > 0 {
+		return explicit
+	}
+	if p.Image == "" {
+		return nil
+	}
+	return []ContainerSpec{{
+		Name:         "default",
+		Image:        p.Image,
+		Role:         "api",
+		Ports:        p.GetExtraPorts(),
+		DockerLabels: p.GetDockerLabels(),
+	}}
+}
+
+// APIContainerName returns the name of the container with role: api in the
+// effective container list, or "default" when nothing matches.
+func (p *Plugin) APIContainerName() string {
+	for _, c := range p.GetEffectiveContainers() {
+		if c.Role == "api" {
+			return c.Name
+		}
+	}
+	return "default"
+}
+
+// GetContainerIDs returns the container_name → container_id map for a
+// multi-container plugin. Empty for legacy single-container plugins.
+func (p *Plugin) GetContainerIDs() map[string]string {
+	if string(p.ContainerIDs) == "" {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(p.ContainerIDs), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// SetContainerIDs stores the container_name → container_id map.
+func (p *Plugin) SetContainerIDs(ids map[string]string) {
+	if len(ids) == 0 {
+		p.ContainerIDs = JSONRawString("")
+		return
+	}
+	data, _ := json.Marshal(ids)
+	p.ContainerIDs = JSONRawString(data)
 }

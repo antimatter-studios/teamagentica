@@ -134,8 +134,42 @@ func init() {
 		RunE:  runPluginRollback,
 	}
 
-	cmd.AddCommand(listCmd, enableCmd, disableCmd, restartCmd, uninstallCmd, configCmd, schemaCmd, candidateCmd, promoteCmd, rollbackCmd)
+	// dev-mode
+	devModeCmd := &cobra.Command{
+		Use:   "dev-mode <id> on|off",
+		Short: "Enable/disable per-plugin dev mode (swaps to each container's dev_image + bind mounts)",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runPluginDevMode,
+	}
+
+	cmd.AddCommand(listCmd, enableCmd, disableCmd, restartCmd, uninstallCmd, configCmd, schemaCmd, candidateCmd, promoteCmd, rollbackCmd, devModeCmd)
 	rootCmd.AddCommand(cmd)
+}
+
+func runPluginDevMode(cmd *cobra.Command, args []string) error {
+	pluginID := args[0]
+	var enabled bool
+	switch args[1] {
+	case "on", "true", "enable", "1":
+		enabled = true
+	case "off", "false", "disable", "0":
+		enabled = false
+	default:
+		return fmt.Errorf("expected on|off, got %q", args[1])
+	}
+	c, err := resolvePluginClient(cmd)
+	if err != nil {
+		return err
+	}
+	if err := c.SetPluginDevMode(pluginID, enabled); err != nil {
+		return fmt.Errorf("set dev-mode: %w", err)
+	}
+	state := "ON"
+	if !enabled {
+		state = "OFF"
+	}
+	fmt.Printf("Plugin %s dev-mode %s\n", pluginID, state)
+	return nil
 }
 
 func newPluginClient() (*client.Client, error) {

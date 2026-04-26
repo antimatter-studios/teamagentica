@@ -139,6 +139,9 @@ func main() {
 		extUserGroup.DELETE("/:id", extUsersProxy)
 	}
 
+	fetchProxy := pluginHandler.SystemPluginProxy("system-web-dashboard", "/api/fetch")
+	r.GET("/api/fetch", middleware.AuthRequired(), fetchProxy)
+
 	// Health monitor (started after pluginHandler so it can emit to the event hub).
 	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 	defer monitorCancel()
@@ -164,6 +167,7 @@ func main() {
 		pluginsGroup.POST("/:id/enable", pluginHandler.EnablePlugin)
 		pluginsGroup.POST("/:id/disable", pluginHandler.DisablePlugin)
 		pluginsGroup.POST("/:id/restart", pluginHandler.RestartPlugin)
+		pluginsGroup.POST("/:id/dev-mode", pluginHandler.SetDevMode)
 		pluginsGroup.GET("/:id/schema", pluginHandler.GetPluginSchema)
 		pluginsGroup.GET("/:id/schema/:section", pluginHandler.GetPluginSchemaSection)
 		pluginsGroup.GET("/:id/logs", pluginHandler.GetPluginLogs)
@@ -263,6 +267,14 @@ func main() {
 		kernelGroup.GET("/ui/logs", pluginHandler.GetUILogs)
 	}
 
+	// Kernel-as-MCP-tools — exposes selected kernel capabilities to agents
+	// via infra-mcp-server. Routes require mTLS (called plugin-to-plugin).
+	mcpTools := handlers.NewMCPToolsHandler(pluginHandler, marketplaceHandler)
+	pluginHandler.SetMCPToolsPusher(mcpTools)
+	mcpKernelGroup := r.Group("/mcp/kernel")
+	mcpKernelGroup.Use(middleware.PluginTokenAuth())
+	mcpTools.Register(mcpKernelGroup)
+
 	// Boot orchestrator: start all enabled plugins in background.
 	orch := orchestrator.NewOrchestrator(dockerRT, cfg, pluginHandler.Events, clientTLS)
 	monitor.SetRestarter(orch)
@@ -285,6 +297,11 @@ func main() {
 
 		// Wire up event publisher so kernel debug events flow to infra-redis SSE.
 		pluginHandler.EnableEventPublisher()
+
+		// Push kernel MCP tools to infra-mcp-server. Handles cold start and the
+		// case where the kernel restarted while infra-mcp-server kept running.
+		// SelfRegister also re-pushes whenever the server (re)registers.
+		go mcpTools.WaitAndPush(context.Background())
 
 		// Fetch JWT secret from the user-manager plugin.
 		// The plugin owns the secret; the kernel only needs it for middleware validation.

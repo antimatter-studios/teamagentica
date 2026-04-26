@@ -21,6 +21,11 @@ type ContainerRuntime interface {
 	StartPlugin(ctx context.Context, plugin *models.Plugin, env map[string]string, diskPaths map[string]string) (containerID string, err error)
 	StartCandidatePlugin(ctx context.Context, plugin *models.Plugin, env map[string]string, diskPaths map[string]string) (containerID string, err error)
 	StopPlugin(ctx context.Context, containerID string) error
+	// StopPluginPod stops and removes ALL containers belonging to a plugin pod
+	// (api + sidecars), iterating over plugin.GetEffectiveContainers() and using
+	// the deterministic container name. Safe to call when only some containers
+	// exist; missing containers are treated as success.
+	StopPluginPod(ctx context.Context, plugin *models.Plugin) error
 	StartManagedContainer(ctx context.Context, mc *models.ManagedContainer, baseDomain string, diskMounts []ResolvedDiskMount) (containerID string, err error)
 	HealthCheck(ctx context.Context, containerID string) (running bool, err error)
 	// ResolveContainerID looks up the actual Docker container ID for a plugin

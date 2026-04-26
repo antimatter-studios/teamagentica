@@ -26,13 +26,26 @@ import (
 	"github.com/antimatter-studios/teamagentica/pkg/pluginsdk"
 )
 
+// MCPToolsPusher pushes the kernel's MCP tool list to infra-mcp-server.
+// Implemented by handlers.MCPToolsHandler — interface used to break import cycles.
+type MCPToolsPusher interface {
+	PushToMCPServer(ctx context.Context) error
+}
+
 // PluginHandler holds dependencies for plugin management endpoints.
 type PluginHandler struct {
-	runtime   runtime.ContainerRuntime
-	cfg       *config.Config
-	clientTLS *tls.Config
-	transport *http.Transport // shared transport for all outbound plugin requests
-	Events    *events.Hub
+	runtime    runtime.ContainerRuntime
+	cfg        *config.Config
+	clientTLS  *tls.Config
+	transport  *http.Transport // shared transport for all outbound plugin requests
+	Events     *events.Hub
+	mcpToolsPusher MCPToolsPusher
+}
+
+// SetMCPToolsPusher wires the kernel-side MCP tool registration so SelfRegister
+// can re-push the kernel tool list whenever infra-mcp-server (re)registers.
+func (h *PluginHandler) SetMCPToolsPusher(p MCPToolsPusher) {
+	h.mcpToolsPusher = p
 }
 
 func (h *PluginHandler) db() *gorm.DB { return database.Get() }
@@ -164,6 +177,18 @@ func (h *PluginHandler) publishToRedis(payload map[string]interface{}) {
 	resp.Body.Close()
 }
 
+// kernelPeerEntry returns a synthetic peer entry for the kernel itself,
+// so plugins can use the same RouteToPlugin path to reach kernel-exposed
+// endpoints (e.g. MCP tools registered under plugin_id="kernel").
+func (h *PluginHandler) kernelPeerEntry() map[string]interface{} {
+	port, _ := strconv.Atoi(h.cfg.TLSPort)
+	return map[string]interface{}{
+		"id":        "kernel",
+		"host":      h.cfg.AdvertiseHost,
+		"http_port": port,
+	}
+}
+
 // broadcastRegistrySync sends the full plugin address registry to all running
 // plugins. Called on kernel startup to ensure all plugins have current addresses.
 func (h *PluginHandler) BroadcastRegistrySync() {
@@ -172,7 +197,8 @@ func (h *PluginHandler) BroadcastRegistrySync() {
 		Where("status = ? AND host != ''", "running").
 		Find(&plugins)
 
-	registry := make([]map[string]interface{}, 0, len(plugins))
+	registry := make([]map[string]interface{}, 0, len(plugins)+1)
+	registry = append(registry, h.kernelPeerEntry())
 	for _, p := range plugins {
 		registry = append(registry, map[string]interface{}{
 			"id":        p.ID,
@@ -362,7 +388,14 @@ func (h *PluginHandler) GetPluginRegistry(c *gin.Context) {
 		Where("status = ? AND host != ''", "running").
 		Find(&plugins)
 
-	entries := make([]gin.H, 0, len(plugins))
+	entries := make([]gin.H, 0, len(plugins)+1)
+	if ke := h.kernelPeerEntry(); ke != nil {
+		entries = append(entries, gin.H{
+			"id":        ke["id"],
+			"host":      ke["host"],
+			"http_port": ke["http_port"],
+		})
+	}
 	for _, p := range plugins {
 		entries = append(entries, gin.H{
 			"id":        p.ID,
@@ -389,13 +422,13 @@ func (h *PluginHandler) UninstallPlugin(c *gin.Context) {
 		return
 	}
 
-	// Stop container if running (StopPlugin handles vanished containers gracefully).
-	if plugin.ContainerID != "" && h.runtime != nil {
-		if err := h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID); err != nil {
+	// Stop the entire pod (api + sidecars). Vanished containers handled gracefully.
+	if h.runtime != nil {
+		if err := h.runtime.StopPluginPod(c.Request.Context(), &plugin); err != nil {
 			h.Events.Emit(events.DebugEvent{
 				Type:     "error",
 				PluginID: id,
-				Detail:   "failed to stop container during uninstall: " + err.Error(),
+				Detail:   "failed to stop pod during uninstall: " + err.Error(),
 			})
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop plugin: " + err.Error()})
 			return
@@ -553,9 +586,10 @@ func (h *PluginHandler) enablePlugin(ctx context.Context, plugin *models.Plugin,
 	}
 
 	h.db().Model(plugin).Updates(map[string]interface{}{
-		"container_id": containerID,
-		"status":       "running",
-		"enabled":      true,
+		"container_id":  containerID,
+		"container_ids": plugin.ContainerIDs,
+		"status":        "running",
+		"enabled":       true,
 	})
 
 	h.Events.Emit(events.DebugEvent{
@@ -597,13 +631,12 @@ func (h *PluginHandler) DisablePlugin(c *gin.Context) {
 			"plugin_id": id,
 		})
 
-		if err := h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID); err != nil {
-			// StopPlugin already handles not-found (container vanished) gracefully.
-			// Any error reaching here is a real Docker problem.
+		// Stop the entire pod (api + sidecars). Vanished containers OK.
+		if err := h.runtime.StopPluginPod(c.Request.Context(), &plugin); err != nil {
 			h.Events.Emit(events.DebugEvent{
 				Type:     "error",
 				PluginID: id,
-				Detail:   "failed to stop container: " + err.Error(),
+				Detail:   "failed to stop pod: " + err.Error(),
 			})
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop plugin: " + err.Error()})
 			return
@@ -661,12 +694,12 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 		Detail:   "user-initiated restart",
 	})
 
-	// Stop existing container if running.
-	if plugin.ContainerID != "" {
+	// Stop existing pod (api + sidecars) if running.
+	if plugin.ContainerID != "" || len(plugin.GetContainerIDs()) > 0 {
 		h.Events.Emit(events.DebugEvent{
 			Type:     "stop",
 			PluginID: id,
-			Detail:   "stopping container=" + plugin.ContainerID[:12],
+			Detail:   "stopping pod for plugin=" + id,
 		})
 
 		// Broadcast plugin:stopped so peers invalidate their address caches.
@@ -675,7 +708,7 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 			"plugin_id": id,
 		})
 
-		_ = h.runtime.StopPlugin(c.Request.Context(), plugin.ContainerID)
+		_ = h.runtime.StopPluginPod(c.Request.Context(), &plugin)
 
 		// Clear host so peers know the plugin is unreachable.
 		h.db().Model(&plugin).Updates(map[string]interface{}{
@@ -711,8 +744,9 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	}
 
 	h.db().Model(&plugin).Updates(map[string]interface{}{
-		"container_id": containerID,
-		"status":       "running",
+		"container_id":  containerID,
+		"container_ids": plugin.ContainerIDs,
+		"status":        "running",
 	})
 
 	// Broadcast plugin:started so peers know a new container is booting.
@@ -735,6 +769,79 @@ func (h *PluginHandler) RestartPlugin(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "plugin restarted", "container_id": containerID})
+}
+
+// SetDevMode handles POST /api/plugins/:id/dev-mode with body {"enabled": bool}.
+// Toggles the per-plugin DevMode flag and restarts the plugin so the new image
+// variant (and dev_bind_mounts) takes effect.
+func (h *PluginHandler) SetDevMode(c *gin.Context) {
+	if h.runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "docker runtime not available"})
+		return
+	}
+
+	id := c.Param("id")
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var plugin models.Plugin
+	if result := h.db().First(&plugin, "id = ?", id); result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("plugin %q not found", id)})
+		return
+	}
+
+	if err := h.db().Model(&plugin).Update("dev_mode", req.Enabled).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update dev_mode: " + err.Error()})
+		return
+	}
+	plugin.DevMode = req.Enabled
+
+	h.Events.Emit(events.DebugEvent{
+		Type:     "dev-mode",
+		PluginID: id,
+		Detail:   fmt.Sprintf("dev_mode=%v", req.Enabled),
+	})
+
+	// Restart the plugin so the new image variant takes effect.
+	if plugin.Enabled && !plugin.IsMetadataOnly() {
+		if plugin.ContainerID != "" || len(plugin.GetContainerIDs()) > 0 {
+			_ = h.runtime.StopPluginPod(c.Request.Context(), &plugin)
+		}
+		env := map[string]string{
+			"TEAMAGENTICA_KERNEL_HOST": h.cfg.AdvertiseHost,
+			"TEAMAGENTICA_KERNEL_PORT": h.cfg.TLSPort,
+			"PLUGIN_ID":                plugin.ID,
+		}
+		diskPaths := h.resolveDiskPaths(c.Request.Context(), &plugin)
+		containerID, err := h.runtime.StartPlugin(c.Request.Context(), &plugin, env, diskPaths)
+		if err != nil {
+			h.db().Model(&plugin).Updates(map[string]interface{}{
+				"container_id": "",
+				"status":       "error",
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "dev_mode set but restart failed: " + err.Error()})
+			return
+		}
+		h.db().Model(&plugin).Updates(map[string]interface{}{
+			"container_id":  containerID,
+			"container_ids": plugin.ContainerIDs,
+			"status":        "running",
+		})
+	}
+
+	if al := getAudit(c); al != nil {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(uint)
+		al.LogUserAction(uid, "plugin.dev_mode", "plugin:"+id, fmt.Sprintf(`{"enabled":%v}`, req.Enabled), c.ClientIP(), true)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "dev_mode updated", "dev_mode": req.Enabled})
 }
 
 // GetPluginLogs handles GET /api/plugins/:id/logs.

@@ -103,6 +103,13 @@ type pluginSelfRegisterRequest struct {
 	Candidate    bool                   `json:"candidate,omitempty"` // true if this is a candidate container
 	ConfigSchema    map[string]interface{} `json:"config_schema,omitempty"`
 	WorkspaceSchema map[string]interface{} `json:"workspace_schema,omitempty"`
+	DockerLabels    map[string]string      `json:"docker_labels,omitempty"`
+	ExtraPorts      []models.ExtraPortSpec `json:"extra_ports,omitempty"`
+	// Multi-container plugins: full pod spec on first registration.
+	Containers      []models.ContainerSpec `json:"containers,omitempty"`
+	// ContainerName identifies which container in the pod is registering.
+	// Defaults to the api role container's name. Sidecars don't register.
+	ContainerName   string                 `json:"container_name,omitempty"`
 }
 
 type pluginDependencies struct {
@@ -227,6 +234,38 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 			updates["workspace_schema"] = models.JSONRawString(data)
 		}
 	}
+	if req.DockerLabels != nil {
+		if data, err := json.Marshal(req.DockerLabels); err == nil {
+			updates["docker_labels"] = models.JSONRawString(data)
+		}
+	}
+	if req.ExtraPorts != nil {
+		if data, err := json.Marshal(req.ExtraPorts); err == nil {
+			updates["extra_ports"] = models.JSONRawString(data)
+		}
+	}
+	// Multi-container pod spec on first registration. Validates exactly one api role.
+	if len(req.Containers) > 0 {
+		apiCount := 0
+		for _, cs := range req.Containers {
+			if cs.Role == "api" {
+				apiCount++
+			}
+		}
+		if apiCount != 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("containers must have exactly one role:api entry (found %d)", apiCount)})
+			return
+		}
+		if data, err := json.Marshal(req.Containers); err == nil {
+			updates["containers"] = models.JSONRawString(data)
+		}
+	}
+	// Reject host/port updates from sidecar containers — only the api container
+	// represents the plugin's externally-reachable address.
+	if req.ContainerName != "" && req.ContainerName != plugin.APIContainerName() && req.ContainerName != "default" {
+		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("container %q is not the api container — sidecars must not self-register", req.ContainerName)})
+		return
+	}
 
 	h.db().Model(&plugin).Updates(updates)
 
@@ -244,6 +283,18 @@ func (h *PluginHandler) SelfRegister(c *gin.Context) {
 		"host":      req.Host,
 		"http_port": req.Port,
 	})
+
+	// When the MCP server registers (or re-registers after restart), push the
+	// kernel's tool list so agents can discover kernel-management tools.
+	if req.ID == "infra-mcp-server" && h.mcpToolsPusher != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := h.mcpToolsPusher.PushToMCPServer(ctx); err != nil {
+				log.Printf("kernel: push tools to infra-mcp-server failed: %v", err)
+			}
+		}()
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "registered"})
 }
