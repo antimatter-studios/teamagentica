@@ -49,6 +49,11 @@ type WorkspaceDisk struct {
 }
 
 // WorkspaceOptions stores per-workspace overrides on top of environment defaults.
+//
+// TunnelRefs is a JSON-encoded []string of global tunnel names registered in
+// network-traffic-manager. The workspace does not own these tunnels — it just
+// references them. All tunnel state (driver, config, public_key, status) lives
+// in traffic-manager and is fetched on demand.
 type WorkspaceOptions struct {
 	ContainerID  string    `json:"container_id" gorm:"primaryKey"`
 	EnvOverrides string    `json:"env_overrides" gorm:"type:text"` // JSON: {"KEY": "value"}
@@ -56,6 +61,7 @@ type WorkspaceOptions struct {
 	AgentPlugin  string    `json:"agent_plugin"`                    // e.g. "agent-anthropic"
 	AgentModel   string    `json:"agent_model"`                     // e.g. "claude-opus-4-6"
 	SidecarID    string    `json:"sidecar_id"`                      // plugin ID once created
+	TunnelRefs   string    `json:"tunnel_refs,omitempty" gorm:"type:text"` // JSON: []string of traffic-manager tunnel names
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

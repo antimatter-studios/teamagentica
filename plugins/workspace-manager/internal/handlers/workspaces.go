@@ -27,11 +27,18 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
+// agent-sockets shared disk: traffic-manager writes unix sockets here; workspaces mount it read-only.
+const (
+	agentSocketsDiskName = "agent-sockets"
+	agentSocketsTarget   = "/agent-sockets"
+)
+
 type Handler struct {
 	baseDomain string
 	debug      bool
 	sdk        *pluginsdk.Client
 	db         *storage.DB
+
 }
 
 func NewHandler(baseDomain string, debug bool, db *storage.DB) *Handler {
@@ -148,6 +155,61 @@ func (h *Handler) ensureDisk(ctx context.Context, name, diskType string) (diskID
 	return result.ID, result.Path, nil
 }
 
+// resolveTunnelSockets resolves tunnel_refs to their local_socket_path via
+// network-traffic-manager. Returns only refs that resolved to a non-empty path.
+// Logs warnings for refs that failed to resolve; never errors.
+func (h *Handler) resolveTunnelSockets(ctx context.Context, refs []string) []string {
+	if len(refs) == 0 || h.sdk == nil {
+		return nil
+	}
+	plugins, err := h.sdk.SearchPlugins("network:tunnel")
+	if err != nil || len(plugins) == 0 {
+		log.Printf("resolveTunnelSockets: no network:tunnel plugin available: %v", err)
+		return nil
+	}
+	pluginID := plugins[0].ID
+	var sockets []string
+	for _, name := range refs {
+		data, err := h.sdk.RouteToPlugin(ctx, pluginID, "GET", "/tunnels/"+name, nil)
+		if err != nil {
+			log.Printf("resolveTunnelSockets: %s: %v", name, err)
+			continue
+		}
+		var view struct {
+			Status struct {
+				LocalSocketPath string `json:"local_socket_path"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(data, &view); err != nil {
+			log.Printf("resolveTunnelSockets: decode %s: %v", name, err)
+			continue
+		}
+		if view.Status.LocalSocketPath == "" {
+			log.Printf("resolveTunnelSockets: %s has no local_socket_path", name)
+			continue
+		}
+		sockets = append(sockets, view.Status.LocalSocketPath)
+	}
+	return sockets
+}
+
+// agentSocketsDiskMount ensures the shared agent-sockets disk exists via
+// storage-disk and returns a read-only DiskMount entry suitable for inclusion
+// in CreateManagedContainerRequest.DiskMounts. The disk is shared cluster-wide
+// — network-traffic-manager writes per-workspace socket files into it; each
+// workspace reads only its own.
+func (h *Handler) agentSocketsDiskMount(ctx context.Context) (pluginsdk.DiskMount, error) {
+	_, diskPath, err := h.ensureDisk(ctx, agentSocketsDiskName, "shared")
+	if err != nil {
+		return pluginsdk.DiskMount{}, fmt.Errorf("ensure agent-sockets disk: %w", err)
+	}
+	return pluginsdk.DiskMount{
+		SourcePath: diskPath,
+		Target:     agentSocketsTarget,
+		ReadOnly:   true,
+	}, nil
+}
+
 // resolveWorkspaceDiskPath finds the workspace-type disk in DiskMounts and returns
 // the cross-mounted path accessible from this container.
 // SourcePath is e.g. "/data/storage-root/workspace/ws-abc123-slug";
@@ -229,8 +291,9 @@ type workspaceInfo struct {
 	EnvironmentName string `json:"environment_name,omitempty"`
 	Status          string `json:"status"`
 	Subdomain       string `json:"subdomain"`
-	URL             string `json:"url,omitempty"`
-	DiskName        string `json:"disk_name,omitempty"`
+	URL             string         `json:"url,omitempty"`
+	DiskName        string         `json:"disk_name,omitempty"`
+	TunnelRefs      []string       `json:"tunnel_refs,omitempty"`
 }
 
 // ListWorkspaces returns all managed containers owned by this plugin.
@@ -292,12 +355,13 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	}
 
 	var req struct {
-		Name          string `json:"name" binding:"required"`
-		EnvironmentID string `json:"environment_id" binding:"required"`
-		DiskID        string `json:"disk_id,omitempty"`        // reuse existing disk (by stable ID)
-		GitRepo       string `json:"git_repo,omitempty"`
-		GitRef        string `json:"git_ref,omitempty"`
-		PluginSource  string `json:"plugin_source,omitempty"`
+		Name          string   `json:"name" binding:"required"`
+		EnvironmentID string   `json:"environment_id" binding:"required"`
+		DiskID        string   `json:"disk_id,omitempty"`        // reuse existing disk (by stable ID)
+		GitRepo       string   `json:"git_repo,omitempty"`
+		GitRef        string   `json:"git_ref,omitempty"`
+		PluginSource  string   `json:"plugin_source,omitempty"`
+		TunnelRefs    []string `json:"tunnel_refs,omitempty"`    // global tunnel names registered in network-traffic-manager
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -413,10 +477,27 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		}
 	}
 
+	// Subdomain is the stable identifier used for the SSH agent socket file
+	// path (workspace-manager passes this to the ssh-jumphost driver).
+	subdomain := "ws-" + wsID
+
+	// Resolve tunnel_refs → socket paths; mount agent-sockets + set SSH_AUTH_SOCK only if any resolved.
+	tunnelSockets := h.resolveTunnelSockets(ctx, req.TunnelRefs)
+	if len(tunnelSockets) > 0 {
+		if mount, err := h.agentSocketsDiskMount(ctx); err != nil {
+			log.Printf("CreateWorkspace: agent-sockets mount unavailable: %v", err)
+		} else {
+			diskMounts = append(diskMounts, mount)
+		}
+	}
+
 	// Build env from workspace schema defaults.
 	env := make(map[string]string)
 	for k, v := range ws.EnvDefaults {
 		env[k] = v
+	}
+	if len(tunnelSockets) > 0 {
+		env["SSH_AUTH_SOCK"] = tunnelSockets[0]
 	}
 	// Entrypoint clones on first start if /workspace is empty; failures leave a
 	// .git-clone-error marker inside the workspace so the user can fix manually.
@@ -434,7 +515,6 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 	}
 
 	// Launch managed container via kernel.
-	subdomain := "ws-" + wsID
 	mc, err := h.sdk.CreateManagedContainer(pluginsdk.CreateManagedContainerRequest{
 		Name:         displayName,
 		Image:        ws.Image,
@@ -458,11 +538,17 @@ func (h *Handler) CreateWorkspace(c *gin.Context) {
 		DiskName:      workspaceDiskName,
 	})
 
-	// Store initial disk configuration in workspace options.
+	// Store initial disk configuration + any tunnel refs in workspace options.
 	wsDisksJSON, _ := json.Marshal(wsDisks)
+	tunnelRefsJSON := ""
+	if len(req.TunnelRefs) > 0 {
+		b, _ := json.Marshal(req.TunnelRefs)
+		tunnelRefsJSON = string(b)
+	}
 	h.db.PutOptions(&storage.WorkspaceOptions{
 		ContainerID: mc.ID,
 		Disks:       string(wsDisksJSON),
+		TunnelRefs:  tunnelRefsJSON,
 	})
 
 	h.emitEvent("workspace:created", fmt.Sprintf(`{"id":"%s","environment":"%s","key":"%s"}`, mc.ID, req.EnvironmentID, wsKey))
@@ -652,10 +738,20 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 		return nil, fmt.Errorf("workspace environment schema not found")
 	}
 
+	// Resolve tunnel_refs from stored options.
+	var tunnelRefs []string
+	if opts, err := h.db.GetOptions(id); err == nil && opts.TunnelRefs != "" {
+		json.Unmarshal([]byte(opts.TunnelRefs), &tunnelRefs)
+	}
+	tunnelSockets := h.resolveTunnelSockets(ctx, tunnelRefs)
+
 	// Build env from schema defaults.
 	env := make(map[string]string)
 	for k, v := range ws.EnvDefaults {
 		env[k] = v
+	}
+	if len(tunnelSockets) > 0 {
+		env["SSH_AUTH_SOCK"] = tunnelSockets[0]
 	}
 
 	// Build disk mounts from the env schema. For each schema disk, reuse the
@@ -690,6 +786,33 @@ func (h *Handler) rebuildWorkspace(ctx context.Context, id string) (*workspaceIn
 			ReadOnly:   spec.ReadOnly,
 		})
 		log.Printf("rebuildWorkspace: added new schema disk %s → %s", spec.Name, spec.Target)
+	}
+
+	// Mount agent-sockets only if at least one tunnel ref resolved.
+	if len(tunnelSockets) > 0 {
+		mounted := false
+		for _, dm := range diskMounts {
+			if dm.Target == agentSocketsTarget {
+				mounted = true
+				break
+			}
+		}
+		if !mounted {
+			for _, dm := range current.DiskMounts {
+				if dm.Target == agentSocketsTarget {
+					diskMounts = append(diskMounts, dm)
+					mounted = true
+					break
+				}
+			}
+		}
+		if !mounted {
+			if mount, err := h.agentSocketsDiskMount(ctx); err != nil {
+				log.Printf("rebuildWorkspace: agent-sockets mount unavailable: %v", err)
+			} else {
+				diskMounts = append(diskMounts, mount)
+			}
+		}
 	}
 
 	// Load per-workspace options: env overrides + disks.
@@ -1072,9 +1195,10 @@ func (h *Handler) UpdateWorkspaceOptions(c *gin.Context) {
 
 	var req struct {
 		EnvOverrides map[string]string       `json:"env_overrides"`
-		Disks        []storage.WorkspaceDisk  `json:"disks"`
-		AgentPlugin  string                   `json:"agent_plugin"`
-		AgentModel   string                   `json:"agent_model"`
+		Disks        []storage.WorkspaceDisk `json:"disks"`
+		AgentPlugin  string                  `json:"agent_plugin"`
+		AgentModel   string                  `json:"agent_model"`
+		TunnelRefs   []string                `json:"tunnel_refs"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1096,6 +1220,11 @@ func (h *Handler) UpdateWorkspaceOptions(c *gin.Context) {
 	// Serialize JSON fields.
 	envJSON, _ := json.Marshal(req.EnvOverrides)
 	disksJSON, _ := json.Marshal(req.Disks)
+	tunnelRefsJSON := ""
+	if len(req.TunnelRefs) > 0 {
+		b, _ := json.Marshal(req.TunnelRefs)
+		tunnelRefsJSON = string(b)
+	}
 
 	opts := &storage.WorkspaceOptions{
 		ContainerID:  id,
@@ -1103,6 +1232,7 @@ func (h *Handler) UpdateWorkspaceOptions(c *gin.Context) {
 		Disks:        string(disksJSON),
 		AgentPlugin:  req.AgentPlugin,
 		AgentModel:   req.AgentModel,
+		TunnelRefs:   tunnelRefsJSON,
 	}
 
 	// Check if agent plugin changed — manage sidecar lifecycle.
