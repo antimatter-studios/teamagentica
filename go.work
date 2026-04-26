@@ -39,6 +39,7 @@ use (
 	./plugins/storage-sss3
 	./plugins/system-teamagentica-plugin-provider
 	./plugins/system-user-manager
+	./plugins/system-web-dashboard
 	./plugins/tool-task-tracker
 	./plugins/workspace-env-claude-terminal
 	./plugins/workspace-env-opencode-terminal

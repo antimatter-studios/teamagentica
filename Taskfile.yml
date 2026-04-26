@@ -5,8 +5,12 @@ includes:
     taskfile: ./kernel/Taskfile.yml
     dir: ./kernel
   dashboard:
-    taskfile: ./web-dashboard/Taskfile.yml
-    dir: ./web-dashboard
+    taskfile: ./plugins/system-web-dashboard/web/Taskfile.yml
+    dir: ./plugins/system-web-dashboard/web
+    optional: true
+  system-web-dashboard:
+    taskfile: ./plugins/system-web-dashboard/Taskfile.yml
+    dir: ./plugins/system-web-dashboard
   pluginsdk:
     taskfile: ./pkg/pluginsdk/Taskfile.yml
     dir: ./pkg/pluginsdk
@@ -268,6 +272,65 @@ tasks:
           echo "Failed plugins:$FAILED"
           exit 1
         fi
+
+  dashboard:dev:
+    desc: "Swap the dashboard plugin's web container into its dev variant (Vite with HMR, source bind-mounted). Ctrl+C to exit and restore prod (nginx) mode."
+    silent: true
+    env:
+      TEAMAGENTICA_REPO:
+        sh: pwd
+    cmds:
+      - cmd: |
+          set -e
+          if [ -z "$TEAMAGENTICA_REPO" ]; then
+            echo "TEAMAGENTICA_REPO is not set; the kernel needs it to resolve {{`{{TEAMAGENTICA_REPO}}`}} in plugin.yaml dev_bind_mounts."
+            exit 1
+          fi
+          echo "TEAMAGENTICA_REPO=$TEAMAGENTICA_REPO"
+          echo ""
+          echo "━━━ swapping system-web-dashboard.web → dev variant ━━━"
+          go run ./tacli plugin dev-mode system-web-dashboard on
+
+          cleanup() {
+            echo ""
+            echo "━━━ restoring system-web-dashboard.web → prod (nginx) ━━━"
+            go run ./tacli plugin dev-mode system-web-dashboard off >/dev/null 2>&1 || true
+            echo "✓ ui.teamagentica.localhost back to nginx + baked bundle"
+          }
+          trap cleanup EXIT INT TERM
+
+          echo ""
+          echo "✓ ui.teamagentica.localhost is now Vite (HMR live)"
+          echo "  Edit files in plugins/system-web-dashboard/web/src — browser HMRs."
+          echo "  Vite logs stream from the container — tailing now."
+          echo "  Ctrl+C to exit and restore prod mode."
+          echo ""
+          docker logs -f teamagentica-plugin-system-web-dashboard-web
+
+  dashboard:rebuild:
+    desc: "Rebuild the React app, rebuild the system-web-dashboard plugin image, and restart it."
+    silent: true
+    cmds:
+      - |
+        set -e
+        plugin_yaml="plugins/system-web-dashboard/plugin.yaml"
+        old_ver=$(grep '^version:' "$plugin_yaml" | sed 's/version: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+        major=$(echo "$old_ver" | cut -d. -f1)
+        minor=$(echo "$old_ver" | cut -d. -f2)
+        patch=$(echo "$old_ver" | cut -d. -f3)
+        new_ver="${major}.${minor}.$((patch + 1))"
+        echo "━━━ system-web-dashboard: $old_ver → $new_ver ━━━"
+        task plugin:build -- system-web-dashboard --version "$new_ver"
+        task marketplace:submit -- "$plugin_yaml"
+        go run ./tacli marketplace upgrade-plugin system-web-dashboard
+        go run ./tacli plugin restart system-web-dashboard
+        echo ""
+        echo "✓ system-web-dashboard redeployed at v${new_ver}"
+
+  dashboard:restart:
+    desc: "Restart the running system-web-dashboard plugin (no rebuild)."
+    cmds:
+      - go run ./tacli plugin restart system-web-dashboard
 
   plugin:build:all:
     desc: Build all plugin Docker images (prod)

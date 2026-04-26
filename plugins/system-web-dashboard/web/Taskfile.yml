@@ -1,0 +1,35 @@
+version: '3'
+
+# Tasks for the dashboard's React app (Vite). Use these for local development.
+# To rebuild & restart the running plugin (which embeds the dist into a Docker
+# image), use `task dashboard:rebuild` from the repo root instead.
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  vite:
+    desc: Start Vite dev server raw (does not flip the plugin into proxy mode). Use `task dashboard:dev` from the repo root for the integrated HMR workflow.
+    cmds:
+      - npm run dev -- --host 0.0.0.0
+
+  build:
+    desc: Build the production React bundle into web/dist (consumed by the plugin Dockerfile).
+    cmds:
+      - npm run build
+
+  install:
+    desc: Install npm dependencies.
+    cmds:
+      - npm install
+
+  lint:
+    desc: Run ESLint over web/src.
+    cmds:
+      - npm run lint
+
+  test:
+    desc: Run vitest.
+    cmds:
+      - npm test

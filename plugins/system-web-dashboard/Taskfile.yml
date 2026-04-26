@@ -1,0 +1,34 @@
+version: '3'
+
+vars:
+  PLUGIN: system-web-dashboard
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  build:api:
+    desc: Build the api container (Go binary, mTLS)
+    cmds:
+      - docker build -t teamagentica-{{.PLUGIN}}-api:latest -f Dockerfile.api ../..
+
+  build:web:prod:
+    desc: Build the production web container (nginx + baked Vite dist)
+    cmds:
+      - docker build -t teamagentica-{{.PLUGIN}}-web:latest -f Dockerfile.web.prod ../..
+
+  build:web:dev:
+    desc: Build the dev web container (node + Vite, source bind-mounted at runtime)
+    cmds:
+      - docker build -t teamagentica-{{.PLUGIN}}-web-dev:latest -f Dockerfile.web.dev ../..
+
+  build:
+    desc: Build all three images (api, web prod, web dev)
+    deps: [build:api, build:web:prod, build:web:dev]
+
+  deploy:
+    desc: Build and submit the plugin via the kernel deploy flow
+    cmds:
+      - task: build
+      - echo "Use the plugin-deploy skill or task to push and restart this plugin."

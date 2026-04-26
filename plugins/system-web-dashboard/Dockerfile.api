@@ -1,0 +1,21 @@
+# -- Stage 1: build the Go binary --
+FROM golang:1.25-alpine AS builder
+ENV GOPRIVATE=github.com/antimatter-studios/*
+ENV GONOSUMCHECK=github.com/antimatter-studios/*
+RUN apk add --no-cache git
+WORKDIR /build
+COPY pkg/pluginsdk/ pkg/pluginsdk/
+COPY plugins/system-web-dashboard/ plugins/system-web-dashboard/
+WORKDIR /build/plugins/system-web-dashboard
+RUN go mod download && CGO_ENABLED=0 go build -ldflags="-s -w" -o /system-web-dashboard ./
+
+# -- Stage 2: minimal runtime image --
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -u 10001 teamagentica
+COPY --from=builder /system-web-dashboard /usr/local/bin/system-web-dashboard
+RUN mkdir -p /usr/local/etc/teamagentica
+COPY plugins/system-web-dashboard/plugin.yaml /usr/local/etc/teamagentica/plugin.yaml
+USER teamagentica
+EXPOSE 8080
+ENTRYPOINT ["system-web-dashboard"]

@@ -1,0 +1,38 @@
+# Multi-container plugin ("pod"): one mTLS Go API container + one web
+# container (nginx in prod, Vite-dev in dev). The new `containers:`,
+# `dev_image`, and `dev_bind_mounts` fields are parsed by the kernel work
+# in progress; the SDK manifest parser ignores unknown fields, so this
+# file remains valid even before the kernel changes land.
+id: system-web-dashboard
+name: "Web Dashboard"
+description: "Hosts the TeamAgentica web dashboard (nginx + React SPA) and exposes a small mTLS REST API for dashboard utilities (e.g. external URL fetch for theme import)."
+group: system
+version: "1.0.5"
+author: TeamAgentica
+tags: [dashboard, ui, system]
+
+# The user explicitly said no capabilities.
+capabilities: []
+
+# Dependency on infra:authz so the kernel boot queue starts auth first.
+dependencies: ["infra:authz"]
+
+config_schema: {}
+
+containers:
+  - name: api
+    image: teamagentica-system-web-dashboard-api:latest
+    role: api
+    ports:
+      - { name: api, internal: 8080 }
+  - name: web
+    image: teamagentica-system-web-dashboard-web:latest
+    role: sidecar
+    ports:
+      - { name: web, internal: 3000, external: 3000 }
+    docker_labels:
+      docker-proxy.teamagentica-ui.host: ui.teamagentica.localhost
+      docker-proxy.teamagentica-ui.port: "3000"
+    dev_image: teamagentica-system-web-dashboard-web-dev:latest
+    dev_bind_mounts:
+      - { host: "{{TEAMAGENTICA_REPO}}/plugins/system-web-dashboard/web", container: /work/plugins/system-web-dashboard/web }

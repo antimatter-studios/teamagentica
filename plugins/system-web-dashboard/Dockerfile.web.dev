@@ -1,0 +1,17 @@
+# Dev image: source bind-mounted from host at runtime.
+# The bind mount completely overlays /work/plugins/system-web-dashboard/web,
+# so any node_modules baked at build time becomes invisible. Instead we run
+# `npm install` on container start against the host's package.json — fast
+# no-op when up-to-date, transparently resolves missing/stale deps after
+# package.json edits without needing a manual host-side `npm install`.
+#
+# The container layout mirrors the monorepo (packages/api-client lives at
+# the relative path the host package.json's `file:` ref expects), so when
+# the host's plugins/system-web-dashboard/web is bind-mounted on top, the
+# `file:../../../packages/api-client` ref still resolves.
+FROM node:22-alpine
+WORKDIR /work
+COPY packages/api-client ./packages/api-client
+WORKDIR /work/plugins/system-web-dashboard/web
+EXPOSE 3000
+CMD ["sh", "-c", "npm install --no-audit --no-fund --prefer-offline && npm run dev -- --host 0.0.0.0 --port 3000"]
