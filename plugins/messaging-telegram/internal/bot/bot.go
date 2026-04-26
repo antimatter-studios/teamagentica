@@ -1321,12 +1321,15 @@ func stripToolPrefix(pluginID string) string {
 }
 
 // sendToChat sends a message to a chat, routing to the correct forum topic if topicID > 0.
+// Markdown in the response is converted to Telegram HTML so bold, italic, code,
+// links, and bullet lists render natively.
 func (b *Bot) sendToChat(chatID int64, topicID int, response string) error {
 	if len(response) == 0 {
 		response = "(empty response)"
 	}
 
-	chunks := splitMessage(response, maxMessageLength)
+	rendered := renderMarkdownForTelegram(response)
+	chunks := splitMessage(rendered, maxMessageLength)
 	for _, chunk := range chunks {
 		if topicID > 0 {
 			if _, err := b.sendToTopic(chatID, topicID, chunk); err != nil {
@@ -1334,6 +1337,7 @@ func (b *Bot) sendToChat(chatID int64, topicID int, response string) error {
 			}
 		} else {
 			msg := tgbotapi.NewMessage(chatID, chunk)
+			msg.ParseMode = tgbotapi.ModeHTML
 			if _, err := b.api.Send(msg); err != nil {
 				return fmt.Errorf("sending message chunk: %w", err)
 			}

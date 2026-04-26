@@ -871,6 +871,7 @@ func (b *Bot) sendResponse(s *discordgo.Session, channelID, response string) err
 		response = "(empty response)"
 	}
 
+	response = renderMarkdownForDiscord(response)
 	chunks := splitMessage(response, maxMessageLength)
 	for _, chunk := range chunks {
 		if _, err := s.ChannelMessageSend(channelID, chunk); err != nil {

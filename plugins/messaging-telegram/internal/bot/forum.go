@@ -47,12 +47,15 @@ func (b *Bot) closeForumTopic(chatID int64, topicID int) error {
 	return err
 }
 
-// sendToTopic sends a text message to a specific forum topic.
+// sendToTopic sends a text message to a specific forum topic. The text is
+// expected to already be rendered as Telegram HTML — parse_mode=HTML is set
+// so bold, italic, code, links, etc. render correctly.
 func (b *Bot) sendToTopic(chatID int64, topicID int, text string) (tgbotapi.Message, error) {
 	params := tgbotapi.Params{
 		"chat_id":            fmt.Sprintf("%d", chatID),
 		"message_thread_id":  fmt.Sprintf("%d", topicID),
 		"text":               text,
+		"parse_mode":         "HTML",
 	}
 
 	resp, err := b.api.MakeRequest("sendMessage", params)
