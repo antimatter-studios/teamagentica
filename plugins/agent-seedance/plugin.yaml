@@ -3,7 +3,10 @@ name: "Seedance Video"
 description: "AI video generation tool powered by Seedance 2.0 API"
 group: tools
 version: "2.0.29"
-image: "teamagentica-agent-seedance:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-seedance:latest"
 author: teamagentica
 tags: [video, ai, tool, seedance]
 capabilities: ["agent:tool:video-gen"]

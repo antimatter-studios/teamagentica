@@ -3,7 +3,10 @@ name: "Container Registry"
 description: "Self-hosted OCI image registry for building and deploying plugin images from within the platform"
 group: infrastructure
 version: "1.0.4"
-image: "teamagentica-infra-container-registry:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-infra-container-registry:latest"
 author: teamagentica
 tags: [infrastructure, container, registry, images, oci]
 capabilities: ["infra:container-registry", "tool:container-registry"]

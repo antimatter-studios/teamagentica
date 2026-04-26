@@ -3,7 +3,10 @@ name: "TeamAgentica Plugin Provider"
 description: "Default marketplace provider serving the official plugin catalog"
 group: infrastructure
 version: "1.0.18"
-image: "teamagentica-system-teamagentica-plugin-provider:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-system-teamagentica-plugin-provider:latest"
 author: teamagentica
 tags: [system, marketplace, provider]
 config_schema:

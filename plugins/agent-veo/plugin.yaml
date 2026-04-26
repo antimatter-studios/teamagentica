@@ -3,7 +3,10 @@ name: "Google Veo Video"
 description: "AI video generation tool powered by Google Veo"
 group: tools
 version: "1.0.19"
-image: "teamagentica-agent-veo:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-veo:latest"
 author: teamagentica
 tags: [video, ai, tool, veo, google, gemini]
 capabilities: ["agent:tool:video-gen"]

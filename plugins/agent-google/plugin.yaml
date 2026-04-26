@@ -3,8 +3,11 @@ name: "Google Agent"
 description: "AI agent powered by Google Gemini models including Flash and Pro"
 group: agents
 version: "1.0.35"
-image: "teamagentica-agent-google:latest"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-google:latest"
 tags: [chat, ai, agent, gemini, google]
 capabilities: ["agent:chat", "agent:completion", "memory:extraction"]
 dependencies: ["cost:tracking"]

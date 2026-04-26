@@ -3,7 +3,10 @@ name: "Disk Storage"
 description: "Namespace-isolated disk storage disks. Provides persistent, mountable disks with metadata and type labels (auth, storage). Other plugins discover it via the storage:disk capability."
 group: storage
 version: "1.2.25"
-image: "teamagentica-storage-disk:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-storage-disk:latest"
 author: teamagentica
 tags: [storage, disk, block, infrastructure, tool]
 capabilities: ["storage:api", "storage:disk", "tool:storage:api", "tool:storage:disk", "chat:commands"]

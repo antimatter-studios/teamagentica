@@ -2,9 +2,12 @@ id: network-traffic-manager
 name: "Network Traffic Manager"
 description: "Manages N named network tunnels (ngrok, ssh, ...). Each tunnel has its own driver + config and can be started/stopped by name. Broadcasts ingress:ready for tunnels with role=ingress."
 group: network
-version: "1.4.2"
-image: "teamagentica-network-traffic-manager:latest"
+version: "1.4.3"
 author: TeamAgentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-network-traffic-manager:latest"
 tags: [tunnel, networking, ngrok, ssh, ingress]
 capabilities: ["network:ingress", "network:tunnel"]
 shared_disks:

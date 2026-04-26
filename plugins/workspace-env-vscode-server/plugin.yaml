@@ -4,7 +4,10 @@ description: "VS Code in the browser — edit workspace files with a full IDE in
 group: workspace
 version: "1.0.20"
 author: teamagentica
-image: teamagentica-workspace-env-vscode-server:latest
+containers:
+  - name: default
+    role: api
+    image: teamagentica-workspace-env-vscode-server:latest
 tags: [editor, ide, vscode]
 capabilities: [workspace:environment]
 dependencies: ["workspace:manager"]

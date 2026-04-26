@@ -4,7 +4,10 @@ description: "Web terminal with OpenCode CLI — AI-powered coding assistant in 
 group: workspace
 version: "1.0.19"
 author: teamagentica
-image: teamagentica-workspace-env-opencode-terminal:latest
+containers:
+  - name: default
+    role: api
+    image: teamagentica-workspace-env-opencode-terminal:latest
 tags: [terminal, opencode, ai]
 capabilities: [workspace:environment]
 dependencies: ["workspace:manager"]

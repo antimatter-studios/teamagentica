@@ -2,9 +2,12 @@ id: messaging-telegram
 name: "Telegram Bot"
 description: "Telegram bot integration for receiving and responding to messages"
 group: messaging
-version: "1.0.56"
-image: "teamagentica-messaging-telegram:latest"
+version: "1.0.57"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-messaging-telegram:latest"
 tags: [chat, telegram, bot]
 dependencies: ["infra:agent-relay"]
 capabilities: ["messaging:telegram", "messaging:bot", "messaging:chat"]

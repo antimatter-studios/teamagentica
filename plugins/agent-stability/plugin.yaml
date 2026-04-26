@@ -3,7 +3,10 @@ name: "Stability AI Image"
 description: "AI image generation powered by Stable Diffusion 3.5"
 group: tools
 version: "1.0.23"
-image: "teamagentica-agent-stability:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-stability:latest"
 author: teamagentica
 tags: [image, ai, tool, stability, stable-diffusion]
 capabilities: ["agent:tool:image-gen"]

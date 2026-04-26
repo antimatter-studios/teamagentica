@@ -3,11 +3,14 @@ name: "Ollama Agent"
 description: "AI agent powered by local Ollama models — free, private, no API keys required"
 group: agents
 version: "0.1.16"
-image: "teamagentica-agent-ollama:latest"
 author: teamagentica
 tags: [chat, ai, agent, ollama, local]
 capabilities: ["agent:ollama", "agent:chat", "agent:completion", "memory:extraction"]
 dependencies: ["cost:tracking"]
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-ollama:latest"
 config_schema:
   OLLAMA_MODEL:
     type: select

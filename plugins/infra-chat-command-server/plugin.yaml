@@ -3,7 +3,10 @@ name: "Chat Command Server"
 description: "Aggregates chat commands from all plugins and routes invocations to the owning plugin"
 group: infrastructure
 version: "1.0.1"
-image: "teamagentica-infra-chat-command-server:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-infra-chat-command-server:latest"
 author: teamagentica
 tags: [infrastructure, chat-commands, routing]
 capabilities: ["chat:commands"]

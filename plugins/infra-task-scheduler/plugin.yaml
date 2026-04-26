@@ -3,7 +3,10 @@ name: "Task Scheduler"
 description: "Scheduled task system for automated workflows and recurring jobs"
 group: infrastructure
 version: "1.0.28"
-image: "teamagentica-infra-task-scheduler:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-infra-task-scheduler:latest"
 author: teamagentica
 tags: [infrastructure, scheduler, automation, tasks]
 capabilities: ["infra:scheduler", "tool:scheduler"]

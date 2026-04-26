@@ -3,7 +3,6 @@ name: "OpenAI Agent"
 description: "AI agent powered by OpenAI GPT and Codex models with chat and completion capabilities"
 group: agents
 version: "1.0.73"
-image: "teamagentica-agent-openai:latest"
 author: teamagentica
 tags: [chat, ai, agent, codex]
 capabilities: ["agent:openai", "agent:chat", "agent:completion", "workspace:environment"]
@@ -16,6 +15,10 @@ shared_disks:
   - name: agent-openai-sidecar
     type: shared
     target: /sidecar-bin
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-openai:latest"
 config_schema:
   OPENAI_BACKEND:
     type: select

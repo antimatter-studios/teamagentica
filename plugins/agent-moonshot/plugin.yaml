@@ -3,8 +3,11 @@ name: "Moonshot Agent"
 description: "AI agent powered by Moonshot's Kimi K2 with 128K context and thinking mode"
 group: agents
 version: "1.0.37"
-image: "teamagentica-agent-moonshot:latest"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-moonshot:latest"
 tags: [chat, ai, agent, kimi, moonshot]
 capabilities: ["agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]

@@ -3,8 +3,11 @@ name: "Task Tracker"
 description: "Kanban-style task boards for teams and agents"
 group: tool
 version: "1.0.39"
-image: "teamagentica-tool-task-tracker:latest"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-tool-task-tracker:latest"
 tags: [tasks, kanban, productivity]
 capabilities:
   - system:tasks

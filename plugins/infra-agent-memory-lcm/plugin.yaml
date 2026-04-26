@@ -3,7 +3,10 @@ name: "Agent Memory: Episodic (LCM)"
 description: "Lossless context management — DAG-based conversation history with summarization"
 group: infrastructure
 version: "0.5.18"
-image: "teamagentica-infra-agent-memory-lcm:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-infra-agent-memory-lcm:latest"
 author: teamagentica
 tags: [memory, episodic, lcm, context, conversations]
 capabilities: ["tool:memory:bank:episodic"]

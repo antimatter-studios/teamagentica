@@ -3,7 +3,10 @@ name: "Agent Registry"
 description: "Unified registry for agents and aliases — manages system prompts, model overrides, and routing"
 group: infrastructure
 version: "1.3.3"
-image: "teamagentica-infra-agent-registry:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-infra-agent-registry:latest"
 author: teamagentica
 tags: [infrastructure, agents, aliases]
 capabilities: ["tool:agents", "tool:aliases"]

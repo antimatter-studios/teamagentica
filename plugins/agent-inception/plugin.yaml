@@ -3,8 +3,11 @@ name: "Inception Mercury"
 description: "AI agent powered by Inception Labs Mercury 2, the world's fastest diffusion-based reasoning LLM"
 group: agents
 version: "1.0.25"
-image: "teamagentica-agent-inception:latest"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-agent-inception:latest"
 tags: [chat, ai, agent, inception, mercury, diffusion, code]
 capabilities: ["agent:chat", "agent:completion"]
 dependencies: ["cost:tracking"]

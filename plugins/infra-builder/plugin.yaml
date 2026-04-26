@@ -3,7 +3,10 @@ name: "Docker Builder"
 description: "Builds Docker images from source in storage-disk shared or workspace disks"
 group: infrastructure
 version: "1.0.13"
-image: "teamagentica-infra-builder:latest"
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-infra-builder:latest"
 author: teamagentica
 tags: [system, build, docker, infrastructure]
 capabilities: ["infra:builder"]

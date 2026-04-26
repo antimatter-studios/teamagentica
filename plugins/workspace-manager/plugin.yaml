@@ -2,12 +2,19 @@ id: workspace-manager
 name: "Workspace Manager"
 description: "Orchestrates workspace environments — discovers workspace plugins, manages container lifecycle, and creates isolated disks"
 group: workspace
-version: "1.0.70"
-image: "teamagentica-workspace-manager:latest"
+version: "1.0.76"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-workspace-manager:latest"
 tags: [infrastructure]
 capabilities: ["workspace:manager", "chat:commands"]
 requested_scopes: ["workspace.create", "workspace.delete", "storage.read", "storage.write"]
+shared_disks:
+  - name: agent-sockets
+    type: shared
+    target: /agent-sockets
 config_schema:
   PLUGIN_DEBUG:
     type: boolean

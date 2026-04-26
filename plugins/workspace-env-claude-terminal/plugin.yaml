@@ -4,7 +4,10 @@ description: "Web terminal with Claude Code CLI — AI-powered coding assistant 
 group: workspace
 version: "1.0.25"
 author: teamagentica
-image: teamagentica-workspace-env-claude-terminal:latest
+containers:
+  - name: default
+    role: api
+    image: teamagentica-workspace-env-claude-terminal:latest
 tags: [terminal, claude, ai]
 capabilities: [workspace:environment]
 dependencies: ["workspace:manager"]

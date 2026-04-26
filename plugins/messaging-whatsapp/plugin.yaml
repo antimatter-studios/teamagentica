@@ -3,8 +3,11 @@ name: "WhatsApp Bot"
 description: "WhatsApp bot integration using the WhatsApp Business Cloud API for receiving and responding to messages"
 group: messaging
 version: "1.0.27"
-image: "teamagentica-messaging-whatsapp:latest"
 author: teamagentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-messaging-whatsapp:latest"
 tags: [chat, whatsapp, bot, messaging]
 capabilities: ["messaging:whatsapp", "messaging:bot", "messaging:chat"]
 dependencies: ["infra:agent-relay"]

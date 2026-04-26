@@ -3,8 +3,11 @@ name: "Webhooks"
 description: "Webhook route registry and reverse proxy. Routes external webhook traffic from the ingress to internal plugins."
 group: network
 version: "1.0.18"
-image: "teamagentica-network-webhook:latest"
 author: TeamAgentica
+containers:
+  - name: default
+    role: api
+    image: "teamagentica-network-webhook:latest"
 tags: [webhook, networking, routing]
 capabilities: ["network:webhook"]
 config_schema:
