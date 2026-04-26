@@ -59,9 +59,6 @@ Orchestrates workspace environments -- discovers workspace plugins, manages cont
 | POST | `/mcp/start_workspace` | Start a workspace |
 | POST | `/mcp/rename_workspace` | Rename a workspace |
 | POST | `/mcp/build_plugin` | Build a Docker image (routes to infra-builder) |
-| POST | `/mcp/deploy_plugin` | Deploy a candidate container |
-| POST | `/mcp/promote_plugin` | Promote candidate to primary |
-| POST | `/mcp/rollback_plugin` | Stop candidate, revert to primary |
 
 ## How It Works
 

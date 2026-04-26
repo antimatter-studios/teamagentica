@@ -154,9 +154,6 @@ func main() {
 	router.POST("/mcp/delete_workspace", h.ToolDeleteWorkspace)
 	router.POST("/mcp/rename_workspace", h.ToolRenameWorkspace)
 	router.POST("/mcp/build_plugin", h.ToolBuildPlugin)
-	router.POST("/mcp/deploy_plugin", h.ToolDeployPlugin)
-	router.POST("/mcp/promote_plugin", h.ToolPromotePlugin)
-	router.POST("/mcp/rollback_plugin", h.ToolRollbackPlugin)
 
 	sdkClient.ListenAndServe(port, router)
 }
