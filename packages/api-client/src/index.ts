@@ -5,6 +5,7 @@ import { CostsAPI } from "./costs.js";
 import { AliasesAPI } from "./aliases.js";
 import { EventsAPI } from "./events.js";
 import { WorkspacesAPI } from "./workspaces.js";
+import { TunnelsAPI } from "./tunnels.js";
 import { MarketplaceAPI } from "./marketplace.js";
 import { ChatAPI } from "./chat.js";
 import { FilesAPI } from "./files.js";
@@ -23,6 +24,7 @@ export class TeamAgenticaClient {
   readonly aliases: AliasesAPI;
   readonly events: EventsAPI;
   readonly workspaces: WorkspacesAPI;
+  readonly tunnels: TunnelsAPI;
   readonly marketplace: MarketplaceAPI;
   readonly chat: ChatAPI;
   readonly files: FilesAPI;
@@ -41,6 +43,7 @@ export class TeamAgenticaClient {
     this.aliases = new AliasesAPI(this.http);
     this.events = new EventsAPI(config.baseUrl);
     this.workspaces = new WorkspacesAPI(this.http);
+    this.tunnels = new TunnelsAPI(this.http);
     this.marketplace = new MarketplaceAPI(this.http);
     this.chat = new ChatAPI(this.http);
     this.files = new FilesAPI(this.http, (cap) => this.plugins.search(cap));
@@ -96,6 +99,9 @@ export { EventsAPI } from "./events.js";
 
 export type { Environment, Workspace, Disk, WorkspaceDisk, WorkspaceOptions, WorkspaceOptionsUpdate } from "./workspaces.js";
 export { WorkspacesAPI } from "./workspaces.js";
+
+export type { Tunnel, TunnelStatus, CreateTunnelRequest } from "./tunnels.js";
+export { TunnelsAPI } from "./tunnels.js";
 
 export type {
   MarketplacePlugin,

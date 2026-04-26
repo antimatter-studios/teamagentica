@@ -52,6 +52,7 @@ export interface WorkspaceOptions {
   agent_plugin: string;
   agent_model: string;
   sidecar_id: string;
+  tunnel_refs?: string;        // JSON string: string[] of traffic-manager tunnel names
 }
 
 export interface WorkspaceOptionsUpdate {
@@ -59,6 +60,7 @@ export interface WorkspaceOptionsUpdate {
   disks?: WorkspaceDisk[];
   agent_plugin?: string;
   agent_model?: string;
+  tunnel_refs?: string[];
 }
 
 export class WorkspacesAPI {
@@ -84,6 +86,7 @@ export class WorkspacesAPI {
     environment_id: string;
     git_repo?: string;
     disk_id?: string;
+    tunnel_refs?: string[];
   }): Promise<void> {
     return this.http.post(`${ROUTE}/workspaces`, data);
   }
