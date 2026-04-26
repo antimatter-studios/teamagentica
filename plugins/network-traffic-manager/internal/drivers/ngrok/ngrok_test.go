@@ -8,19 +8,19 @@ import (
 )
 
 func TestNew_RequiresAuthToken(t *testing.T) {
-	if _, err := New("host:1", map[string]string{}); err == nil {
+	if _, err := New("test", "host:1", map[string]string{}); err == nil {
 		t.Fatal("expected error when authtoken missing")
 	}
 }
 
 func TestNew_RequiresTarget(t *testing.T) {
-	if _, err := New("", map[string]string{"authtoken": "x"}); err == nil {
+	if _, err := New("test", "", map[string]string{"authtoken": "x"}); err == nil {
 		t.Fatal("expected error when target missing")
 	}
 }
 
 func TestStatus_InitiallyStopped(t *testing.T) {
-	d, err := New("host:1", map[string]string{"authtoken": "x"})
+	d, err := New("test", "host:1", map[string]string{"authtoken": "x"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestStatus_InitiallyStopped(t *testing.T) {
 }
 
 func TestStop_Idempotent(t *testing.T) {
-	d, err := New("host:1", map[string]string{"authtoken": "x"})
+	d, err := New("test", "host:1", map[string]string{"authtoken": "x"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

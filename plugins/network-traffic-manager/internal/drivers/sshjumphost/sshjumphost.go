@@ -110,7 +110,7 @@ type driver struct {
 // The `target` argument is unused — for this driver the conceptual "target"
 // is the agent socket path, which is supplied via the agent_socket_path cfg
 // key. The Factory signature requires target, so we accept-and-ignore.
-func New(target string, cfg map[string]string) (drivers.Driver, error) {
+func New(_ /* name */ string, target string, cfg map[string]string) (drivers.Driver, error) {
 	_ = target // intentionally unused; see doc above
 
 	host := cfg[keyBastionHost]
@@ -293,7 +293,7 @@ func (d *driver) Status() drivers.Status {
 }
 
 func (d *driver) statusLocked() drivers.Status {
-	return drivers.Status{State: d.state, URL: d.url, Error: d.errs}
+	return drivers.Status{State: d.state, URL: d.url, Error: d.errs, LocalSocketPath: d.socketPath}
 }
 
 func (d *driver) setError(msg string) {

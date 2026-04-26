@@ -160,7 +160,7 @@ func (m *Manager) Start(ctx context.Context, name string) (drivers.Status, error
 		return drivers.Status{}, err
 	}
 	if t.driver == nil {
-		d, err := drivers.Build(t.spec.Driver, target, t.spec.Config)
+		d, err := drivers.Build(t.spec.Driver, t.spec.Name, target, t.spec.Config)
 		if err != nil {
 			m.mu.Unlock()
 			return drivers.Status{}, fmt.Errorf("build %s: %w", t.spec.Driver, err)

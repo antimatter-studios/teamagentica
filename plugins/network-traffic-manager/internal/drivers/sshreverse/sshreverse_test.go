@@ -25,38 +25,38 @@ func TestRegistered(t *testing.T) {
 }
 
 func TestNew_RequiresTarget(t *testing.T) {
-	if _, err := New("", map[string]string{"host": "h", "user": "u", "password": "p"}); err == nil {
+	if _, err := New("test", "", map[string]string{"host": "h", "user": "u", "password": "p"}); err == nil {
 		t.Fatal("expected error when target missing")
 	}
 }
 
 func TestNew_RequiresHost(t *testing.T) {
-	if _, err := New("local:1", map[string]string{"user": "u", "password": "p"}); err == nil {
+	if _, err := New("test", "local:1", map[string]string{"user": "u", "password": "p"}); err == nil {
 		t.Fatal("expected error when host missing")
 	}
 }
 
 func TestNew_RequiresUser(t *testing.T) {
-	if _, err := New("local:1", map[string]string{"host": "h", "password": "p"}); err == nil {
+	if _, err := New("test", "local:1", map[string]string{"host": "h", "password": "p"}); err == nil {
 		t.Fatal("expected error when user missing")
 	}
 }
 
 func TestNew_RequiresAuth(t *testing.T) {
-	if _, err := New("local:1", map[string]string{"host": "h", "user": "u"}); err == nil {
+	if _, err := New("test", "local:1", map[string]string{"host": "h", "user": "u"}); err == nil {
 		t.Fatal("expected error when neither private_key nor password provided")
 	}
 }
 
 func TestNew_InvalidPort(t *testing.T) {
-	if _, err := New("local:1", map[string]string{"host": "h", "user": "u", "password": "p", "port": "99999"}); err == nil {
+	if _, err := New("test", "local:1", map[string]string{"host": "h", "user": "u", "password": "p", "port": "99999"}); err == nil {
 		t.Fatal("expected port range error")
 	}
 }
 
 func TestNew_PrivateKey(t *testing.T) {
 	pemStr := generateTestPrivateKeyPEM(t)
-	d, err := New("local:1", map[string]string{
+	d, err := New("test", "local:1", map[string]string{
 		"host":             "h",
 		"user":             "u",
 		"private_key":      pemStr,
@@ -72,7 +72,7 @@ func TestNew_PrivateKey(t *testing.T) {
 
 func TestNew_KnownHostsParse(t *testing.T) {
 	_, pubPEM := generateTestKeyPair(t)
-	d, err := New("local:1", map[string]string{
+	d, err := New("test", "local:1", map[string]string{
 		"host":        "h",
 		"user":        "u",
 		"password":    "pw",
@@ -87,7 +87,7 @@ func TestNew_KnownHostsParse(t *testing.T) {
 }
 
 func TestStop_Idempotent(t *testing.T) {
-	d, err := New("local:1", map[string]string{"host": "h", "user": "u", "password": "pw"})
+	d, err := New("test", "local:1", map[string]string{"host": "h", "user": "u", "password": "pw"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

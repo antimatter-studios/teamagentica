@@ -45,7 +45,7 @@ func minimalCfg(t *testing.T) map[string]string {
 func TestNew_RequiresBastionHost(t *testing.T) {
 	cfg := minimalCfg(t)
 	delete(cfg, "bastion_host")
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected error when bastion_host missing")
 	}
 }
@@ -53,7 +53,7 @@ func TestNew_RequiresBastionHost(t *testing.T) {
 func TestNew_RequiresBastionUser(t *testing.T) {
 	cfg := minimalCfg(t)
 	delete(cfg, "bastion_user")
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected error when bastion_user missing")
 	}
 }
@@ -61,7 +61,7 @@ func TestNew_RequiresBastionUser(t *testing.T) {
 func TestNew_RequiresBastionPrivateKey(t *testing.T) {
 	cfg := minimalCfg(t)
 	delete(cfg, "bastion_private_key")
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected error when bastion_private_key missing")
 	}
 }
@@ -69,7 +69,7 @@ func TestNew_RequiresBastionPrivateKey(t *testing.T) {
 func TestNew_RequiresUsername(t *testing.T) {
 	cfg := minimalCfg(t)
 	delete(cfg, "username")
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected error when username missing")
 	}
 }
@@ -77,7 +77,7 @@ func TestNew_RequiresUsername(t *testing.T) {
 func TestNew_RequiresAuthorizedKeys(t *testing.T) {
 	cfg := minimalCfg(t)
 	delete(cfg, "authorized_keys")
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected error when authorized_keys missing")
 	}
 }
@@ -85,7 +85,7 @@ func TestNew_RequiresAuthorizedKeys(t *testing.T) {
 func TestNew_RequiresAgentSocketPath(t *testing.T) {
 	cfg := minimalCfg(t)
 	delete(cfg, "agent_socket_path")
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected error when agent_socket_path missing")
 	}
 }
@@ -93,7 +93,7 @@ func TestNew_RequiresAgentSocketPath(t *testing.T) {
 func TestNew_TargetIsIgnored(t *testing.T) {
 	cfg := minimalCfg(t)
 	// non-empty target should still succeed (target is documented as unused)
-	d, err := New("ignored-target", cfg)
+	d, err := New("test", "ignored-target", cfg)
 	if err != nil {
 		t.Fatalf("unexpected error with target set: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestNew_TargetIsIgnored(t *testing.T) {
 }
 
 func TestNew_Succeeds(t *testing.T) {
-	d, err := New("", minimalCfg(t))
+	d, err := New("test", "", minimalCfg(t))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestNew_Succeeds(t *testing.T) {
 func TestNew_InvalidPort(t *testing.T) {
 	cfg := minimalCfg(t)
 	cfg["bastion_port"] = "99999"
-	if _, err := New("", cfg); err == nil {
+	if _, err := New("test", "", cfg); err == nil {
 		t.Fatal("expected port range error")
 	}
 }
@@ -124,7 +124,7 @@ func TestNew_HostKeyProvided(t *testing.T) {
 	cfg := minimalCfg(t)
 	hostKeyPEM, _ := generateTestKeyPair(t)
 	cfg["host_key"] = hostKeyPEM
-	if _, err := New("", cfg); err != nil {
+	if _, err := New("test", "", cfg); err != nil {
 		t.Fatalf("unexpected error with host_key: %v", err)
 	}
 }
@@ -133,13 +133,13 @@ func TestNew_BastionKnownHostsParsed(t *testing.T) {
 	cfg := minimalCfg(t)
 	_, pub := generateTestKeyPair(t)
 	cfg["bastion_known_hosts"] = pub
-	if _, err := New("", cfg); err != nil {
+	if _, err := New("test", "", cfg); err != nil {
 		t.Fatalf("unexpected error with bastion_known_hosts: %v", err)
 	}
 }
 
 func TestStop_Idempotent(t *testing.T) {
-	d, err := New("", minimalCfg(t))
+	d, err := New("test", "", minimalCfg(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

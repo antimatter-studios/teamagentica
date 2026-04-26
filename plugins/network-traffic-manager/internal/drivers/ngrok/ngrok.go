@@ -31,7 +31,7 @@ type driver struct {
 }
 
 // New builds an ngrok driver. Required config: authtoken. Optional: domain.
-func New(target string, cfg map[string]string) (drivers.Driver, error) {
+func New(_ /* name */ string, target string, cfg map[string]string) (drivers.Driver, error) {
 	if target == "" {
 		return nil, fmt.Errorf("ngrok: target is required")
 	}

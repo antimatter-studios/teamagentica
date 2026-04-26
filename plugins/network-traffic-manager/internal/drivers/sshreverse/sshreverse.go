@@ -42,28 +42,36 @@ const (
 )
 
 type driver struct {
+	name       string
 	target     string
 	host       string
 	port       int
 	user       string
 	authMethod ssh.AuthMethod
+	publicKey  string // authorized_keys-format pubkey when we own the keypair
 	hostKeys   []ssh.PublicKey // empty => accept any
 	remoteHost string
-	remotePort int
+	remotePort int // requested; may be 0 (bastion-assigned)
 
-	mu       sync.RWMutex
-	cancel   context.CancelFunc
-	client   *ssh.Client
-	listener net.Listener
-	state    string
-	url      string
-	errs     string
+	mu             sync.RWMutex
+	cancel         context.CancelFunc
+	client         *ssh.Client
+	listener       net.Listener
+	state          string
+	url            string
+	errs           string
+	actualEndpoint string // host:port the user dials externally; filled after listener is up
 }
 
-// New builds an ssh-reverse driver. Required: host, user, and either
-// private_key or password. remote_bind_port is required if you want a stable
-// public port; defaults to 0 (bastion-assigned).
-func New(target string, cfg map[string]string) (drivers.Driver, error) {
+// New builds an ssh-reverse driver. Required: host, user. Auth: if neither
+// private_key nor password is set, the driver auto-generates an ed25519
+// keypair (persisted at /data/ssh-reverse-keys/<name>.pem) and exposes the
+// public key via Status — install it in ~/.ssh/authorized_keys on the SSH
+// host. remote_bind_port may be 0 (bastion-assigned) or a fixed port.
+func New(name, target string, cfg map[string]string) (drivers.Driver, error) {
+	if name == "" {
+		return nil, fmt.Errorf("ssh-reverse: name required")
+	}
 	if target == "" {
 		return nil, fmt.Errorf("ssh-reverse: target required")
 	}
@@ -88,7 +96,7 @@ func New(target string, cfg map[string]string) (drivers.Driver, error) {
 		remoteHost = "0.0.0.0"
 	}
 
-	auth, err := buildAuth(cfg)
+	auth, pubKey, err := buildAuth(name, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +107,13 @@ func New(target string, cfg map[string]string) (drivers.Driver, error) {
 	}
 
 	return &driver{
+		name:       name,
 		target:     target,
 		host:       host,
 		port:       port,
 		user:       user,
 		authMethod: auth,
+		publicKey:  pubKey,
 		hostKeys:   hostKeys,
 		remoteHost: remoteHost,
 		remotePort: remotePort,
@@ -131,10 +141,18 @@ func (d *driver) Start(ctx context.Context) (drivers.Status, error) {
 		return d.Status(), err
 	}
 
+	// Capture the actual remote port (sshd may have assigned a random one if we
+	// requested 0). listener.Addr() is the remote bind address.
+	actualPort := d.remotePort
+	if addr, ok := listener.Addr().(*net.TCPAddr); ok && addr.Port > 0 {
+		actualPort = addr.Port
+	}
+
 	d.mu.Lock()
 	d.client = client
 	d.listener = listener
-	d.url = fmt.Sprintf("ssh://%s@%s:%d (remote bind %s:%d -> %s)", d.user, d.host, d.port, d.remoteHost, d.remotePort, d.target)
+	d.url = fmt.Sprintf("ssh://%s@%s:%d (remote bind %s:%d -> %s)", d.user, d.host, d.port, d.remoteHost, actualPort, d.target)
+	d.actualEndpoint = net.JoinHostPort(d.host, strconv.Itoa(actualPort))
 	d.state = drivers.StateRunning
 	st := d.statusLocked()
 	d.mu.Unlock()
@@ -174,7 +192,13 @@ func (d *driver) Status() drivers.Status {
 }
 
 func (d *driver) statusLocked() drivers.Status {
-	return drivers.Status{State: d.state, URL: d.url, Error: d.errs}
+	return drivers.Status{
+		State:     d.state,
+		URL:       d.url,
+		Error:     d.errs,
+		PublicKey: d.publicKey,
+		Endpoint:  d.actualEndpoint,
+	}
 }
 
 func (d *driver) setError(msg string) {
@@ -258,18 +282,28 @@ func (d *driver) hostKeyCallback() ssh.HostKeyCallback {
 	}
 }
 
-func buildAuth(cfg map[string]string) (ssh.AuthMethod, error) {
+// buildAuth resolves the SSH auth method.
+//   - If private_key is set, parse and use it; no public key surfaced.
+//   - If password is set, use it; no public key surfaced.
+//   - Otherwise, generate (or load) an ed25519 keypair persisted under
+//     /data/ssh-reverse-keys/<name>.pem and surface its public key so the
+//     user can install it on the SSH host's authorized_keys.
+func buildAuth(name string, cfg map[string]string) (ssh.AuthMethod, string, error) {
 	if pem := cfg[keyPrivateKey]; pem != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(pem))
 		if err != nil {
-			return nil, fmt.Errorf("ssh-reverse: parse private_key: %w", err)
+			return nil, "", fmt.Errorf("ssh-reverse: parse private_key: %w", err)
 		}
-		return ssh.PublicKeys(signer), nil
+		return ssh.PublicKeys(signer), "", nil
 	}
 	if pw := cfg[keyPassword]; pw != "" {
-		return ssh.Password(pw), nil
+		return ssh.Password(pw), "", nil
 	}
-	return nil, fmt.Errorf("ssh-reverse: either private_key or password is required")
+	signer, pub, err := loadOrCreateKey(name)
+	if err != nil {
+		return nil, "", fmt.Errorf("ssh-reverse: auto-key: %w", err)
+	}
+	return ssh.PublicKeys(signer), pub, nil
 }
 
 // parseKnownHosts accepts one-key-per-line in SSH authorized_keys format.
