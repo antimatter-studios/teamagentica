@@ -30,19 +30,24 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-homebrew_casks:
-  - name: tacli
-    binaries:
-      - tacli
-    repository:
-      owner: antimatter-studios
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: https://github.com/antimatter-studios/teamagentica
-    description: "Team Agentica CLI — inspect and manage the platform"
-    hooks:
-      post:
-        install: 'system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/tacli"]'
+# Deliberately no Homebrew section here.
+#
+# This used to publish a cask by writing straight into
+# antimatter-studios/homebrew-tap with a token that had write access to it. That
+# tap now reads each project's public releases, computes the checksum of the asset
+# it actually downloaded, and has a person merge the result — so nothing automated
+# can change what `brew install` fetches. See antimatter-studios/homebrew-tap#25.
+#
+# `Formula/tacli.rb` is therefore maintained in the tap, and it is a formula rather
+# than a cask because the cask this replaced was broken on Linux: Homebrew
+# quarantines what a cask stages, these binaries carry only the ad-hoc signature
+# the linker applies, so Gatekeeper killed the first run unless the cask cleared
+# the attribute — and the `/usr/bin/xattr` call that cleared it does not exist on
+# Linux, where the cask DSL's raising `system_command` then failed the install.
+# Nothing quarantines what a formula installs.
+#
+# The consequence here: publishing a release is the whole job, and the release
+# needs write access to nothing but this repository.
 
 changelog:
   disable: true

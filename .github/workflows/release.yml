@@ -58,12 +58,23 @@ jobs:
           # fallback if empty
           [ -s /tmp/changelog.md ] || echo "* Maintenance release" > /tmp/changelog.md
 
+      # `~> v2` floats to the newest v2.x, and goreleaser removes deprecated
+      # configuration in minor releases — so a release could break with no change
+      # to this repository and no warning. Bounding it to the 2.17 series still
+      # picks up patch fixes, and moving to a new minor becomes a deliberate edit
+      # that CI validates first.
+      #
+      # Not pinned to an exact patch: dependabot updates `uses:` refs but not an
+      # action's `version` input, so an exact pin would go stale unnoticed.
+      #
+      # No tap token: the release no longer writes into the Homebrew tap, so it
+      # needs no credential for any repository but this one. The secret itself can
+      # be deleted from this repository's settings.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "~> v2.17"
           args: release --clean --release-notes /tmp/changelog.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
