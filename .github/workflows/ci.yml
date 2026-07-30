@@ -29,20 +29,14 @@ jobs:
       # GOWORK=off builds tacli as its own module, which is how goreleaser builds
       # it (`dir: tacli`). Leaving the workspace on would pull in every other
       # module in go.work and test something the release does not ship.
-      - name: Build and vet tacli
+      - name: Build, vet and test tacli
         env:
           GOWORK: off
         working-directory: tacli
         run: |
           go build ./...
           go vet ./...
-
-      # `go test ./...` is deliberately absent: four tests in internal/cli fail on
-      # a clean checkout, asserting a flag-based plugin interface that plugin.go
-      # and marketplace.go implement as subcommands. Adding the step here would
-      # make this workflow red on arrival and block unrelated work.
-      #
-      # Tracked in #2. Re-enabling the step is the natural close for it.
+          go test ./... -count=1
 
       # `check` validates the release config without building or publishing, so a
       # goreleaser deprecation fails a pull request rather than a release.
