@@ -1,0 +1,91 @@
+name: ci
+
+# This repository had no pull-request gate at all: release.yml was the only
+# workflow, so nothing was compiled or validated until a tag was pushed. A broken
+# build or a stale release config surfaced as a failed release.
+#
+# Scoped to tacli, which is what the release publishes, and scoped the same way
+# release.yml scopes itself. The rest of the workspace is deliberately out of
+# scope here rather than half-covered.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tacli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tacli/go.sum
+
+      # GOWORK=off builds tacli as its own module, which is how goreleaser builds
+      # it (`dir: tacli`). Leaving the workspace on would pull in every other
+      # module in go.work and test something the release does not ship.
+      - name: Build and vet tacli
+        env:
+          GOWORK: off
+        working-directory: tacli
+        run: |
+          go build ./...
+          go vet ./...
+
+      # `go test ./...` is deliberately absent: four tests in internal/cli fail on
+      # a clean checkout, asserting a flag-based plugin interface that plugin.go
+      # and marketplace.go implement as subcommands. Adding the step here would
+      # make this workflow red on arrival and block unrelated work.
+      #
+      # Tracked in #2. Re-enabling the step is the natural close for it.
+
+      # `check` validates the release config without building or publishing, so a
+      # goreleaser deprecation fails a pull request rather than a release.
+      #
+      # Keep this version constraint identical to the one in release.yml —
+      # validating against a different goreleaser than the one that cuts the
+      # release is what this step exists to prevent.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2.17'
+          args: check
+
+      # `goreleaser check` validates the config's shape, not this policy. The
+      # Homebrew tap reads this project's public releases and a person merges the
+      # result, so nothing here may write into it — see
+      # antimatter-studios/homebrew-tap#25. This config declared a Homebrew
+      # publisher and carried a token with write access to that repository, and
+      # nothing objected, because nothing was looking.
+      - name: The release publishes to no other repository
+        run: |
+          set -euo pipefail
+          fail=0
+
+          # goreleaser publishers that commit a package definition into a separate
+          # git repository. Anchored at column 0, where a top-level key sits, so a
+          # mention in a comment or a nested value does not count — .goreleaser.yml
+          # explains in prose why the Homebrew section is absent.
+          for key in brews homebrew_casks nix scoops winget chocolateys aurs aur_sources krews; do
+            if grep -nE "^${key}:" .goreleaser.yml; then
+              echo "::error file=.goreleaser.yml::'${key}:' commits a package definition into another repository; the Homebrew tap pulls from releases instead" >&2
+              fail=1
+            fi
+          done
+
+          # A credential for another repository has no other purpose here.
+          #
+          # Matches where a token is DEREFERENCED — `secrets.X` in a workflow,
+          # `.Env.X` in a goreleaser template — not the bare name, so the comment
+          # in release.yml explaining why there is no token does not trip it, and
+          # neither does this line.
+          if grep -rnE '(secrets|\.Env)\.[A-Z_]*TAP_TOKEN' .github/ .goreleaser.yml; then
+            echo "::error::a tap token is dereferenced above; releasing needs no credential for any repository but this one" >&2
+            fail=1
+          fi
+
+          [ "$fail" = 0 ] && echo "the release writes only to this repository"
