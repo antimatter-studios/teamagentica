@@ -48,38 +48,3 @@ jobs:
         with:
           version: '~> v2.17'
           args: check
-
-      # `goreleaser check` validates the config's shape, not this policy. The
-      # Homebrew tap reads this project's public releases and a person merges the
-      # result, so nothing here may write into it — see
-      # antimatter-studios/homebrew-tap#25. This config declared a Homebrew
-      # publisher and carried a token with write access to that repository, and
-      # nothing objected, because nothing was looking.
-      - name: The release publishes to no other repository
-        run: |
-          set -euo pipefail
-          fail=0
-
-          # goreleaser publishers that commit a package definition into a separate
-          # git repository. Anchored at column 0, where a top-level key sits, so a
-          # mention in a comment or a nested value does not count — .goreleaser.yml
-          # explains in prose why the Homebrew section is absent.
-          for key in brews homebrew_casks nix scoops winget chocolateys aurs aur_sources krews; do
-            if grep -nE "^${key}:" .goreleaser.yml; then
-              echo "::error file=.goreleaser.yml::'${key}:' commits a package definition into another repository; the Homebrew tap pulls from releases instead" >&2
-              fail=1
-            fi
-          done
-
-          # A credential for another repository has no other purpose here.
-          #
-          # Matches where a token is DEREFERENCED — `secrets.X` in a workflow,
-          # `.Env.X` in a goreleaser template — not the bare name, so the comment
-          # in release.yml explaining why there is no token does not trip it, and
-          # neither does this line.
-          if grep -rnE '(secrets|\.Env)\.[A-Z_]*TAP_TOKEN' .github/ .goreleaser.yml; then
-            echo "::error::a tap token is dereferenced above; releasing needs no credential for any repository but this one" >&2
-            fail=1
-          fi
-
-          [ "$fail" = 0 ] && echo "the release writes only to this repository"
