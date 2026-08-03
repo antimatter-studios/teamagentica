@@ -71,9 +71,9 @@ jobs:
       # needs no credential for any repository but this one.
       #
       # This repository never held one of its own — it used an organisation-level
-      # secret — and the tap rejects anything written into it from elsewhere, so
-      # re-adding a publisher here would fail its own release rather than reach a
-      # user.
+      # secret. The tap's CI rejects a formula or cask carrying a generator's
+      # DO-NOT-EDIT banner, which is what a re-added publisher would write, so one
+      # added here would be caught there.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
