@@ -41,6 +41,18 @@ func main() {
 	}
 	log.Printf("catalog: opened %s (%d plugins)", dbPath, catalog.Count())
 
+	// Seed the manifests the image ships with, so a brand-new instance has a
+	// catalog to install from before anything has been submitted to it.
+	manifestDir := os.Getenv("CATALOG_MANIFEST_DIR")
+	if manifestDir == "" {
+		manifestDir = store.DefaultManifestDir
+	}
+	if n, err := catalog.SeedManifests(manifestDir); err != nil {
+		log.Printf("catalog: seeded %d manifest(s) from %s with errors: %v", n, manifestDir, err)
+	} else if n > 0 {
+		log.Printf("catalog: seeded %d manifest(s) from %s", n, manifestDir)
+	}
+
 	// Seed the default system provider (self).
 	selfURL := fmt.Sprintf("https://teamagentica-plugin-%s:%d", manifest.ID, defaultPort)
 	if err := catalog.SeedProvider("TeamAgentica Plugin Provider", selfURL, true); err != nil {

@@ -15,19 +15,19 @@ The arguments describe what you want to do. Examples:
 
 Get a JWT token by running:
 ```bash
-task kernel:get_token
+chore kernel:get_token
 ```
 
 Store it for subsequent requests:
 ```bash
-TOKEN=$(task kernel:get_token 2>/dev/null)
+TOKEN=$(chore kernel:get_token 2>/dev/null)
 ```
 
 If the token doesn't work (e.g. expired or invalid), reconnect first:
 ```bash
-task kernel:connect
+chore kernel:connect
 ```
-Then re-run `task kernel:get_token` to get a fresh token.
+Then re-run `chore kernel:get_token` to get a fresh token.
 
 ## API Base URL
 

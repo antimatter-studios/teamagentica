@@ -179,13 +179,26 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	// 9. Register admin user.
 	fmt.Printf("Creating admin user (%s)...\n", tc.Admin.Email)
-	lr, err := c.Register(tc.Admin.Email, tc.Admin.Password)
+	lr, err := registerWhenAuthReady(c, tc.Admin.Email, tc.Admin.Password, 90*time.Second)
 	if err != nil {
-		// Registration closed means users already exist — try logging in instead.
-		fmt.Printf("Registration closed (existing database), logging in as %s...\n", tc.Admin.Email)
-		lr, err = c.Login(tc.Admin.Email, tc.Admin.Password)
-		if err != nil {
-			return fmt.Errorf("login failed (kernel has existing data but credentials don't match): %w", err)
+		// Only a refusal means "this instance already has users, log in instead".
+		// Every other failure used to be reported that way too, so a kernel whose
+		// user plugin had not started sent you looking for a database that was
+		// never there.
+		switch status := client.StatusOf(err); status {
+		case http.StatusForbidden, http.StatusConflict:
+			fmt.Printf("Registration closed (existing users), logging in as %s...\n", tc.Admin.Email)
+			lr, err = c.Login(tc.Admin.Email, tc.Admin.Password)
+			if err != nil {
+				return fmt.Errorf("login failed (this instance has users, but these credentials do not match): %w", err)
+			}
+		case http.StatusServiceUnavailable:
+			return fmt.Errorf("the kernel cannot serve accounts yet: %w\n"+
+				"Accounts live in the system-user-manager plugin, which the kernel starts at boot.\n"+
+				"Check `docker logs %s` — its image is usually missing; build it with "+
+				"`chore plugin:build system-user-manager`", err, tc.Kernel.Name)
+		default:
+			return fmt.Errorf("could not create the admin user: %w", err)
 		}
 	}
 	c.Token = lr.Token
@@ -350,6 +363,43 @@ func ensureNetwork(ctx context.Context, docker *dockerclient.Client, name string
 	}
 	_, err = docker.NetworkCreate(ctx, name, network.CreateOptions{Driver: "bridge"})
 	return err
+}
+
+// registerWhenAuthReady registers the admin once the kernel can serve accounts.
+//
+// A healthy kernel is not yet an instance that can authenticate anyone: accounts
+// live in the system-user-manager plugin, which the kernel starts at boot and
+// which then has to pull its config, register and heartbeat. Until that
+// finishes, /api/auth/register answers 503 — so creating an instance used to
+// fail purely on timing, and succeed on a retry, which reads as flakiness
+// rather than as a wait that was missing.
+//
+// Only 503 is retried. A refusal (registration closed) or any other failure is
+// returned immediately, because waiting cannot change it.
+func registerWhenAuthReady(c *client.Client, email, password string, timeout time.Duration) (*client.LoginResponse, error) {
+	deadline := time.Now().Add(timeout)
+	waited := false
+	for {
+		lr, err := c.Register(email, password)
+		if err == nil {
+			if waited {
+				fmt.Println(" ready!")
+			}
+			return lr, nil
+		}
+		if client.StatusOf(err) != http.StatusServiceUnavailable || !time.Now().Before(deadline) {
+			if waited {
+				fmt.Println()
+			}
+			return nil, err
+		}
+		if !waited {
+			fmt.Print("Waiting for the account service to start")
+			waited = true
+		}
+		fmt.Print(".")
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func waitForHealth(c *client.Client, timeout time.Duration) error {

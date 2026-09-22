@@ -19,7 +19,7 @@ Bump the patch component by 1 (e.g. `1.0.7` → `1.0.8`). Do not ask the user.
 ### 3. Build the Docker image
 
 ```bash
-task plugin:build -- <name> --version <new-version>
+chore plugin:build <name> --version <new-version>
 ```
 
 This updates `plugin.yaml` with the new version and builds the production Docker image.
@@ -29,7 +29,7 @@ This updates `plugin.yaml` with the new version and builds the production Docker
 ### 4. Submit manifest to marketplace
 
 ```bash
-task marketplace:submit -- plugins/<name>/plugin.yaml
+chore marketplace:submit plugins/<name>/plugin.yaml
 ```
 
 ### 5. Upgrade the plugin

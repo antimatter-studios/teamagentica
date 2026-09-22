@@ -34,15 +34,60 @@ A modular automation control platform with plugin-based AI agents, messaging int
 
 ## Quick Start
 
-```bash
-# Development (hot reload)
-task dev:start
+You need Docker, Go, and [chore](https://github.com/antimatter-studios/chore)
+(the task runner; it reads `chores.yml`). `tacli` is the command line that
+creates and drives an instance — use the released binary, or `go run ./tacli`
+from this checkout.
 
-# Production
-task prod:start
+```bash
+# 1. Build the kernel and the two plugins every instance boots with
+chore kernel:build
+chore plugin:build system-user-manager
+chore plugin:build system-teamagentica-plugin-provider
+
+# ...and any other plugins you want. `chore plugin:build:all` builds every one,
+# which is slow: each plugin is its own Go build.
+
+# 2. Create the instance
+cp examples/instance.taconfig my.taconfig    # then edit it
+export TA_ADMIN_EMAIL=you@example.com TA_ADMIN_PASSWORD='choose-one'
+tacli core create --config my.taconfig
+
+# 3. Check it
+tacli status
 ```
 
-First visit: register at the web UI — first user becomes admin.
+The kernel seeds two system plugins into its database and starts them on every
+boot: `system-user-manager` (which owns accounts, so login fails with a 503
+until it runs) and `system-teamagentica-plugin-provider`. Their images must
+exist locally, or the instance comes up unable to authenticate anyone.
+
+`tacli core create` starts the kernel container, waits for it to become
+healthy, creates the admin user, saves a local profile, registers any
+marketplace providers, then installs, enables and configures the plugins the
+config asks for. Re-running it against an existing database logs in instead of
+registering, so it is safe to repeat.
+
+Without `--config` it takes flags instead, which is enough for a bare kernel:
+
+```bash
+tacli core create --email you@example.com --password 'choose-one' --port 9741
+```
+
+Day to day: `tacli core start|stop|restart|logs`, or the `chore kernel:*`
+equivalents. Several instances can coexist on one host: give each its own
+`--name`, port and `data_dir`.
+
+Then open the dashboard at the kernel's address and log in with the admin
+account you configured.
+
+Two current limits worth knowing:
+
+- The kernel port is published on `127.0.0.1`, so an instance is reachable from
+  the machine it runs on. Put a reverse proxy or a tunnel in front of it to
+  reach it from elsewhere.
+- `tacli` talks to Docker. Other runtimes (Kubernetes, Podman) are not
+  supported yet.
 
 ## Plugins
 
@@ -151,13 +196,13 @@ func OpenDB(dbPath string) (*gorm.DB, error) {
 
 ```bash
 # Build all plugin images
-task build:images
+chore plugin:build:all
 
 # Run kernel with hot reload
 cd kernel && air
 
-# Run frontend with HMR
-cd user-interface && npm run dev
+# Run the dashboard with HMR
+chore dashboard:dev
 ```
 
 ## License

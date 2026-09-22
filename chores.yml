@@ -1,141 +1,142 @@
 version: '3'
+chore_min_version: 0.11.0
 
 includes:
   kernel:
-    taskfile: ./kernel/Taskfile.yml
+    taskfile: ./kernel/chores.yml
     dir: ./kernel
   dashboard:
-    taskfile: ./plugins/system-web-dashboard/web/Taskfile.yml
+    taskfile: ./plugins/system-web-dashboard/web/chores.yml
     dir: ./plugins/system-web-dashboard/web
     optional: true
   system-web-dashboard:
-    taskfile: ./plugins/system-web-dashboard/Taskfile.yml
+    taskfile: ./plugins/system-web-dashboard/chores.yml
     dir: ./plugins/system-web-dashboard
   pluginsdk:
-    taskfile: ./pkg/pluginsdk/Taskfile.yml
+    taskfile: ./pkg/pluginsdk/chores.yml
     dir: ./pkg/pluginsdk
   agent-anthropic:
-    taskfile: ./plugins/agent-anthropic/Taskfile.yml
+    taskfile: ./plugins/agent-anthropic/chores.yml
     dir: ./plugins/agent-anthropic
   agent-google:
-    taskfile: ./plugins/agent-google/Taskfile.yml
+    taskfile: ./plugins/agent-google/chores.yml
     dir: ./plugins/agent-google
   agent-inception:
-    taskfile: ./plugins/agent-inception/Taskfile.yml
+    taskfile: ./plugins/agent-inception/chores.yml
     dir: ./plugins/agent-inception
   agent-moonshot:
-    taskfile: ./plugins/agent-moonshot/Taskfile.yml
+    taskfile: ./plugins/agent-moonshot/chores.yml
     dir: ./plugins/agent-moonshot
   agent-ollama:
-    taskfile: ./plugins/agent-ollama/Taskfile.yml
+    taskfile: ./plugins/agent-ollama/chores.yml
     dir: ./plugins/agent-ollama
   agent-openai:
-    taskfile: ./plugins/agent-openai/Taskfile.yml
+    taskfile: ./plugins/agent-openai/chores.yml
     dir: ./plugins/agent-openai
   agent-openrouter:
-    taskfile: ./plugins/agent-openrouter/Taskfile.yml
+    taskfile: ./plugins/agent-openrouter/chores.yml
     dir: ./plugins/agent-openrouter
   agent-requesty:
-    taskfile: ./plugins/agent-requesty/Taskfile.yml
+    taskfile: ./plugins/agent-requesty/chores.yml
     dir: ./plugins/agent-requesty
   system-teamagentica-plugin-provider:
-    taskfile: ./plugins/system-teamagentica-plugin-provider/Taskfile.yml
+    taskfile: ./plugins/system-teamagentica-plugin-provider/chores.yml
     dir: ./plugins/system-teamagentica-plugin-provider
   infra-agent-memory-gateway:
-    taskfile: ./plugins/infra-agent-memory-gateway/Taskfile.yml
+    taskfile: ./plugins/infra-agent-memory-gateway/chores.yml
     dir: ./plugins/infra-agent-memory-gateway
   infra-agent-memory-mem0:
-    taskfile: ./plugins/infra-agent-memory-mem0/Taskfile.yml
+    taskfile: ./plugins/infra-agent-memory-mem0/chores.yml
     dir: ./plugins/infra-agent-memory-mem0
   infra-agent-memory-lcm:
-    taskfile: ./plugins/infra-agent-memory-lcm/Taskfile.yml
+    taskfile: ./plugins/infra-agent-memory-lcm/chores.yml
     dir: ./plugins/infra-agent-memory-lcm
   infra-agent-registry:
-    taskfile: ./plugins/infra-agent-registry/Taskfile.yml
+    taskfile: ./plugins/infra-agent-registry/chores.yml
     dir: ./plugins/infra-agent-registry
   infra-agent-relay:
-    taskfile: ./plugins/infra-agent-relay/Taskfile.yml
+    taskfile: ./plugins/infra-agent-relay/chores.yml
     dir: ./plugins/infra-agent-relay
   infra-alias-registry:
-    taskfile: ./plugins/infra-alias-registry/Taskfile.yml
+    taskfile: ./plugins/infra-alias-registry/chores.yml
     dir: ./plugins/infra-alias-registry
   infra-builder:
-    taskfile: ./plugins/infra-builder/Taskfile.yml
+    taskfile: ./plugins/infra-builder/chores.yml
     dir: ./plugins/infra-builder
   infra-container-registry:
-    taskfile: ./plugins/infra-container-registry/Taskfile.yml
+    taskfile: ./plugins/infra-container-registry/chores.yml
     dir: ./plugins/infra-container-registry
   infra-authz:
-    taskfile: ./plugins/infra-authz/Taskfile.yml
+    taskfile: ./plugins/infra-authz/chores.yml
     dir: ./plugins/infra-authz
   infra-cost-tracking:
-    taskfile: ./plugins/infra-cost-tracking/Taskfile.yml
+    taskfile: ./plugins/infra-cost-tracking/chores.yml
     dir: ./plugins/infra-cost-tracking
   infra-task-scheduler:
-    taskfile: ./plugins/infra-task-scheduler/Taskfile.yml
+    taskfile: ./plugins/infra-task-scheduler/chores.yml
     dir: ./plugins/infra-task-scheduler
   infra-redis:
-    taskfile: ./plugins/infra-redis/Taskfile.yml
+    taskfile: ./plugins/infra-redis/chores.yml
     dir: ./plugins/infra-redis
   infra-chat-command-server:
-    taskfile: ./plugins/infra-chat-command-server/Taskfile.yml
+    taskfile: ./plugins/infra-chat-command-server/chores.yml
     dir: ./plugins/infra-chat-command-server
   infra-mcp-server:
-    taskfile: ./plugins/infra-mcp-server/Taskfile.yml
+    taskfile: ./plugins/infra-mcp-server/chores.yml
     dir: ./plugins/infra-mcp-server
   workspace-manager:
-    taskfile: ./plugins/workspace-manager/Taskfile.yml
+    taskfile: ./plugins/workspace-manager/chores.yml
     dir: ./plugins/workspace-manager
   messaging-chat:
-    taskfile: ./plugins/messaging-chat/Taskfile.yml
+    taskfile: ./plugins/messaging-chat/chores.yml
     dir: ./plugins/messaging-chat
   messaging-discord:
-    taskfile: ./plugins/messaging-discord/Taskfile.yml
+    taskfile: ./plugins/messaging-discord/chores.yml
     dir: ./plugins/messaging-discord
   messaging-telegram:
-    taskfile: ./plugins/messaging-telegram/Taskfile.yml
+    taskfile: ./plugins/messaging-telegram/chores.yml
     dir: ./plugins/messaging-telegram
   messaging-whatsapp:
-    taskfile: ./plugins/messaging-whatsapp/Taskfile.yml
+    taskfile: ./plugins/messaging-whatsapp/chores.yml
     dir: ./plugins/messaging-whatsapp
   network-traffic-manager:
-    taskfile: ./plugins/network-traffic-manager/Taskfile.yml
+    taskfile: ./plugins/network-traffic-manager/chores.yml
     dir: ./plugins/network-traffic-manager
   network-webhook:
-    taskfile: ./plugins/network-webhook/Taskfile.yml
+    taskfile: ./plugins/network-webhook/chores.yml
     dir: ./plugins/network-webhook
   storage-sss3:
-    taskfile: ./plugins/storage-sss3/Taskfile.yml
+    taskfile: ./plugins/storage-sss3/chores.yml
     dir: ./plugins/storage-sss3
   storage-disk:
-    taskfile: ./plugins/storage-disk/Taskfile.yml
+    taskfile: ./plugins/storage-disk/chores.yml
     dir: ./plugins/storage-disk
   system-user-manager:
-    taskfile: ./plugins/system-user-manager/Taskfile.yml
+    taskfile: ./plugins/system-user-manager/chores.yml
     dir: ./plugins/system-user-manager
   agent-nanobanana:
-    taskfile: ./plugins/agent-nanobanana/Taskfile.yml
+    taskfile: ./plugins/agent-nanobanana/chores.yml
     dir: ./plugins/agent-nanobanana
   agent-seedance:
-    taskfile: ./plugins/agent-seedance/Taskfile.yml
+    taskfile: ./plugins/agent-seedance/chores.yml
     dir: ./plugins/agent-seedance
   tool-task-tracker:
-    taskfile: ./plugins/tool-task-tracker/Taskfile.yml
+    taskfile: ./plugins/tool-task-tracker/chores.yml
     dir: ./plugins/tool-task-tracker
   agent-stability:
-    taskfile: ./plugins/agent-stability/Taskfile.yml
+    taskfile: ./plugins/agent-stability/chores.yml
     dir: ./plugins/agent-stability
   agent-veo:
-    taskfile: ./plugins/agent-veo/Taskfile.yml
+    taskfile: ./plugins/agent-veo/chores.yml
     dir: ./plugins/agent-veo
   workspace-env-claude-terminal:
-    taskfile: ./plugins/workspace-env-claude-terminal/Taskfile.yml
+    taskfile: ./plugins/workspace-env-claude-terminal/chores.yml
     dir: ./plugins/workspace-env-claude-terminal
   workspace-env-opencode-terminal:
-    taskfile: ./plugins/workspace-env-opencode-terminal/Taskfile.yml
+    taskfile: ./plugins/workspace-env-opencode-terminal/chores.yml
     dir: ./plugins/workspace-env-opencode-terminal
   workspace-env-vscode-server:
-    taskfile: ./plugins/workspace-env-vscode-server/Taskfile.yml
+    taskfile: ./plugins/workspace-env-vscode-server/chores.yml
     dir: ./plugins/workspace-env-vscode-server
 
 tasks:
@@ -150,14 +151,14 @@ tasks:
       - docker builder prune -f
 
   plugin:build:
-    desc: "Build a single plugin (prod): task plugin:build -- network-traffic-manager [--version 1.0.3]"
+    desc: "Build a single plugin (prod): chore plugin:build network-traffic-manager [--version 1.0.3]"
+    args:
+      - name: plugin_name
+        desc: plugin directory name under plugins/
+      - name: version
+        desc: set plugin.yaml to this version (X.Y.Z) before building
     vars:
-      PLUGIN_NAME:
-        sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
-      VERSION:
-        sh: |
-          ver=$(echo "{{.CLI_ARGS}}" | grep -oE '\-\-version[= ]+[^ ]+' | sed 's/--version[= ]*//')
-          echo "$ver"
+      VERSION: ""
     cmds:
       - cmd: |
           if [ -n "{{.VERSION}}" ]; then
@@ -165,7 +166,7 @@ tasks:
               echo "Error: version must be in format X.Y.Z or X.Y.Z-suffix (got '{{.VERSION}}')"
               exit 1
             fi
-            sed -i '' 's/^version: .*/version: "{{.VERSION}}"/' plugins/{{.PLUGIN_NAME}}/plugin.yaml
+            sed -i 's/^version: .*/version: "{{.VERSION}}"/' plugins/{{.PLUGIN_NAME}}/plugin.yaml
           fi
         silent: true
       - task: "{{.PLUGIN_NAME}}:build"
@@ -176,14 +177,14 @@ tasks:
         silent: true
 
   plugin:build:dev:
-    desc: "Build a single plugin (dev): task plugin:build:dev -- network-traffic-manager [--version 1.0.3]"
+    desc: "Build a single plugin (dev): chore plugin:build:dev network-traffic-manager [--version 1.0.3]"
+    args:
+      - name: plugin_name
+        desc: plugin directory name under plugins/
+      - name: version
+        desc: set plugin.yaml to this version (X.Y.Z) before building
     vars:
-      PLUGIN_NAME:
-        sh: echo "{{.CLI_ARGS}}" | awk '{print $1}'
-      VERSION:
-        sh: |
-          ver=$(echo "{{.CLI_ARGS}}" | grep -oE '\-\-version[= ]+[^ ]+' | sed 's/--version[= ]*//')
-          echo "$ver"
+      VERSION: ""
     cmds:
       - cmd: |
           if [ -n "{{.VERSION}}" ]; then
@@ -191,7 +192,7 @@ tasks:
               echo "Error: version must be in format X.Y.Z or X.Y.Z-suffix (got '{{.VERSION}}')"
               exit 1
             fi
-            sed -i '' 's/^version: .*/version: "{{.VERSION}}"/' plugins/{{.PLUGIN_NAME}}/plugin.yaml
+            sed -i 's/^version: .*/version: "{{.VERSION}}"/' plugins/{{.PLUGIN_NAME}}/plugin.yaml
           fi
         silent: true
       - task: "{{.PLUGIN_NAME}}:build:dev"
@@ -202,9 +203,12 @@ tasks:
         silent: true
 
   plugin:test:
-    desc: "Test a single plugin: task plugin:test -- network-traffic-manager"
+    desc: "Test a single plugin: chore plugin:test network-traffic-manager"
+    args:
+      - name: plugin_name
+        desc: plugin directory name under plugins/
     cmds:
-      - task: "{{.CLI_ARGS}}:test"
+      - task: "{{.PLUGIN_NAME}}:test"
 
   plugin:deploy:all:
     desc: "Bump patch version, build, submit, upgrade, and restart every plugin"
@@ -370,7 +374,7 @@ tasks:
       - echo "All plugin images built successfully"
       - task: restart:running
 
-  plugin:build:dev:
+  plugin:build:all:dev:
     desc: Build all plugin Docker images (dev)
     cmds:
       - task: agent-anthropic:build:dev
@@ -431,9 +435,12 @@ tasks:
       - docker build -t teamagentica-devbox-agent:latest images/devbox-agent/
 
   marketplace:submit:
-    desc: Submit a plugin manifest to the catalog
+    desc: "Submit a plugin manifest to the catalog: chore marketplace:submit ./plugins/agent-anthropic"
+    args:
+      - name: path
+        desc: path to a plugin directory or plugin.yaml
     cmds:
-      - go run ./tacli marketplace submit-plugin {{.CLI_ARGS}}
+      - go run ./tacli marketplace submit-plugin {{.PATH}}
 
   marketplace:submit-all:
     desc: Submit all plugin.yaml manifests to the catalog

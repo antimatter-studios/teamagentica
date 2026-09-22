@@ -55,7 +55,7 @@ Use task-flow summary table format.
 
 - Never skip the test step — every fix must be verified
 - Run `go build ./...` before testing Go changes
-- For kernel changes: rebuild with `task build` (from kernel/ dir) and restart with `task restart`
+- For kernel changes: rebuild with `chore build` (from kernel/ dir) and restart with `chore restart`
 - For plugin changes: use the plugin-deploy skill
 - Keep fixes minimal — don't refactor surrounding code
 - One fix per agent — don't combine unrelated changes

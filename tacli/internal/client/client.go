@@ -4,12 +4,37 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// APIError is a non-2xx response from the kernel, with the status kept so
+// callers can tell apart failures that look identical in their message: a
+// closed registration (403) and an auth system that is not running yet (503)
+// both fail `register`, and only one of them means "log in instead".
+type APIError struct {
+	Op         string
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("%s failed (%d): %s", e.Op, e.StatusCode, e.Body)
+}
+
+// StatusOf reports the HTTP status an error carries, or 0 if it is not an
+// APIError (a connection failure, say).
+func StatusOf(err error) int {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode
+	}
+	return 0
+}
 
 // Client talks to a TeamAgentica kernel.
 type Client struct {
@@ -103,7 +128,7 @@ func (c *Client) Login(email, password string) (*LoginResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("login failed (%d): %s", resp.StatusCode, string(b))
+		return nil, &APIError{Op: "login", StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 
 	var lr LoginResponse
@@ -131,7 +156,7 @@ func (c *Client) Register(email, password string) (*LoginResponse, error) {
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("register failed (%d): %s", resp.StatusCode, string(b))
+		return nil, &APIError{Op: "register", StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 
 	var lr LoginResponse

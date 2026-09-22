@@ -5,7 +5,7 @@ Build and restart the kernel.
 ### 1. Build the kernel
 
 ```bash
-task kernel:build
+chore kernel:build
 ```
 
 **Stop if the build fails.** Report the error and do not continue.
@@ -13,13 +13,13 @@ task kernel:build
 ### 2. Restart the kernel
 
 ```bash
-task kernel:restart
+chore kernel:restart
 ```
 
 ### 3. Re-authenticate
 
 ```bash
-task kernel:connect
+chore kernel:connect
 ```
 
 This refreshes the tacli auth token after the kernel restarts.

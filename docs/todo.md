@@ -5,7 +5,7 @@
 - [x] Project structure and documentation
 - [x] Kernel: Go project setup, SQLite/GORM, user model, JWT auth, RBAC middleware
 - [x] Kernel: REST API endpoints (login, register, me, users)
-- [x] Kernel: Dev tooling (Air hot reload + Taskfile.yml)
+- [x] Kernel: Dev tooling (Air hot reload + chores.yml)
 - [x] Kernel: Dockerfile
 - [x] User Interface: React/TS Vite app, cyberpunk theme, login/dashboard
 - [x] User Interface: Dev/prod modes (Vite HMR + nginx)

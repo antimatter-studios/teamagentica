@@ -1,0 +1,43 @@
+# Example TeamAgentica instance definition.
+#
+#   tacli core create --config examples/instance.taconfig
+#
+# Everything here is optional except admin.email and admin.password, which
+# tacli refuses to invent. ${VAR} and ${VAR:-default} are expanded from the
+# environment when the file is read, so secrets stay out of the file.
+
+kernel:
+  # Container and profile name. Use a different one per instance on the same host.
+  name: teamagentica-kernel
+  image: teamagentica-kernel:latest
+  # Host port the kernel is published on.
+  port: ${TA_PORT:-9741}
+  # Base domain used for subdomain routing and CORS. "localhost" for a local instance.
+  domain: ${TA_DOMAIN:-localhost}
+  # Where the database and plugin data live. Keep this outside the git checkout.
+  data_dir: ${TA_DATA_DIR:-./data}
+  jwt_ttl_hours: 24
+
+admin:
+  email: ${TA_ADMIN_EMAIL}
+  password: ${TA_ADMIN_PASSWORD}
+
+# Marketplace providers to register. Plugins are installed from a provider
+# catalog, so at least one is needed before the plugins block below can work.
+marketplace: []
+#  - https://example.com/catalog.json
+
+# Plugins to install, enable and configure. Each key is a plugin id; its
+# config keys are the ones that plugin declares in its plugin.yaml.
+plugins: {}
+#  storage-disk:
+#    enable: true
+#  system-user-manager:
+#    enable: true
+#  messaging-chat:
+#    enable: true
+#  agent-anthropic:
+#    enable: true
+#    config:
+#      CLAUDE_BACKEND: api_key
+#      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

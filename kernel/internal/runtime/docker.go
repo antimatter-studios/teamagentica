@@ -198,8 +198,23 @@ func ensureBindDir(mountType, hostSource, dataDir string) {
 	if localPath == hostSource {
 		return // hostSource doesn't start with dataDir — nothing to do
 	}
-	if err := os.MkdirAll(localPath, 0o755); err != nil {
+	if err := os.MkdirAll(localPath, 0o777); err != nil {
 		log.Printf("warning: create dir %s: %v", localPath, err)
+		return
+	}
+	// The kernel runs as root and the plugin containers do not, so a directory
+	// left at the mode MkdirAll produces (0755 after umask) is one the plugin
+	// cannot write: its SQLite open fails with "unable to open database file"
+	// and the container restarts forever. Docker Desktop on macOS never showed
+	// this, because it maps bind-mount ownership onto the container's user.
+	//
+	// MkdirAll also applies umask and skips an existing directory, so the mode
+	// has to be set explicitly either way. Anything under the data directory is
+	// already reachable only by whoever can reach the data directory itself;
+	// the proper fix is to stop bind mounting host paths at all, which is what
+	// the runtime-unit work replaces this with.
+	if err := os.Chmod(localPath, 0o777); err != nil {
+		log.Printf("warning: chmod dir %s: %v", localPath, err)
 	}
 }
 

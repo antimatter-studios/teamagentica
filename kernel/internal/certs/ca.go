@@ -104,10 +104,28 @@ func (cm *CertManager) InitCA() error {
 }
 
 // GeneratePluginCert creates a cert for a plugin, signed by the CA.
+//
+// The per-plugin directory is bind mounted into the plugin container at /certs,
+// and plugin images run as an unprivileged user (uid 10001 in the shipped
+// Dockerfiles) while the kernel writes these files as root. Docker Desktop on
+// macOS hides that: it maps bind-mount ownership to the container's user, so
+// 0700 root-owned files were readable there. On Linux they are not, and every
+// plugin falls back to plain HTTP, fails to verify the kernel's certificate and
+// restarts forever.
+//
+// So this directory is readable by anyone who can reach it — which on the host
+// means root only, because cm.certsDir above is 0700. The container gets the
+// leaf directory mounted directly and never traverses the parent, so widening
+// the leaf does not widen host access.
 func (cm *CertManager) GeneratePluginCert(pluginID string) (certPath, keyPath, caPath string, err error) {
 	pluginDir := filepath.Join(cm.certsDir, pluginID)
-	if err := os.MkdirAll(pluginDir, 0700); err != nil {
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
 		return "", "", "", fmt.Errorf("create plugin cert dir: %w", err)
+	}
+	// MkdirAll is a no-op on an existing directory, so an instance created
+	// before this fix keeps its 0700 directory unless it is set explicitly.
+	if err := os.Chmod(pluginDir, 0755); err != nil {
+		return "", "", "", fmt.Errorf("relax plugin cert dir: %w", err)
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -153,7 +171,7 @@ func (cm *CertManager) GeneratePluginCert(pluginID string) (certPath, keyPath, c
 	if err := writeCertPEM(certPath, certDER); err != nil {
 		return "", "", "", fmt.Errorf("write plugin cert: %w", err)
 	}
-	if err := writeKeyPEM(keyPath, key); err != nil {
+	if err := writeKeyPEMMode(keyPath, key, 0644); err != nil {
 		return "", "", "", fmt.Errorf("write plugin key: %w", err)
 	}
 
@@ -354,16 +372,31 @@ func writeCertPEM(path string, certDER []byte) error {
 	return pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 }
 
+// writeKeyPEM writes a private key only the writing user can read. Right for
+// the CA key and the kernel's own key, both of which only the kernel reads.
 func writeKeyPEM(path string, key *ecdsa.PrivateKey) error {
+	return writeKeyPEMMode(path, key, 0600)
+}
+
+// writeKeyPEMMode writes a private key with an explicit mode, for keys that
+// have to be readable by a process other than the one writing them — a plugin
+// container running as its own unprivileged user, reading a key the kernel
+// wrote as root. See GeneratePluginCert for why that is safe here.
+func writeKeyPEMMode(path string, key *ecdsa.PrivateKey, mode os.FileMode) error {
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return fmt.Errorf("marshal EC key: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	// O_CREATE only applies the mode to a file that did not exist, so a key
+	// rewritten over an earlier 0600 one would keep the old mode.
+	if err := os.Chmod(path, mode); err != nil {
+		return err
+	}
 	return pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 }
 

@@ -261,18 +261,35 @@ Messaging plugins (Telegram, Discord) buffer sequential messages per-chat with a
 
 ## Deployment
 
-### Docker Compose (recommended)
+### Creating an instance
+
+An instance is created by `tacli`, from a declarative `.taconfig` file. There is
+no compose file, and no manifest to apply: `tacli` starts the kernel container
+itself and then drives the kernel's own API for everything else.
 
 ```bash
-# Production
-task prod:start
-
-# Development (hot reload)
-task dev:start
+tacli core create --config my.taconfig
 ```
 
-- **kernel** — Go binary, mounts Docker socket for plugin orchestration
-- **user-interface** — React build served by nginx
+The file describes the instance — kernel image, port, domain, data directory,
+the admin account, marketplace providers, and which plugins to install, enable
+and configure. `${VAR}` references are expanded from the environment, so
+credentials need not be written down. See `examples/instance.taconfig`.
+
+What `create` does, in order: start the kernel container, wait for health,
+register the admin user (or log in, if the database already has one), save a
+local profile, register marketplace providers, then install/enable/configure
+plugins. It is re-runnable.
+
+Lifecycle afterwards: `tacli core start|stop|restart|logs`, and `tacli status`
+for kernel and plugin state.
+
+Multiple instances coexist on one host by giving each its own name, port and
+data directory.
+
+The kernel container mounts the Docker socket, because it starts plugin
+containers itself. The dashboard is a plugin (`system-web-dashboard`): a React
+build served by nginx, alongside a small API container.
 
 ### Local Development
 
@@ -280,8 +297,8 @@ task dev:start
 # Kernel with hot reload
 cd kernel && air
 
-# Frontend with HMR
-cd user-interface && npm run dev
+# Dashboard with HMR
+chore dashboard:dev
 ```
 
 ### Plugin Images
@@ -289,7 +306,7 @@ cd user-interface && npm run dev
 Each plugin has a Dockerfile. Build all images with:
 
 ```bash
-task build:images
+chore plugin:build:all
 ```
 
 The kernel launches plugin containers on-demand via the Docker API.

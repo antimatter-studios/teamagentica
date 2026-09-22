@@ -122,20 +122,20 @@ func TestDockerfilesUsePluginOnlyContext(t *testing.T) {
 	}
 }
 
-func TestTaskfilesUseLocalContext(t *testing.T) {
+func TestChoreFilesUseLocalContext(t *testing.T) {
 	for _, dir := range pluginDirs(t) {
 		name := filepath.Base(dir)
 		t.Run(name, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(dir, "Taskfile.yml"))
+			data, err := os.ReadFile(filepath.Join(dir, "chores.yml"))
 			if err != nil {
 				if os.IsNotExist(err) {
-					t.Skip("no Taskfile")
+					t.Skip("no chores.yml")
 				}
 				t.Fatal(err)
 			}
 			content := string(data)
 			if strings.Contains(content, "{{.ROOT_DIR}}") {
-				t.Errorf("Taskfile still uses {{.ROOT_DIR}} as docker build context")
+				t.Errorf("chores.yml still uses {{.ROOT_DIR}} as docker build context")
 			}
 		})
 	}
